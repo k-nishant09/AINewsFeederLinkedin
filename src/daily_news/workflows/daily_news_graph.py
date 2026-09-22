@@ -243,7 +243,7 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
             persona_set = await factory.generate_all(summary, evidence, run_id=run_id)
             persona_outputs.append(persona_set.model_dump())
         except Exception as exc:  # noqa: BLE001
-            logger.error("persona generation failed for %s: %s", summary.article_id, exc)
+            logger.error("persona generation failed for %s: %s", summary.article_id, exc, exc_info=True)
             state["errors"].append(f"personas failed: {exc}")
 
     return {**state, "persona_outputs": persona_outputs, "workflow_status": "PERSONAS_GENERATED"}

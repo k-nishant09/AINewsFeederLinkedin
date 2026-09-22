@@ -30,38 +30,41 @@ from daily_news.observability.tracing import get_langfuse_callback
 
 PERSONA_FOCUS: dict[PersonaType, dict] = {
     PersonaType.BUSINESS: {
-        "name": "Business Perspective",
-        "focus": "revenue, cost reduction, productivity, market disruption, enterprise adoption, investment",
+        "name": "Capitalist Mind",
+        "focus": "revenue growth, cost reduction, productivity gains, market disruption, enterprise adoption, ROI, competitive advantage, investment thesis",
     },
     PersonaType.LABOR: {
-        "name": "Labor Perspective",
-        "focus": "jobs, employment, automation impact, worker skills, wages, reskilling, income distribution",
+        "name": "Working Professional Mind",
+        "focus": "job security, employment impact, automation threats, worker reskilling, wage effects, career transitions, union implications, income distribution",
     },
     PersonaType.POLICY: {
-        "name": "Government and Policy Perspective",
-        "focus": "regulation, AI safety, privacy, public policy, national competitiveness, governance frameworks",
+        "name": "Government Mind",
+        "focus": "regulation, AI safety, data privacy, public policy, national competitiveness, governance frameworks, ethical standards, cross-border implications",
         "guardrail": (
             "Describe documented policy positions and factual consequences only. "
             "Do not advocate for any political outcome or party."
         ),
     },
     PersonaType.GENZ: {
-        "name": "Gen Z Perspective",
-        "focus": "career prospects, everyday technology impact, education, digital culture, skill building",
+        "name": "Young / Fresher Mind",
+        "focus": "career entry, learning opportunities, everyday technology impact, digital culture, skill building, entrepreneurial angles, generational opportunity",
     },
     PersonaType.LINKEDIN: {
-        "name": "Professional LinkedIn Perspective",
-        "focus": "enterprise implications, leadership takeaways, technology strategy, career development, practical next steps",
+        "name": "Tech Strategist Mind",
+        "focus": "technology strategy, product innovation, platform implications, engineering trade-offs, startup opportunities, build-vs-buy decisions, architectural impact, what practitioners should do next",
     },
 }
 
-BASE_SYSTEM = """You are generating a clearly labeled perspective on a news story.
+BASE_SYSTEM = """You are generating a clearly labeled perspective on a news story for a LinkedIn audience.
 
-Do not invent facts.
-Use only the supplied evidence.
-Separate factual claims from interpretation.
-Do not claim that your perspective is the objective truth.
-Keep the response to 2-3 sentences.
+Rules:
+- Do not invent facts. Use only the supplied evidence.
+- Separate factual claims from interpretation.
+- Do not claim your perspective is the objective truth.
+- Write 3 complete sentences. Every sentence must end with a full stop.
+- Do NOT cut off mid-sentence. If space is tight, write fewer sentences rather than an incomplete one.
+- Be specific and actionable — avoid generic platitudes.
+- Use plain English. No jargon overload.
 
 Persona: {persona_name}
 Focus areas: {focus}
@@ -137,7 +140,7 @@ class PersonaAgent:
         callbacks = [handler] if handler else []
 
         chain = self._prompt | self._llm | self._parser
-        return await chain.ainvoke(
+        raw: PersonaOutput = await chain.ainvoke(
             {
                 "article_id":          summary.article_id,
                 "headline":            summary.headline,
@@ -148,6 +151,14 @@ class PersonaAgent:
                 "format_instructions": self._parser.get_format_instructions(),
             },
             config={"callbacks": callbacks} if callbacks else {},
+        )
+        # Always override persona + article_id from the known agent context —
+        # the LLM sometimes mis-fills the enum value (e.g. display name vs key).
+        return PersonaOutput(
+            persona=self._persona,
+            article_id=summary.article_id,
+            perspective=raw.perspective,
+            evidence=raw.evidence,
         )
 
 
