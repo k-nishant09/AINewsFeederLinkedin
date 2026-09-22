@@ -1,0 +1,50 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: news-mcp
+  namespace: aifeeders
+  labels:
+    app: news-mcp
+    role: mcp-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: news-mcp
+  template:
+    metadata:
+      labels:
+        app: news-mcp
+        role: mcp-server
+    spec:
+      serviceAccountName: daily-news
+      containers:
+        - name: news-mcp
+          image: image-registry.openshift-image-registry.svc:5000/aifeeders/news-mcp:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: daily-news-config
+            - secretRef:
+                name: daily-news-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30

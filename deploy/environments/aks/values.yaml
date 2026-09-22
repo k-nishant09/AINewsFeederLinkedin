@@ -1,0 +1,19 @@
+platform:
+  type: aks
+
+route:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    kubernetes.io/ingress.class: nginx
+  # host: api.example.com              # set to your custom domain / Azure DNS
+  # linkedinMcpHost: linkedin.example.com
+
+global:
+  image:
+    # Set to your ACR registry at deploy time:
+    # --set global.image.registry=myacr.azurecr.io/aifeeders
+    registry: ""

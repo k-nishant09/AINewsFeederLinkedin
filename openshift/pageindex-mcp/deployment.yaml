@@ -1,0 +1,51 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pageindex-mcp
+  namespace: aifeeders
+  labels:
+    app: pageindex-mcp
+    role: mcp-server
+spec:
+  # In-memory document store — must stay at 1 replica until backed by PostgreSQL/Redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pageindex-mcp
+  template:
+    metadata:
+      labels:
+        app: pageindex-mcp
+        role: mcp-server
+    spec:
+      serviceAccountName: daily-news
+      containers:
+        - name: pageindex-mcp
+          image: image-registry.openshift-image-registry.svc:5000/aifeeders/pageindex-mcp:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: daily-news-config
+            - secretRef:
+                name: daily-news-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30

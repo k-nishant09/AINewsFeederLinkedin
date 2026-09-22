@@ -1,0 +1,10 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.global.namespace }}
+  labels:
+    name: {{ .Values.global.namespace }}
+    environment: {{ .Values.app.env }}
+    app.kubernetes.io/managed-by: helm
+    {{- include "aifeeders.labels" . | nindent 4 }}

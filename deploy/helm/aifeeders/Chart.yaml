@@ -1,0 +1,14 @@
+apiVersion: v2
+name: aifeeders
+description: AI Daily News Multi-Agent Platform
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - ai
+  - news
+  - linkedin
+  - langchain
+  - langgraph
+maintainers:
+  - name: AIFeeders Team

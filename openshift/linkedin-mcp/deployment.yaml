@@ -1,0 +1,70 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: linkedin-mcp
+  namespace: aifeeders
+  labels:
+    app: linkedin-mcp
+    role: mcp-server
+spec:
+  # In-memory idempotency registry (_published_posts/_published_comments) — must stay at 1
+  # replica until backed by a shared store to prevent duplicate LinkedIn posts
+  replicas: 1
+  selector:
+    matchLabels:
+      app: linkedin-mcp
+  template:
+    metadata:
+      labels:
+        app: linkedin-mcp
+        role: mcp-server
+    spec:
+      serviceAccountName: daily-news
+      containers:
+        - name: linkedin-mcp
+          image: image-registry.openshift-image-registry.svc:5000/aifeeders/linkedin-mcp:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: daily-news-config
+            - secretRef:
+                name: daily-news-secrets
+          # Explicit env entries for LinkedIn-specific keys so their source is
+          # obvious in `oc describe pod` and overridable at the pod level if needed.
+          env:
+            - name: LINKEDIN_API_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: daily-news-config
+                  key: LINKEDIN_API_VERSION
+            - name: LINKEDIN_COMMENT_DELAY_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: daily-news-config
+                  key: LINKEDIN_COMMENT_DELAY_SECONDS
+            - name: LINKEDIN_SCOPES
+              valueFrom:
+                secretKeyRef:
+                  name: daily-news-secrets
+                  key: LINKEDIN_SCOPES
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30

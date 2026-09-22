@@ -1,0 +1,48 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pageindex-mcp
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: pageindex-mcp
+    role: mcp-server
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  # In-memory document store — keep at 1 replica until backed by PostgreSQL/Redis
+  replicas: {{ .Values.pageindexMcp.replicas }}
+  selector:
+    matchLabels:
+      app: pageindex-mcp
+  template:
+    metadata:
+      labels:
+        app: pageindex-mcp
+        role: mcp-server
+        {{- include "aifeeders.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: daily-news
+      containers:
+        - name: pageindex-mcp
+          image: {{ include "aifeeders.image" (dict "registry" .Values.global.image.registry "name" .Values.pageindexMcp.image "tag" .Values.global.image.tag) }}
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: daily-news-config
+            - secretRef:
+                name: daily-news-secrets
+          resources:
+            {{- toYaml .Values.pageindexMcp.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30

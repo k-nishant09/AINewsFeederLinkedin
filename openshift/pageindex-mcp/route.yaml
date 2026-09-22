@@ -1,0 +1,16 @@
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: pageindex-mcp
+  namespace: aifeeders
+  annotations:
+    haproxy.router.openshift.io/ip_whitelist: "10.0.0.0/8"
+spec:
+  to:
+    kind: Service
+    name: pageindex-mcp
+  port:
+    targetPort: 8000
+  tls:
+    termination: edge

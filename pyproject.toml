@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-daily-news"
+version = "0.1.0"
+description = "AI Daily News Multi-Agent Platform — LangGraph + LangChain + MCP + FastAPI"
+readme = "README.md"
+requires-python = ">=3.11"
+
+dependencies = [
+    # API
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+
+    # Pydantic
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+
+    # LangChain / LangGraph
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langgraph>=0.2.0",
+
+    # MCP
+    "mcp[cli]>=1.9.0",
+
+    # HTTP
+    "httpx>=0.27.0",
+    "tenacity>=8.4.0",
+
+    # Observability — OpenTelemetry + Prometheus
+    "opentelemetry-api>=1.26.0",
+    "opentelemetry-sdk>=1.26.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.26.0",
+    "opentelemetry-instrumentation-fastapi>=0.47b0",
+    "prometheus-client>=0.20.0",
+
+    # LLM Observability — Langfuse (official SDK, LangChain CallbackHandler)
+    # Docs: https://langfuse.com/docs/integrations/langchain/tracing
+    "langfuse>=2.0.0",
+
+    # Utilities
+    "python-dotenv>=1.0.0",
+    "structlog>=24.1.0",
+    "anyio>=4.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-httpx>=0.30.0",
+    "httpx>=0.27.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+]
+
+[project.scripts]
+daily-news-api   = "daily_news.api.main:start"
+daily-news-run   = "daily_news.workflow_runner:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/daily_news"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

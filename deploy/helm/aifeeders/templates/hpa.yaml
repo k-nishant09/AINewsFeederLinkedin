@@ -1,0 +1,31 @@
+{{- if .Values.hpa.enabled }}
+---
+# HPA for the main API — scales on CPU and memory utilization
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: daily-news-api-hpa
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: daily-news-api
+  minReplicas: {{ .Values.hpa.minReplicas }}
+  maxReplicas: {{ .Values.hpa.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.hpa.cpuUtilization }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.hpa.memoryUtilization }}
+{{- end }}

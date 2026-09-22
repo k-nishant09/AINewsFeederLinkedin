@@ -1,0 +1,15 @@
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: daily-news-api
+  namespace: aifeeders
+spec:
+  to:
+    kind: Service
+    name: daily-news-api
+  port:
+    targetPort: 8000
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

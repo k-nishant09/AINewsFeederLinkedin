@@ -1,0 +1,13 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: daily-news-api
+  namespace: aifeeders
+spec:
+  selector:
+    app: daily-news-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP

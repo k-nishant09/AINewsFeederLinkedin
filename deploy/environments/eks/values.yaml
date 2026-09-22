@@ -1,0 +1,21 @@
+platform:
+  type: eks
+
+route:
+  enabled: false
+
+ingress:
+  enabled: true
+  className: alb
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+  # host: api.example.com              # set to your Route53 / custom domain
+  # linkedinMcpHost: linkedin.example.com
+
+global:
+  image:
+    # Set to your ECR registry at deploy time:
+    # --set global.image.registry=123456789.dkr.ecr.us-east-1.amazonaws.com/aifeeders
+    registry: ""

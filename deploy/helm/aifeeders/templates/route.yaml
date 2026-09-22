@@ -1,0 +1,68 @@
+{{- if eq .Values.platform.type "openshift" }}
+{{- if .Values.route.enabled }}
+---
+# Public API Route — TLS edge termination, redirects HTTP → HTTPS
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: daily-news-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: daily-news-api
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  to:
+    kind: Service
+    name: daily-news-api
+  port:
+    targetPort: 8000
+  tls:
+    termination: {{ .Values.route.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.route.tls.insecureEdgeTerminationPolicy }}
+
+---
+# LinkedIn MCP Route — publicly accessible for OAuth browser flows:
+#   GET /oauth/start    — operator opens in browser
+#   GET /oauth/callback — LinkedIn redirects the browser here
+#   GET /oauth/status   — check token state
+# The /mcp endpoint itself is protected by Bearer token.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: linkedin-mcp
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: linkedin-mcp
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  to:
+    kind: Service
+    name: linkedin-mcp
+  port:
+    targetPort: 8000
+  tls:
+    termination: {{ .Values.route.tls.termination }}
+    insecureEdgeTerminationPolicy: {{ .Values.route.tls.insecureEdgeTerminationPolicy }}
+
+---
+# News MCP Route — internal/restricted; ip_whitelist limits to cluster CIDR
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: news-mcp
+  namespace: {{ .Values.global.namespace }}
+  annotations:
+    haproxy.router.openshift.io/ip_whitelist: "10.0.0.0/8"
+  labels:
+    app: news-mcp
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  to:
+    kind: Service
+    name: news-mcp
+  port:
+    targetPort: 8000
+  tls:
+    termination: {{ .Values.route.tls.termination }}
+{{- end }}
+{{- end }}

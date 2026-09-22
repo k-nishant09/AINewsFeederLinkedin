@@ -1,0 +1,10 @@
+---
+# Namespace / Project
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: aifeeders
+  labels:
+    name: aifeeders
+    environment: production
+    app.kubernetes.io/managed-by: gitops

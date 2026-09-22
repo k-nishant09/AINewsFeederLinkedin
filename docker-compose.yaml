@@ -1,0 +1,139 @@
+---
+# =============================================================================
+# AI Daily News Platform — docker-compose (local development)
+# =============================================================================
+version: "3.9"
+
+services:
+
+  # ── Main FastAPI API ────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: daily-news-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      NEWS_MCP_URL: http://news-mcp:8000/mcp
+      PAGEINDEX_MCP_URL: http://pageindex-mcp:8000/mcp
+      EVALUATION_MCP_URL: http://evaluation-mcp:8000/mcp
+      LINKEDIN_MCP_URL: http://linkedin-mcp:8000/mcp
+    depends_on:
+      - news-mcp
+      - pageindex-mcp
+      - evaluation-mcp
+      - linkedin-mcp
+    volumes:
+      - ./src:/app/src:ro
+      - ./prompts:/app/prompts:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Brave Search MCP (official NPX runner — stdio bridge via mcp-proxy) ─────
+  # The official @modelcontextprotocol/server-brave-search NPM package uses
+  # stdio transport. We wrap it with mcp-proxy to expose Streamable HTTP so
+  # the news-mcp server can call it from Python.
+  # The news-mcp Python server calls the Brave REST API directly (same keys),
+  # so this container is OPTIONAL — it is provided for local inspection/testing
+  # via Claude Desktop, Cursor, or MCP Inspector.
+  brave-search-mcp:
+    image: node:20-alpine
+    container_name: brave-search-mcp
+    profiles:
+      - inspect     # only starts with: docker compose --profile inspect up
+    environment:
+      BRAVE_API_KEY: "${BRAVE_API_KEY}"
+    command: >
+      sh -c "npx -y @modelcontextprotocol/server-brave-search"
+    stdin_open: true
+    tty: true
+    # No port needed — runs stdio only; connect via Claude Desktop or mcp-inspector
+
+  # ── News MCP Server ─────────────────────────────────────────────────────────
+  news-mcp:
+    build:
+      context: .
+      dockerfile: mcp_servers/news_mcp/Dockerfile
+    container_name: news-mcp
+    ports:
+      - "8101:8000"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── PageIndex MCP Server ────────────────────────────────────────────────────
+  pageindex-mcp:
+    build:
+      context: .
+      dockerfile: mcp_servers/pageindex_mcp/Dockerfile
+    container_name: pageindex-mcp
+    ports:
+      - "8102:8000"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Evaluation MCP Server ───────────────────────────────────────────────────
+  evaluation-mcp:
+    build:
+      context: .
+      dockerfile: mcp_servers/evaluation_mcp/Dockerfile
+    container_name: evaluation-mcp
+    ports:
+      - "8103:8000"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── LinkedIn MCP Server ─────────────────────────────────────────────────────
+  linkedin-mcp:
+    build:
+      context: .
+      dockerfile: mcp_servers/linkedin_mcp/Dockerfile
+    container_name: linkedin-mcp
+    ports:
+      - "8104:8000"
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ── Langflow (visual workflow development) ──────────────────────────────────
+  langflow:
+    image: langflowai/langflow:latest
+    container_name: langflow
+    ports:
+      - "7860:7860"
+    environment:
+      LANGFLOW_AUTO_LOGIN: "true"
+    volumes:
+      - langflow-data:/app/langflow
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7860/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  langflow-data:
