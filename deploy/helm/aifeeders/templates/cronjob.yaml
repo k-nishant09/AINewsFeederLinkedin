@@ -1,0 +1,51 @@
+---
+# Daily AI News CronJob
+# Default: 00:30 UTC = 06:00 IST every day
+# concurrencyPolicy: Forbid prevents double-runs if the previous job is still running.
+# The app=daily-news-worker label on the pod template is REQUIRED by the
+# allow-api-to-mcps NetworkPolicy so CronJob pods can reach all MCP servers.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daily-ai-news
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.cronjob.schedule | quote }}
+  timeZone: {{ .Values.cronjob.timezone | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 7200  # 2 hours max
+      template:
+        metadata:
+          labels:
+            # Critical: required by allow-api-to-mcps NetworkPolicy
+            app: daily-news-worker
+            {{- include "aifeeders.selectorLabels" . | nindent 12 }}
+        spec:
+          serviceAccountName: daily-news
+          restartPolicy: Never
+          containers:
+            - name: workflow-runner
+              image: {{ include "aifeeders.image" (dict "registry" .Values.global.image.registry "name" .Values.api.image "tag" .Values.global.image.tag) }}
+              command:
+                - python
+                - -m
+                - daily_news.workflow_runner
+              envFrom:
+                - configMapRef:
+                    name: daily-news-config
+                - secretRef:
+                    name: daily-news-secrets
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "1Gi"
+                limits:
+                  cpu: "2"
+                  memory: "2Gi"

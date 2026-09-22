@@ -1,0 +1,18 @@
+---
+# Internal only — MCP servers are not exposed to public internet
+# Remove this Route if news-mcp should only be accessed within the cluster
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: news-mcp
+  namespace: aifeeders
+  annotations:
+    haproxy.router.openshift.io/ip_whitelist: "10.0.0.0/8"  # cluster-internal only
+spec:
+  to:
+    kind: Service
+    name: news-mcp
+  port:
+    targetPort: 8000
+  tls:
+    termination: edge

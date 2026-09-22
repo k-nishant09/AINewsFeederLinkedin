@@ -1,0 +1,38 @@
+---
+# ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: daily-news
+  namespace: aifeeders
+
+---
+# Role — minimal permissions
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: daily-news-role
+  namespace: aifeeders
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+---
+# RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: daily-news-rolebinding
+  namespace: aifeeders
+subjects:
+  - kind: ServiceAccount
+    name: daily-news
+    namespace: aifeeders
+roleRef:
+  kind: Role
+  name: daily-news-role
+  apiGroup: rbac.authorization.k8s.io

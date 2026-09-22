@@ -1,0 +1,44 @@
+{{- if .Values.pdb.enabled }}
+---
+# Ensure at least 1 replica available during node drains / rolling updates
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: daily-news-api-pdb
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: daily-news-api
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: news-mcp-pdb
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: news-mcp
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: linkedin-mcp-pdb
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: linkedin-mcp
+{{- end }}

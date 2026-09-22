@@ -1,0 +1,67 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: linkedin-mcp
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: linkedin-mcp
+    role: mcp-server
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  # In-memory idempotency registry (_published_posts/_published_comments) — keep at 1
+  # replica until backed by a shared store to prevent duplicate LinkedIn posts.
+  replicas: {{ .Values.linkedinMcp.replicas }}
+  selector:
+    matchLabels:
+      app: linkedin-mcp
+  template:
+    metadata:
+      labels:
+        app: linkedin-mcp
+        role: mcp-server
+        {{- include "aifeeders.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: daily-news
+      containers:
+        - name: linkedin-mcp
+          image: {{ include "aifeeders.image" (dict "registry" .Values.global.image.registry "name" .Values.linkedinMcp.image "tag" .Values.global.image.tag) }}
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: daily-news-config
+            - secretRef:
+                name: daily-news-secrets
+          # Explicit env entries make LinkedIn-specific keys visible in describe output
+          # and allow pod-level override without touching the ConfigMap/Secret.
+          env:
+            - name: LINKEDIN_API_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: daily-news-config
+                  key: LINKEDIN_API_VERSION
+            - name: LINKEDIN_COMMENT_DELAY_SECONDS
+              valueFrom:
+                configMapKeyRef:
+                  name: daily-news-config
+                  key: LINKEDIN_COMMENT_DELAY_SECONDS
+            - name: LINKEDIN_SCOPES
+              valueFrom:
+                secretKeyRef:
+                  name: daily-news-secrets
+                  key: LINKEDIN_SCOPES
+          resources:
+            {{- toYaml .Values.linkedinMcp.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30

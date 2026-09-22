@@ -1,0 +1,150 @@
+{
+  "id": "daily-news-flow-v1",
+  "name": "AI Daily News Workflow",
+  "description": "Visual representation of the AI Daily News multi-agent pipeline. Use this for prompt experimentation and agent debugging. Production execution runs via LangGraph/Python.",
+  "version": "1.0.0",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "TriggerNode",
+      "label": "Daily Scheduler / Manual Trigger",
+      "position": { "x": 400, "y": 50 }
+    },
+    {
+      "id": "news_mcp",
+      "type": "MCPToolNode",
+      "label": "News MCP — news.search_latest",
+      "config": {
+        "mcp_url": "${NEWS_MCP_URL}",
+        "tool": "news.search_latest",
+        "params": {
+          "query": "artificial intelligence LLM agentic AI",
+          "hours": 24,
+          "limit": 50
+        }
+      },
+      "position": { "x": 400, "y": 150 }
+    },
+    {
+      "id": "pageindex",
+      "type": "MCPToolNode",
+      "label": "PageIndex MCP — pageindex.index_document",
+      "config": {
+        "mcp_url": "${PAGEINDEX_MCP_URL}",
+        "tool": "pageindex.index_document"
+      },
+      "position": { "x": 400, "y": 280 }
+    },
+    {
+      "id": "story_selector",
+      "type": "LLMNode",
+      "label": "Story Selector",
+      "config": {
+        "model": "${LLM_MODEL}",
+        "prompt": "Select the 5 most important AI news stories from the provided list. Prioritise novelty, enterprise impact, and broad relevance."
+      },
+      "position": { "x": 400, "y": 410 }
+    },
+    {
+      "id": "summary_llm",
+      "type": "LLMNode",
+      "label": "Summary Agent",
+      "config": {
+        "model": "${LLM_MODEL}",
+        "prompt_file": "prompts/summary.txt",
+        "output_schema": "NewsSummary"
+      },
+      "position": { "x": 400, "y": 540 }
+    },
+    {
+      "id": "persona_business",
+      "type": "LLMNode",
+      "label": "Business Persona",
+      "config": { "prompt_file": "prompts/capitalist.txt" },
+      "position": { "x": 100, "y": 680 }
+    },
+    {
+      "id": "persona_labor",
+      "type": "LLMNode",
+      "label": "Labor Persona",
+      "config": { "prompt_file": "prompts/labor.txt" },
+      "position": { "x": 300, "y": 680 }
+    },
+    {
+      "id": "persona_policy",
+      "type": "LLMNode",
+      "label": "Policy Persona",
+      "config": { "prompt_file": "prompts/policy.txt" },
+      "position": { "x": 500, "y": 680 }
+    },
+    {
+      "id": "persona_genz",
+      "type": "LLMNode",
+      "label": "Gen Z Persona",
+      "config": { "prompt_file": "prompts/genz.txt" },
+      "position": { "x": 700, "y": 680 }
+    },
+    {
+      "id": "persona_linkedin",
+      "type": "LLMNode",
+      "label": "LinkedIn Persona",
+      "config": { "prompt_file": "prompts/linkedin.txt" },
+      "position": { "x": 900, "y": 680 }
+    },
+    {
+      "id": "evaluation",
+      "type": "MCPToolNode",
+      "label": "Evaluation MCP — evaluation.evaluate_all",
+      "config": {
+        "mcp_url": "${EVALUATION_MCP_URL}",
+        "tool": "evaluation.evaluate_all"
+      },
+      "position": { "x": 400, "y": 820 }
+    },
+    {
+      "id": "human_approval",
+      "type": "HumanApprovalNode",
+      "label": "Human Approval Gate",
+      "config": {
+        "timeout_minutes": 60,
+        "approval_endpoint": "/approval/{run_id}/approve"
+      },
+      "position": { "x": 400, "y": 950 }
+    },
+    {
+      "id": "linkedin_mcp",
+      "type": "MCPToolNode",
+      "label": "LinkedIn MCP — linkedin.create_post",
+      "config": {
+        "mcp_url": "${LINKEDIN_MCP_URL}",
+        "tool": "linkedin.create_post"
+      },
+      "position": { "x": 400, "y": 1080 }
+    },
+    {
+      "id": "end",
+      "type": "EndNode",
+      "label": "END — Published",
+      "position": { "x": 400, "y": 1180 }
+    }
+  ],
+  "edges": [
+    { "source": "start", "target": "news_mcp" },
+    { "source": "news_mcp", "target": "pageindex" },
+    { "source": "pageindex", "target": "story_selector" },
+    { "source": "story_selector", "target": "summary_llm" },
+    { "source": "summary_llm", "target": "persona_business" },
+    { "source": "summary_llm", "target": "persona_labor" },
+    { "source": "summary_llm", "target": "persona_policy" },
+    { "source": "summary_llm", "target": "persona_genz" },
+    { "source": "summary_llm", "target": "persona_linkedin" },
+    { "source": "persona_business", "target": "evaluation" },
+    { "source": "persona_labor", "target": "evaluation" },
+    { "source": "persona_policy", "target": "evaluation" },
+    { "source": "persona_genz", "target": "evaluation" },
+    { "source": "persona_linkedin", "target": "evaluation" },
+    { "source": "evaluation", "target": "human_approval" },
+    { "source": "human_approval", "target": "linkedin_mcp" },
+    { "source": "linkedin_mcp", "target": "end" }
+  ]
+}

@@ -1,0 +1,84 @@
+---
+# Deny all ingress by default, then allow only what is needed
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: aifeeders
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# Allow API to call MCP servers
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-to-mcps
+  namespace: aifeeders
+spec:
+  podSelector:
+    matchLabels:
+      role: mcp-server
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: daily-news-api
+        - podSelector:
+            matchLabels:
+              app: daily-news-worker
+      ports:
+        - port: 8000
+          protocol: TCP
+
+---
+# Allow ingress from OpenShift router to API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-router-to-api
+  namespace: aifeeders
+spec:
+  podSelector:
+    matchLabels:
+      app: daily-news-api
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+
+---
+# Allow ingress from OpenShift router to LinkedIn MCP
+# Required for OAuth /start, /callback, /status to be browser-accessible
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-router-to-linkedin-mcp
+  namespace: aifeeders
+spec:
+  podSelector:
+    matchLabels:
+      app: linkedin-mcp
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+
+---
+# Allow all pods to reach external internet (for Brave API, LinkedIn API, LLM)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-internet
+  namespace: aifeeders
+spec:
+  podSelector: {}
+  egress:
+    - {}
+  policyTypes:
+    - Egress

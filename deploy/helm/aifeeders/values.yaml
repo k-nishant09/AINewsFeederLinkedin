@@ -1,0 +1,165 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# AIFeeders Helm Chart — Default Values
+# Override with: -f deploy/environments/<platform>/values.yaml
+# Secrets are NEVER committed here; inject at deploy time via --set secrets.*
+# ──────────────────────────────────────────────────────────────────────────────
+
+global:
+  image:
+    # Container image registry prefix (no trailing slash).
+    # OpenShift: image-registry.openshift-image-registry.svc:5000/aifeeders
+    # EKS:       123456789.dkr.ecr.us-east-1.amazonaws.com/aifeeders
+    # AKS:       myacr.azurecr.io/aifeeders
+    registry: "image-registry.openshift-image-registry.svc:5000/aifeeders"
+    tag: "latest"
+  namespace: "aifeeders"
+
+# ── Platform ──────────────────────────────────────────────────────────────────
+# Controls Route (openshift) vs Ingress (eks/aks)
+platform:
+  type: openshift   # openshift | eks | aks
+
+# ── Application globals ───────────────────────────────────────────────────────
+app:
+  env: "production"
+  logLevel: "INFO"
+
+# ── Per-service image names (appended to global.image.registry) ───────────────
+api:
+  image: "daily-news"
+  replicas: 2
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+newsMcp:
+  image: "news-mcp"
+  replicas: 2
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+pageindexMcp:
+  image: "pageindex-mcp"
+  # In-memory document store — keep at 1 until backed by PostgreSQL/Redis
+  replicas: 1
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+evaluationMcp:
+  image: "evaluation-mcp"
+  replicas: 2
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+linkedinMcp:
+  image: "linkedin-mcp"
+  # In-memory idempotency registry — keep at 1 until backed by shared store
+  replicas: 1
+  resources:
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+    limits:
+      cpu: "1"
+      memory: "1Gi"
+
+# ── LLM Gateway ───────────────────────────────────────────────────────────────
+llm:
+  baseUrl: "https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com/v1"
+  model: "qwen2-5-72b-instruct"
+
+# ── Evaluation thresholds ─────────────────────────────────────────────────────
+eval:
+  factualityThreshold: "0.90"
+  groundednessThreshold: "0.90"
+  hallucinationThreshold: "0.05"
+  maxRetries: "2"
+
+# ── LinkedIn ──────────────────────────────────────────────────────────────────
+linkedin:
+  # API version — update when LinkedIn sunsets the current version.
+  # 202510 is sunset; 202609 is required for September 2026.
+  apiVersion: "202609"
+  # Delay in seconds between consecutive comment publishes (rate-limit safety net)
+  commentDelaySecs: 3
+
+# ── Observability ─────────────────────────────────────────────────────────────
+otel:
+  # Empty string = OTEL disabled. Set to "http://otel-collector:4318" to enable.
+  endpoint: ""
+
+langfuse:
+  host: "https://us.cloud.langfuse.com"
+
+# ── Workflow / CronJob ────────────────────────────────────────────────────────
+cronjob:
+  schedule: "30 0 * * *"   # 00:30 UTC = 06:00 IST
+  timezone: "UTC"
+
+workflow:
+  timezone: "Asia/Kolkata"
+
+# ── Feature flags ─────────────────────────────────────────────────────────────
+publishingEnabled: true
+
+# ── Autoscaling ───────────────────────────────────────────────────────────────
+hpa:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  cpuUtilization: 70
+  memoryUtilization: 80
+
+# ── Pod Disruption Budget ─────────────────────────────────────────────────────
+pdb:
+  enabled: true
+
+# ── OpenShift Routes ──────────────────────────────────────────────────────────
+route:
+  enabled: true
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+
+# ── Kubernetes Ingress (EKS / AKS) ───────────────────────────────────────────
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  # host: api.example.com   # set per environment
+
+# ── Secrets (NEVER set defaults here — inject at deploy time) ─────────────────
+# All fields are required; deploy will fail fast if any are missing.
+secrets: {}
+# secrets:
+#   llmApiKey: ""
+#   mcpAuthToken: ""
+#   gnewsApiKey: ""
+#   linkedinClientId: ""
+#   linkedinClientSecret: ""
+#   linkedinScopes: ""
+#   linkedinAccessToken: ""
+#   linkedinRefreshToken: ""
+#   linkedinRedirectUri: ""
+#   langfusePublicKey: ""
+#   langfuseSecretKey: ""
+#   langfuseBaseUrl: ""

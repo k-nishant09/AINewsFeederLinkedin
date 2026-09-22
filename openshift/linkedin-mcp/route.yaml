@@ -1,0 +1,20 @@
+---
+# LinkedIn MCP is publicly accessible — required for:
+#   1. OAuth callback: GET /oauth/callback (LinkedIn redirects the browser here)
+#   2. OAuth start:    GET /oauth/start    (operator opens in browser)
+#   3. OAuth status:   GET /oauth/status
+# The MCP endpoint itself (/mcp) is protected by Bearer token.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: linkedin-mcp
+  namespace: aifeeders
+spec:
+  to:
+    kind: Service
+    name: linkedin-mcp
+  port:
+    targetPort: 8000
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

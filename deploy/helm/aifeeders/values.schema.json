@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AIFeeders Helm Chart Values",
+  "type": "object",
+  "required": ["llm", "linkedin"],
+  "properties": {
+    "llm": {
+      "type": "object",
+      "required": ["baseUrl", "model"],
+      "properties": {
+        "baseUrl": {
+          "type": "string",
+          "minLength": 1,
+          "description": "LLM gateway base URL (required)"
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1,
+          "description": "LLM model identifier (required)"
+        }
+      }
+    },
+    "linkedin": {
+      "type": "object",
+      "required": ["apiVersion"],
+      "properties": {
+        "apiVersion": {
+          "type": ["string", "integer"],
+          "description": "LinkedIn API version, e.g. '202609' (required)"
+        },
+        "commentDelaySecs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Seconds to wait between consecutive LinkedIn comment publishes"
+        }
+      }
+    },
+    "global": {
+      "type": "object",
+      "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "registry": { "type": "string" },
+            "tag": { "type": "string" }
+          }
+        },
+        "namespace": { "type": "string" }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["openshift", "eks", "aks"],
+          "description": "Target platform — controls Route vs Ingress"
+        }
+      }
+    },
+    "hpa": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "minReplicas": { "type": "integer", "minimum": 1 },
+        "maxReplicas": { "type": "integer", "minimum": 1 },
+        "cpuUtilization": { "type": "integer", "minimum": 1, "maximum": 100 },
+        "memoryUtilization": { "type": "integer", "minimum": 1, "maximum": 100 }
+      }
+    },
+    "pdb": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "publishingEnabled": {
+      "type": "boolean",
+      "description": "Enable LinkedIn publishing. Smoke tests never publish regardless of this flag."
+    }
+  }
+}

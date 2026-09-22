@@ -1,0 +1,67 @@
+{{- if ne .Values.platform.type "openshift" }}
+{{- if .Values.ingress.enabled }}
+---
+# Ingress for EKS (ALB) or AKS (nginx) — not used on OpenShift (use route.yaml)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: daily-news-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: daily-news-api
+    {{- include "aifeeders.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    - {{- if .Values.ingress.host }}
+      host: {{ .Values.ingress.host }}
+      {{- end }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: daily-news-api
+                port:
+                  number: 8000
+
+---
+# LinkedIn MCP Ingress — required for OAuth browser flows (/oauth/start, /oauth/callback)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: linkedin-mcp
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: linkedin-mcp
+    {{- include "aifeeders.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  rules:
+    - {{- if .Values.ingress.linkedinMcpHost }}
+      host: {{ .Values.ingress.linkedinMcpHost }}
+      {{- end }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: linkedin-mcp
+                port:
+                  number: 8000
+{{- end }}
+{{- end }}

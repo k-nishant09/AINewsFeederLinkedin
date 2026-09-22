@@ -1,0 +1,94 @@
+---
+# Deny all ingress AND egress by default; explicit policies below open only what is needed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# Allow daily-news-api and daily-news-worker (CronJob) to reach all MCP servers
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-api-to-mcps
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      role: mcp-server
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: daily-news-api
+        - podSelector:
+            matchLabels:
+              app: daily-news-worker
+      ports:
+        - port: 8000
+          protocol: TCP
+
+---
+# Allow ingress from cluster router / load-balancer to the API
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-router-to-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: daily-news-api
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+
+---
+# Allow ingress from cluster router to LinkedIn MCP — required for OAuth /start,
+# /callback and /status to be browser-accessible (public-facing Route).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-router-to-linkedin-mcp
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: linkedin-mcp
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+
+---
+# Allow all pods to reach the external internet (Brave API, LinkedIn API, LLM gateway)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-egress-internet
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  egress:
+    - {}
+  policyTypes:
+    - Egress

@@ -1,0 +1,47 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: news-mcp
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: news-mcp
+    role: mcp-server
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.newsMcp.replicas }}
+  selector:
+    matchLabels:
+      app: news-mcp
+  template:
+    metadata:
+      labels:
+        app: news-mcp
+        role: mcp-server
+        {{- include "aifeeders.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: daily-news
+      containers:
+        - name: news-mcp
+          image: {{ include "aifeeders.image" (dict "registry" .Values.global.image.registry "name" .Values.newsMcp.image "tag" .Values.global.image.tag) }}
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: daily-news-config
+            - secretRef:
+                name: daily-news-secrets
+          resources:
+            {{- toYaml .Values.newsMcp.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30

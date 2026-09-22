@@ -1,0 +1,1 @@
+"""pageindex_mcp package."""

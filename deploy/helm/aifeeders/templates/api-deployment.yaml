@@ -1,0 +1,45 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: daily-news-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: daily-news-api
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.api.replicas }}
+  selector:
+    matchLabels:
+      app: daily-news-api
+  template:
+    metadata:
+      labels:
+        app: daily-news-api
+        {{- include "aifeeders.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: daily-news
+      containers:
+        - name: api
+          image: {{ include "aifeeders.image" (dict "registry" .Values.global.image.registry "name" .Values.api.image "tag" .Values.global.image.tag) }}
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: daily-news-config
+            - secretRef:
+                name: daily-news-secrets
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30

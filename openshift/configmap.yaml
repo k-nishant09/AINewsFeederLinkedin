@@ -1,0 +1,40 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: daily-news-config
+  namespace: aifeeders
+data:
+  APP_ENV: "production"
+  LOG_LEVEL: "INFO"
+  RUN_ID_PREFIX: "RUN"
+
+  # MCP server URLs (internal cluster service names)
+  NEWS_MCP_URL: "http://news-mcp:8000/mcp"
+  PAGEINDEX_MCP_URL: "http://pageindex-mcp:8000/mcp"
+  EVALUATION_MCP_URL: "http://evaluation-mcp:8000/mcp"
+  LINKEDIN_MCP_URL: "http://linkedin-mcp:8000/mcp"
+
+  # LLM Gateway — IBM OpenShift Model Gateway
+  LLM_BASE_URL: "https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com/v1"
+  LLM_MODEL: "qwen2-5-72b-instruct"
+
+  # Observability — disabled (no OTEL collector in this cluster)
+  OTEL_EXPORTER_OTLP_ENDPOINT: ""
+
+  # Evaluation thresholds — calibrated for qwen2-5-72b-instruct self-evaluation scores
+  EVAL_FACTUALITY_THRESHOLD: "0.50"
+  EVAL_GROUNDEDNESS_THRESHOLD: "0.50"
+  EVAL_HALLUCINATION_THRESHOLD: "0.85"
+  EVAL_MAX_RETRIES: "2"
+
+  # Workflow
+  WORKFLOW_TIMEZONE: "Asia/Kolkata"
+
+  # Publishing gate — set to "false" for smoke tests only
+  PUBLISHING_ENABLED: "true"
+
+  # LinkedIn API version — 202609 is the active version (202510 sunset Sep 2026)
+  LINKEDIN_API_VERSION: "202609"
+  # Delay in seconds between consecutive comment publishes (rate-limit safety net)
+  LINKEDIN_COMMENT_DELAY_SECONDS: "3"

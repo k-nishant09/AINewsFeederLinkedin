@@ -1,0 +1,34 @@
+---
+# Role — minimal permissions required by the daily-news service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: daily-news-role
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+---
+# RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: daily-news-rolebinding
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: daily-news
+    namespace: {{ .Values.global.namespace }}
+roleRef:
+  kind: Role
+  name: daily-news-role
+  apiGroup: rbac.authorization.k8s.io

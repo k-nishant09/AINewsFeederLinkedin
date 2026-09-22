@@ -1,0 +1,16 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: daily-news-api
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    app: daily-news-api
+    {{- include "aifeeders.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: daily-news-api
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP

@@ -1,0 +1,45 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: daily-news-config
+  namespace: {{ .Values.global.namespace }}
+  labels:
+    {{- include "aifeeders.labels" . | nindent 4 }}
+data:
+  APP_ENV: {{ .Values.app.env | quote }}
+  LOG_LEVEL: {{ .Values.app.logLevel | quote }}
+  RUN_ID_PREFIX: "RUN"
+
+  # MCP server URLs (internal cluster service names)
+  NEWS_MCP_URL: "http://news-mcp:8000/mcp"
+  PAGEINDEX_MCP_URL: "http://pageindex-mcp:8000/mcp"
+  EVALUATION_MCP_URL: "http://evaluation-mcp:8000/mcp"
+  LINKEDIN_MCP_URL: "http://linkedin-mcp:8000/mcp"
+
+  # LLM Gateway
+  LLM_BASE_URL: {{ .Values.llm.baseUrl | quote }}
+  LLM_MODEL: {{ .Values.llm.model | quote }}
+
+  # Observability — empty string disables OTEL
+  OTEL_EXPORTER_OTLP_ENDPOINT: {{ .Values.otel.endpoint | quote }}
+
+  # Evaluation thresholds
+  EVAL_FACTUALITY_THRESHOLD: {{ .Values.eval.factualityThreshold | quote }}
+  EVAL_GROUNDEDNESS_THRESHOLD: {{ .Values.eval.groundednessThreshold | quote }}
+  EVAL_HALLUCINATION_THRESHOLD: {{ .Values.eval.hallucinationThreshold | quote }}
+  EVAL_MAX_RETRIES: {{ .Values.eval.maxRetries | quote }}
+
+  # Workflow
+  WORKFLOW_TIMEZONE: {{ .Values.workflow.timezone | quote }}
+
+  # LinkedIn API — update when LinkedIn sunsets the current version
+  LINKEDIN_API_VERSION: {{ .Values.linkedin.apiVersion | quote }}
+  # Rate-limit safety net between consecutive comment publishes
+  LINKEDIN_COMMENT_DELAY_SECONDS: {{ .Values.linkedin.commentDelaySecs | quote }}
+
+  # Feature flags
+  PUBLISHING_ENABLED: {{ .Values.publishingEnabled | quote }}
+
+  # Langfuse observability host
+  LANGFUSE_HOST: {{ .Values.langfuse.host | quote }}

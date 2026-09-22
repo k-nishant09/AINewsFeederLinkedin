@@ -1,0 +1,48 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: daily-news-api
+  namespace: aifeeders
+  labels:
+    app: daily-news-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: daily-news-api
+  template:
+    metadata:
+      labels:
+        app: daily-news-api
+    spec:
+      serviceAccountName: daily-news
+      containers:
+        - name: api
+          image: image-registry.openshift-image-registry.svc:5000/aifeeders/daily-news:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: daily-news-config
+            - secretRef:
+                name: daily-news-secrets
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 20
+            periodSeconds: 30
