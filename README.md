@@ -467,7 +467,7 @@ The LinkedIn MCP server exposes OAuth 2.0 3-legged flow endpoints:
 
 | Setting | Value |
 |---------|-------|
-| App Client ID | `77hy8ru946qrj4` |
+| App Client ID | `<your-linkedin-client-id>` |
 | Products enabled | Share on LinkedIn + Sign In with LinkedIn (OpenID Connect) |
 | Redirect URI | `https://linkedin-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/oauth/callback` |
 | Scopes | `openid profile email w_member_social` |

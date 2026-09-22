@@ -329,7 +329,7 @@ LinkedIn access tokens expire after 60 days. The `LINKEDIN_ACCESS_TOKEN` secret 
    https://linkedin-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/oauth/start
    ```
 
-2. **LinkedIn shows a permission screen.** Sign in as `k.nishant09@gmail.com` and click "Allow".
+2. **LinkedIn shows a permission screen.** Sign in as the LinkedIn account owner and click "Allow".
 
 3. **LinkedIn redirects to the callback URL.** The pod intercepts this, exchanges the code for a token, and stores it in memory. You will see a success page.
 
@@ -364,9 +364,9 @@ If `w_member_social` is missing from the granted scopes, posts will fail with `P
 
 ### LinkedIn app details
 
-- **Client ID:** `77hy8ru946qrj4`
+- **Client ID:** `<your-linkedin-client-id>`
 - **Redirect URI:** `https://linkedin-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/oauth/callback`
-- **LinkedIn Developer Portal:** https://www.linkedin.com/developers/apps/77hy8ru946qrj4
+- **LinkedIn Developer Portal:** https://www.linkedin.com/developers/apps/
 
 ---
 
@@ -880,7 +880,7 @@ To increase: change `select_stories[:1]` to `select_stories[:3]` in [`src/daily_
 
 **Symptom:** LinkedIn API returns 403  
 **Cause:** Token does not have `w_member_social` scope, OR LinkedIn app does not have "Share on LinkedIn" product enabled  
-**Fix:** Re-run OAuth flow making sure `w_member_social` is in requested scopes. Check LinkedIn app at https://www.linkedin.com/developers/apps/77hy8ru946qrj4
+**Fix:** Re-run OAuth flow making sure `w_member_social` is in requested scopes. Check LinkedIn app at https://www.linkedin.com/developers/apps/
 
 ---
 
