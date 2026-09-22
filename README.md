@@ -1,25 +1,29 @@
 # AIFeeders — AI News Platform
 
-**Autonomous AI Daily News Multi-Agent Platform** that discovers AI news, summarises it with an LLM, generates five distinct human-perspective commentaries, runs a six-layer content guardrail pipeline, and publishes the result to LinkedIn — every day at 10:00 AM UTC via an OpenShift CronJob.
+**Autonomous AI Daily News Multi-Agent Platform** that discovers AI news, summarises it with an LLM, generates five distinct human-perspective commentaries, runs a six-layer content guardrail pipeline, and publishes the result to LinkedIn — every day at 10:00 AM UTC (3:30 PM IST) via an OpenShift CronJob.
+
+> **Customer value:** AIFeeders saves professionals 30–60 minutes of daily news curation. Instead of manually scanning AI blogs and newsletters, a fully automated, LLM-powered editorial team discovers, filters, and publishes a daily AI digest to your LinkedIn profile — with no human intervention required after initial setup.
 
 ---
 
 ## Table of Contents
 
 1. [What This Does](#what-this-does)
-2. [Architecture Overview](#architecture-overview)
-3. [Agents & Their Roles](#agents--their-roles)
-4. [MCP Servers](#mcp-servers)
-5. [Guardrails Pipeline (6 Layers)](#guardrails-pipeline-6-layers)
-6. [Project Structure](#project-structure)
-7. [Local Development Setup](#local-development-setup)
-8. [Environment Variables](#environment-variables)
-9. [OpenShift Deployment](#openshift-deployment)
-10. [Multi-Platform Deployment (Helm)](#multi-platform-deployment-helm)
-11. [LinkedIn OAuth Setup](#linkedin-oauth-setup)
-12. [Monitoring & Observability](#monitoring--observability)
-13. [Troubleshooting](#troubleshooting)
-14. [Key Constraints & Decisions](#key-constraints--decisions)
+2. [Who Is This For](#who-is-this-for)
+3. [Architecture Overview](#architecture-overview)
+4. [Agents & Their Roles](#agents--their-roles)
+5. [MCP Servers](#mcp-servers)
+6. [Guardrails Pipeline (6 Layers)](#guardrails-pipeline-6-layers)
+7. [Project Structure](#project-structure)
+8. [Local Development Setup](#local-development-setup)
+9. [Environment Variables](#environment-variables)
+10. [OpenShift Deployment](#openshift-deployment)
+11. [Multi-Platform Deployment (Helm)](#multi-platform-deployment-helm)
+12. [LinkedIn OAuth Setup](#linkedin-oauth-setup)
+13. [Monitoring & Observability](#monitoring--observability)
+14. [Troubleshooting](#troubleshooting)
+15. [Key Constraints & Decisions](#key-constraints--decisions)
+16. [Changelog](#changelog)
 
 ---
 
@@ -28,225 +32,237 @@
 Every day at 10:00 AM UTC (3:30 PM IST), AIFeeders:
 
 1. **Discovers** the latest AI news across 6 categories using GNews API (48-hour window)
-2. **Deduplicates** articles by URL hash to prevent repetition
+2. **Deduplicates** articles by URL+title hash to prevent repetition
 3. **Indexes** article content in an in-memory document store (PageIndex MCP)
-4. **Selects** 1 article per run for focused processing
+4. **Selects** 1 article per run for focused, high-quality processing
 5. **Summarises** the article with structured fields using `qwen2-5-72b-instruct` LLM
 6. **Generates** 5 human persona perspectives: Capitalist Mind, Working Professional Mind, Government Mind, Young/Fresher Mind, Techies Mind
 7. **Evaluates** content through a 6-layer guardrail pipeline (factuality, hallucination, PII, injection, policy, format)
-8. **Publishes** a fully-formatted plain-text post to LinkedIn (≤3000 chars) with all 5 perspectives embedded
+8. **Publishes** a fully-formatted plain-text post to LinkedIn (≤ 3000 chars) with all 5 perspectives embedded
 
 The published post looks like:
 
 ```
-🤖 AI NEWS  |  <headline>
+🤖 AI NEWS
+Xiaomi's MiMo-V2.6-Pro Outperforms DeepSeek as Top Open-Weights Model
 
-<2-3 sentence summary>
+Xiaomi has launched MiMo-V2.6-Pro, which surpasses DeepSeek as the leading
+open-weights language model, along with a more affordable V2.6-Flash version.
 
 📌 KEY POINTS
-  • <fact 1>
-  • <fact 2>
+  • MiMo-V2.6-Pro is now the top-performing open-weights model globally.
+  • Xiaomi also released a cheaper V2.6-Flash variant.
+  • The model handles text, images, and video.
 
-📈 Business — <business impact>
-👷 Jobs     — <job impact>
-🔬 Tech     — <technology impact>
+📈 Business — Could enhance Xiaomi's market position in AI and consumer electronics.
+👷 Jobs     — May lead to increased demand for AI specialists and data scientists.
+🔬 Tech     — Demonstrates significant advances in natural language processing.
 
+🔗 https://venturebeat.com/...
 ─────────────────────────────────
 🧵 PERSPECTIVES
 
 1/5  💼  CAPITALIST MIND
-<perspective text>
-  ▸ <evidence bullet>
+<2-3 sentence business perspective + evidence bullets>
 
 2/5  👷  WORKING PROFESSIONAL MIND
 ...
+3/5  🏛️  GOVERNMENT MIND  ...
+4/5  🎓  YOUNG / FRESHER MIND  ...
+5/5  🧠  TECHIES MIND  ...
 
-⚠️ DISCLAIMER: These are AI-simulated perspectives...
-#AI #AgenticAI #ArtificialIntelligence ...
+─────────────────────────────────
+⚠️ DISCLAIMER: These are AI-simulated perspectives — not verified opinions.
+🤖 Built with AIFeeders · Powered by Agentic AI
+
+#AI #AgenticAI #ArtificialIntelligence #LLM #GenerativeAI #AINews #TechNews
+#FutureOfWork #AIStrategy #MachineLearning #AIInnovation #DigitalTransformation
+#AILeadership #AIAgents
 ```
+
+> **Format note:** The headline is on its own line (line 2) so LinkedIn's mobile feed card preview always shows it. A long headline on the same line as the emoji gets clipped by LinkedIn's card renderer.
+
+---
+
+## Who Is This For
+
+| Persona | Value |
+|---------|-------|
+| **AI professionals** | A daily LinkedIn post showing your thought leadership on AI — without writing anything manually |
+| **Platform engineers** | A reference implementation of a production LangGraph + MCP agentic pipeline on OpenShift/Kubernetes |
+| **AI/ML architects** | Demonstrates LLM guardrails, multi-persona generation, and deterministic publishing gates |
+| **Enterprises** | White-label it for your team's LinkedIn page, internal newsletter, or Slack channel |
 
 ---
 
 ## Architecture Overview
 
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for full Mermaid diagrams.
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for full Mermaid diagrams and the architect's Q&A.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                      OpenShift / Kubernetes                      │
 │  ┌──────────────────┐    ┌──────────────────────────────────┐   │
-│  │   daily-news-api  │    │         CronJob (10:00 UTC)      │   │
+│  │   daily-news-api  │    │     CronJob (0 10 * * * UTC)     │   │
 │  │  (FastAPI + REST) │    │   daily_news.workflow_runner     │   │
 │  └────────┬─────────┘    └──────────────┬───────────────────┘   │
-│           │  LangGraph Workflow           │                       │
+│           │  LangGraph Workflow (9 nodes) │                       │
 │           └──────────────┬───────────────┘                       │
 │                          │                                        │
 │          ┌───────────────▼────────────────┐                      │
 │          │      daily_news_graph           │                      │
-│          │  (9-node LangGraph state machine)│                     │
+│          │  (LangGraph StateGraph)         │                      │
 │          └───────────────┬────────────────┘                      │
-│                          │                                        │
+│                          │  MCPHTTPClient POST /call              │
 │  ┌───────────┐  ┌────────┴──────┐  ┌────────────┐  ┌─────────┐  │
 │  │ news-mcp  │  │pageindex-mcp  │  │evaluation  │  │linkedin │  │
 │  │ (GNews)   │  │(doc store)    │  │-mcp        │  │-mcp     │  │
-│  └───────────┘  └───────────────┘  │(guardrails)│  │(OAuth)  │  │
-│                                    └────────────┘  └─────────┘  │
+│  │ replicas:2│  │ replicas: 1   │  │(guardrails)│  │replicas:│  │
+│  │ key rotate│  │ ⚠️ in-memory  │  │ replicas:2 │  │  1 ⚠️   │  │
+│  └───────────┘  └───────────────┘  └────────────┘  └─────────┘  │
 └─────────────────────────────────────────────────────────────────┘
-                          │
-          ┌───────────────┼───────────────┐
-          ▼               ▼               ▼
-   GNews API       LLM Gateway        LinkedIn API
-  (news search)  (qwen2-5-72b)       (Posts REST)
+                           │
+           ┌───────────────┼───────────────┐
+           ▼               ▼               ▼
+    GNews API       LLM Gateway        LinkedIn API
+   (news search)  (qwen2-5-72b)       (Posts REST v202609)
+   key rotation    verify=False        3000 char limit
 ```
 
 ---
 
 ## Agents & Their Roles
 
-The LangGraph workflow executes these 9 nodes in sequence:
+| Agent | LangGraph Node | LLM? | Responsibility |
+|-------|---------------|------|----------------|
+| `SummaryAgent` | `summarize` | ✅ Yes (temp=0.2) | Produces structured `NewsSummary` from article + PageIndex context |
+| `PersonaAgentFactory` | `generate_personas` | ✅ Yes × 5 (temp=0.4, parallel) | Generates 5 distinct persona perspectives concurrently |
+| `EvaluationAgent` | `evaluate` | ❌ No (calls evaluation-mcp which uses LLM internally) | Applies deterministic threshold gate; never lets the LLM decide whether to publish |
+| `PublisherAgent` | `publish` | ❌ No | Composes post text, applies character budget, calls linkedin-mcp |
 
-| Node | Agent / Code | What It Does |
-|------|-------------|--------------|
-| `discover_news` | `NewsMCPClient` | Queries GNews across 6 AI categories with a 48-hour window |
-| `deduplicate` | inline (MD5 hash) | Removes articles with duplicate `title+url` hashes |
-| `fetch_articles` | `NewsMCPClient.fetch_article` | Enriches articles with full content (capped at 30) |
-| `index_pageindex` | `PageIndexMCPClient` | Indexes each article into in-memory section tree |
-| `select_stories` | inline | Picks 1 article per run |
-| `summarize` | `SummaryAgent` + LLM | Produces structured `NewsSummary` with 8 fields |
-| `generate_personas` | `PersonaAgentFactory` | Runs 5 persona LLM prompts in parallel |
-| `evaluate` | `EvaluationAgent` + MCP | Runs 6-layer guardrail pipeline; sets `publish_eligible` |
-| `publish` | `PublisherAgent` + LinkedIn MCP | Composes post ≤3000 chars; calls `linkedin_create_post` |
-
-**Routing after evaluate:**
-- `PASS` → publish
-- `REGENERATE` → back to summarize (max 2 retries)
-- `BLOCK` / `HUMAN_REVIEW` → skip (item excluded from publish)
+> **PublisherAgent has zero LLM calls.** Post composition is purely deterministic string assembly. This ensures the published content is exactly what was evaluated.
 
 ---
 
 ## MCP Servers
 
-Four independent FastAPI + MCP servers, each at port 8000 inside the cluster:
+All servers expose `POST /call` with body `{"tool": "<name>", "arguments": {...}}` and return `{"result": ...}`.
 
 ### `news-mcp` — News Discovery
-- **Source:** GNews API (`https://gnews.io/api/v4/search`)
-- **Tools:** `news_search_latest`, `news_search_by_category`, `news_fetch_article`, `news_top_headlines_technology`
-- **Free plan limits:** 100 requests/day, max 10 articles/request
-- **Search window:** 48 hours (free plan returns sparse results for 24h)
-- **Rate limiting:** 1100ms delay between requests (`GNEWS_REQUEST_DELAY_MS`)
-- **Mock mode:** Returns 2 predictable mock articles when `GNEWS_API_KEY` is absent (safe for CI/local dev)
+
+- **Source:** GNews API (`/v4/search`, `/v4/top-headlines`)
+- **Key rotation:** Automatic failover from primary key (`GNEWS_API_KEY`) to secondary (`GNEWS_API_KEY_2`) on HTTP 403 (quota exhausted). Both search and headlines endpoints retry once with the fallback key. Health endpoint reports `active_key_index` and `active_key_prefix` for operator visibility.
+- **Tools:** `news_search_latest`, `news_search_by_category`, `news_search_ai_tech`, `news_search_ai_finance`, `news_top_headlines_technology`, `news_fetch_article`
+- **Replicas:** 2 (stateless)
 
 ### `pageindex-mcp` — Document Store & Retrieval
-- **Storage:** In-memory Python dict (replicas must stay at 1 or documents disappear on pod restart)
-- **Retrieval:** Keyword-overlap section scoring — no embeddings, no vector DB, no external ML model
+
+- **Storage:** In-memory dict keyed by `article_id`
+- **Retrieval:** Keyword-overlap section scoring (no embeddings)
 - **Tools:** `pageindex_index_document`, `pageindex_get_relevant_sections`, `pageindex_search_document`, `pageindex_get_document`
-- **Note:** For production scale back with PostgreSQL or Redis
+- **Replicas:** **1** (in-memory state — cannot scale without shared storage)
 
 ### `evaluation-mcp` — Content Guardrails
-- **6 layers:** prompt_injection → factuality → hallucination → pii → policy → social_media_format
-- **Tools:** `evaluation_evaluate_all` (all 6 in one call) + 6 individual standalone layer tools + `evaluation_policy_check` (backward-compat)
-- **Decision:** Fully deterministic gate — LLM scores are advisory inputs; the Python gate decides PASS/REGENERATE/BLOCK/HUMAN_REVIEW
-- **Thresholds (live):** factuality ≥ 0.50, groundedness ≥ 0.50, hallucination ≤ 0.85 (calibrated for qwen2-5-72b-instruct self-evaluation scores)
-- **Stub mode:** Returns safe passing values when `LLM_API_KEY` is absent — so the pipeline still runs end-to-end in local dev
+
+- **Layers:** 6 (prompt injection → factuality → hallucination → PII → policy → format)
+- **Decision gate:** Fully deterministic (`_determine_decision()`) — the LLM never decides to publish; it only scores
+- **Stub mode:** When `LLM_API_KEY` is absent, returns passing stub values (for CI/local dev)
+- **Tools:** `evaluation_evaluate_all`, plus 6 individual layer tools
+- **Replicas:** 2 (stateless)
 
 ### `linkedin-mcp` — LinkedIn Publishing
-- **Auth:** OAuth 2.0 3-legged flow; token stored in-memory (replicas must stay at 1)
-- **Tools:** 12 tools — `linkedin_create_post`, `linkedin_create_comment`, `linkedin_validate_token`, `linkedin_get_profile`, `linkedin_get_profile_posts`, `linkedin_get_post`, `linkedin_get_publish_status`, `linkedin_get_comments`, `linkedin_create_comment_reply`, `linkedin_enable_comments`, `linkedin_disable_comments`, `linkedin_get_audit`
-- **Idempotency:** `publication_key` (article_id + today's date + headline hash + run_id[-8:]) prevents duplicate posts; `comment_key` prevents duplicate comments
-- **API version:** 202609 (env-configurable via `LINKEDIN_API_VERSION`)
-- **Char limits:** posts ≤ 3000 (hard limit, enforced before API call), comments ≤ 1250 (soft limit, truncated with `...`)
-- **Rate-limit safety:** 3-second `asyncio.sleep` at start of every `linkedin_create_comment` call
-- **OAuth routes:** `/oauth/start` → `/oauth/callback` → `/oauth/status` + `/oauth/reauthorize`
-- **Audit log:** Last 50 publish attempts at `GET /audit` — never logs the access token
+
+- **Auth:** OAuth 2.0 PKCE flow. Token stored in-memory; persisted via Secret after reauth.
+- **Posts API:** `POST /rest/posts` (v202609). Returns URN from `x-restli-id` header.
+- **Comments API:** 403 PERMISSION_ERROR (requires "Community Management API" product — not yet approved). Comments are **soft-skipped** with an INFO log; personas are embedded in the post body instead.
+- **Idempotency:** `_published_posts` in-memory dict; keyed by `publication_key`
+- **Audit log:** `/audit` endpoint returns last 50 publish/comment attempts with status + request IDs
+- **Replicas:** **1** (in-memory token + idempotency registry)
 
 ---
 
 ## Guardrails Pipeline (6 Layers)
 
-Every generated post passes through all 6 layers before being eligible for publication:
+```
+Generated Text + Enriched Source Text
+         │
+         ▼
+Layer 1: Prompt Injection  — regex patterns + LLM classifier
+Layer 2: Factuality        — LLM claim-level grounding score (0→1)
+Layer 3: Hallucination     — LLM unsupported-statement score (0→1)
+Layer 4: PII               — regex: email, phone, SSN, credit card, credentials
+Layer 5: Policy            — LLM: toxicity, political bias, brand safety
+Layer 6: Format            — deterministic: char count, hashtags, URLs, duplicate hash
+         │
+         ▼
+   Deterministic Gate → PASS / REGENERATE / BLOCK / HUMAN_REVIEW
+```
 
-| Layer | Method | Blocks On |
-|-------|--------|-----------|
-| **1. Prompt Injection** | Regex (11 patterns) + LLM second-pass classifier | `HIGH` or `MEDIUM` risk → BLOCK |
-| **2. Factuality** | LLM claim-level grounding check (source vs generated) | score < 0.50 → REGENERATE |
-| **3. Hallucination** | LLM unsupported-statement detection | score > 0.85 → REGENERATE |
-| **4. PII** | Regex only — no LLM (email, phone, SSN, credit card, API keys, tokens) | any PII found → BLOCK |
-| **5. Policy** | LLM toxicity + political bias + brand safety + copyright markers | toxicity > 0.3 → BLOCK; bias → HUMAN_REVIEW |
-| **6. Format** | Deterministic: char count ≤ 3000, hashtag count in comments ≤ 5, unsafe URLs, duplicate content hash | violations → REGENERATE |
+**Source enrichment (fix applied):** Because GNews free plan truncates article content to ~250 chars, the evaluation source text is enriched with all `NewsSummary` fields (headline, summary, key_points, business/job/tech impacts) before being sent to the evaluator. This prevents false hallucination scores caused by near-empty source text.
 
-**Decision priority (highest wins):** `BLOCK > HUMAN_REVIEW > REGENERATE > PASS`
-
-> **Stub mode:** When `LLM_API_KEY` is absent the LLM-based layers (1, 2, 3, 5) return safe-passing stub values. This enables full local dev runs without a live LLM. Layer 4 (PII) and Layer 6 (format) always run — they are regex/deterministic and require no LLM.
+| Decision | Trigger | Action |
+|----------|---------|--------|
+| `PASS` | All layers within threshold | Publish to LinkedIn |
+| `REGENERATE` | factuality < 0.50 OR groundedness < 0.50 OR hallucination > 0.85 | Re-run summarize + personas (max 2 retries) |
+| `BLOCK` | PII found OR injection HIGH OR toxicity > 0.30 | Skip article permanently |
+| `HUMAN_REVIEW` | Political bias OR policy violations | Exclude from auto-publish |
 
 ---
 
 ## Project Structure
 
 ```
-AINewsfeederLinkedin/
-├── src/daily_news/              # Main application
-│   ├── api/                     # FastAPI app + REST routes
-│   │   └── main.py              # App factory, logging setup
-│   ├── agents/                  # LangGraph node implementations
-│   │   ├── summary_agent.py     # LLM summarization
-│   │   ├── persona_agent.py     # 5-persona generation
-│   │   ├── evaluation_agent.py  # Guardrail gate logic
-│   │   └── publisher_agent.py   # LinkedIn post composition + publishing
-│   ├── config/settings.py       # Pydantic settings (env-driven)
-│   ├── mcp/                     # MCP client wrappers
-│   │   ├── news.py              # → news-mcp
-│   │   ├── pageindex.py         # → pageindex-mcp
-│   │   ├── evaluation.py        # → evaluation-mcp
-│   │   └── linkedin.py          # → linkedin-mcp
-│   ├── models/                  # Pydantic data models
-│   │   ├── news.py              # NewsArticle, NewsCategory
-│   │   ├── summary.py           # NewsSummary
-│   │   ├── persona.py           # PersonaOutput, PersonaSetOutput
-│   │   └── evaluation.py        # EvaluationResult, EvaluationDecision
-│   ├── observability/
-│   │   ├── tracing.py           # OpenTelemetry + Langfuse setup
-│   │   └── metrics.py           # Prometheus metrics
-│   ├── workflows/
-│   │   └── daily_news_graph.py  # LangGraph state machine (9 nodes)
-│   └── workflow_runner.py       # CLI entry point for CronJob
-│
-├── mcp_servers/                 # Standalone MCP server processes
-│   ├── news_mcp/server.py       # GNews integration
-│   ├── pageindex_mcp/server.py  # In-memory document store
-│   ├── evaluation_mcp/server.py # 6-layer guardrail pipeline
-│   └── linkedin_mcp/server.py   # LinkedIn OAuth + Posts API
-│
-├── prompts/                     # LLM prompt templates
-│   ├── summary.txt              # Structured news summary fields
-│   ├── capitalist.txt           # Capitalist Mind persona
-│   ├── labor.txt                # Working Professional Mind persona
-│   ├── policy.txt               # Government Mind persona
-│   ├── genz.txt                 # Young/Fresher Mind persona
-│   └── linkedin.txt             # Techies Mind persona
-│
-├── openshift/                   # Kubernetes / OpenShift manifests
-│   ├── namespace.yaml
-│   ├── configmap.yaml           # Non-secret env vars
-│   ├── secrets.yaml             # Template (never commit real values)
-│   ├── cronjob.yaml             # 0 10 * * * UTC schedule
-│   ├── networkpolicy.yaml       # Default-deny + selective allow
-│   ├── api/                     # daily-news-api Deployment + Service + Route
-│   ├── news-mcp/                # news-mcp Deployment + Service + Route
-│   ├── pageindex-mcp/           # pageindex-mcp Deployment + Service + Route
-│   ├── evaluation-mcp/          # evaluation-mcp Deployment + Service + Route
-│   └── linkedin-mcp/            # linkedin-mcp Deployment + Service + Route
-│
-├── deploy/                      # Multi-platform Helm deployment
-│   ├── deploy.sh                # 21-step deployment script
-│   ├── helm/aifeeders/          # Helm chart (18 templates)
-│   └── environments/            # Platform-specific values
-│       ├── openshift/values.yaml
-│       ├── eks/values.yaml
-│       └── aks/values.yaml
-│
-├── Dockerfile                   # Main API + workflow runner image (UBI9/Python 3.11)
-├── docker-compose.yaml          # Local dev: all 5 services
-└── pyproject.toml               # Python deps + tool config
+AIFeeders/
+├── src/
+│   └── daily_news/
+│       ├── agents/
+│       │   ├── evaluation_agent.py   # Deterministic threshold gate + _enrich_source()
+│       │   ├── persona_agent.py      # 5 parallel LLM personas (asyncio.gather)
+│       │   ├── publisher_agent.py    # Post composition + LinkedIn MCP calls
+│       │   └── summary_agent.py      # LangChain chain → NewsSummary Pydantic
+│       ├── api/
+│       │   └── main.py               # FastAPI app (POST /workflow/daily-news)
+│       ├── config/
+│       │   └── settings.py           # pydantic-settings from env vars
+│       ├── mcp/
+│       │   ├── client.py             # MCPHTTPClient (POST /call REST)
+│       │   ├── news.py               # NewsMCPClient
+│       │   ├── pageindex.py          # PageIndexMCPClient
+│       │   ├── evaluation.py         # EvaluationMCPClient
+│       │   └── linkedin.py           # LinkedInMCPClient
+│       ├── models/
+│       │   ├── evaluation.py         # EvaluationResult, EvaluationDecision
+│       │   ├── news.py               # NewsCategory
+│       │   ├── persona.py            # PersonaOutput, PersonaSetOutput, PersonaType
+│       │   └── summary.py            # NewsSummary
+│       ├── observability/
+│       │   └── tracing.py            # Langfuse + OTLP (OTLP disabled if endpoint="")
+│       ├── workflows/
+│       │   └── daily_news_graph.py   # LangGraph StateGraph (9 nodes)
+│       └── workflow_runner.py        # CronJob entry point (python -m ...)
+├── mcp_servers/
+│   ├── news_mcp/server.py            # GNews adapter + key rotation
+│   ├── pageindex_mcp/server.py       # In-memory doc store
+│   ├── evaluation_mcp/server.py      # 6-layer guardrail pipeline
+│   └── linkedin_mcp/server.py        # OAuth + Posts API
+├── prompts/
+│   ├── summary.txt                   # Structured summary prompt
+│   ├── capitalist.txt                # Capitalist Mind persona
+│   ├── labor.txt                     # Working Professional Mind
+│   ├── policy.txt                    # Government Mind
+│   ├── genz.txt                      # Young/Fresher Mind
+│   └── linkedin.txt                  # Techies Mind
+├── openshift/                        # OpenShift manifests (configmap, secrets, deployments...)
+├── deploy/
+│   ├── deploy.sh                     # Multi-platform deploy script
+│   ├── helm/aifeeders/               # Helm chart (18 templates)
+│   └── environments/                 # openshift / eks / aks values.yaml
+├── Dockerfile                        # UBI9 / Python 3.11 image
+├── pyproject.toml
+├── .env.example                      # Template — copy to .env, never commit .env
+├── README.md
+├── RUNBOOK.md
+└── ARCHITECTURE.md
 ```
 
 ---
@@ -256,17 +272,18 @@ AINewsfeederLinkedin/
 ### Prerequisites
 
 - Python 3.11+
-- Docker + Docker Compose
-- GNews API key (free: https://gnews.io)
-- LinkedIn Developer App (Client ID + Secret)
+- Docker or Podman (for running MCP servers locally)
+- GNews API key (free at https://gnews.io)
+- LinkedIn Developer App credentials (see [LinkedIn OAuth Setup](#linkedin-oauth-setup))
 - IBM LLM Gateway access (or any OpenAI-compatible endpoint)
 
 ### 1. Clone and set up venv
 
 ```bash
-git clone <repo>
-cd AINewsfeederLinkedin
-python -m venv .venv && source .venv/bin/activate
+git clone https://github.com/k-nishant09/AINewsFeederLinkedin.git
+cd AINewsFeederLinkedin
+python3.11 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
@@ -274,21 +291,20 @@ pip install -e ".[dev]"
 
 ```bash
 cp .env.example .env
-# Edit .env with your real values — see Environment Variables section
+# Edit .env with your real values:
+# LLM_API_KEY, GNEWS_API_KEY, LINKEDIN_CLIENT_ID,
+# LINKEDIN_CLIENT_SECRET, LINKEDIN_ACCESS_TOKEN
 ```
 
 ### 3. Start all services
 
 ```bash
-docker-compose up --build
-```
+# Start all 5 MCP servers + the daily-news-api
+docker compose up -d
 
-Services start at:
-- API: `http://localhost:8000`
-- news-mcp: `http://localhost:8101`
-- pageindex-mcp: `http://localhost:8102`
-- evaluation-mcp: `http://localhost:8103`
-- linkedin-mcp: `http://localhost:8104`
+# Optional: Langflow visual workflow IDE (port 7860)
+docker compose --profile inspect up langflow -d
+```
 
 ### 4. Run a smoke test (no publishing)
 
@@ -300,6 +316,8 @@ PUBLISHING_ENABLED=false python -m daily_news.workflow_runner
 
 ```bash
 PUBLISHING_ENABLED=true python -m daily_news.workflow_runner
+# Or via the API:
+curl -X POST http://localhost:8000/workflow/daily-news
 ```
 
 ---
@@ -310,37 +328,38 @@ PUBLISHING_ENABLED=true python -m daily_news.workflow_runner
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `APP_ENV` | `production` | Environment name |
-| `LOG_LEVEL` | `INFO` | Python logging level |
-| `NEWS_MCP_URL` | `http://news-mcp:8000/mcp` | News MCP server URL |
-| `PAGEINDEX_MCP_URL` | `http://pageindex-mcp:8000/mcp` | PageIndex MCP URL |
-| `EVALUATION_MCP_URL` | `http://evaluation-mcp:8000/mcp` | Evaluation MCP URL |
-| `LINKEDIN_MCP_URL` | `http://linkedin-mcp:8000/mcp` | LinkedIn MCP URL |
-| `LLM_BASE_URL` | IBM model gateway URL | OpenAI-compatible LLM endpoint |
-| `LLM_MODEL` | `qwen2-5-72b-instruct` | Model to use |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `""` | OTLP endpoint (empty = disabled) |
-| `EVAL_FACTUALITY_THRESHOLD` | `0.50` | Min factuality score |
-| `EVAL_GROUNDEDNESS_THRESHOLD` | `0.50` | Min groundedness score |
-| `EVAL_HALLUCINATION_THRESHOLD` | `0.85` | Max hallucination score |
-| `PUBLISHING_ENABLED` | `true` | Set `false` for smoke tests |
-| `LINKEDIN_API_VERSION` | `202609` | LinkedIn REST API version |
-| `LINKEDIN_COMMENT_DELAY_SECONDS` | `3` | Delay between comment publishes |
+| `APP_ENV` | `production` | `development` / `staging` / `production` |
+| `LOG_LEVEL` | `INFO` | Python log level |
+| `NEWS_MCP_URL` | `http://news-mcp:8000` | Internal service URL |
+| `PAGEINDEX_MCP_URL` | `http://pageindex-mcp:8000` | Internal service URL |
+| `EVALUATION_MCP_URL` | `http://evaluation-mcp:8000` | Internal service URL |
+| `LINKEDIN_MCP_URL` | `http://linkedin-mcp:8000` | Internal service URL |
+| `LLM_BASE_URL` | _(model gateway URL)_ | OpenAI-compatible endpoint |
+| `LLM_MODEL` | `qwen2-5-72b-instruct` | Model name |
+| `PUBLISHING_ENABLED` | `true` | Set `false` to run without publishing |
+| `EVAL_FACTUALITY_THRESHOLD` | `0.50` | Min factuality score to pass |
+| `EVAL_GROUNDEDNESS_THRESHOLD` | `0.50` | Min groundedness score to pass |
+| `EVAL_HALLUCINATION_THRESHOLD` | `0.85` | Max hallucination score to pass |
+| `LINKEDIN_API_VERSION` | `202609` | LinkedIn API version header |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `""` | Empty = OTLP disabled (no collector) |
+| `LANGFUSE_BASE_URL` | `https://us.cloud.langfuse.com` | Langfuse endpoint |
 
 ### Secret (`openshift/secrets.yaml` — never commit real values)
 
 | Variable | Description |
 |----------|-------------|
 | `LLM_API_KEY` | Bearer token for LLM gateway |
-| `GNEWS_API_KEY` | GNews API key |
-| `LINKEDIN_CLIENT_ID` | LinkedIn app client ID |
-| `LINKEDIN_CLIENT_SECRET` | LinkedIn app client secret |
-| `LINKEDIN_ACCESS_TOKEN` | Active OAuth access token |
-| `LINKEDIN_REFRESH_TOKEN` | Refresh token (if enabled) |
-| `LINKEDIN_REDIRECT_URI` | Must match LinkedIn app configuration |
+| `GNEWS_API_KEY` | GNews primary API key |
+| `GNEWS_API_KEY_2` | GNews secondary key (auto-failover on 403) |
+| `MCP_AUTH_TOKEN` | Shared Bearer token for MCP server auth |
+| `LINKEDIN_CLIENT_ID` | LinkedIn OAuth app client ID |
+| `LINKEDIN_CLIENT_SECRET` | LinkedIn OAuth app client secret |
+| `LINKEDIN_ACCESS_TOKEN` | LinkedIn member access token (60-day expiry) |
+| `LINKEDIN_REFRESH_TOKEN` | Optional programmatic refresh token |
+| `LINKEDIN_REDIRECT_URI` | Must match LinkedIn Developer Portal exactly |
 | `LINKEDIN_SCOPES` | `openid profile email w_member_social` |
-| `LANGFUSE_PUBLIC_KEY` | Langfuse tracing public key |
-| `LANGFUSE_SECRET_KEY` | Langfuse tracing secret key |
-| `LANGFUSE_BASE_URL` | `https://us.cloud.langfuse.com` |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse project public key |
+| `LANGFUSE_SECRET_KEY` | Langfuse project secret key |
 
 ---
 
@@ -348,140 +367,170 @@ PUBLISHING_ENABLED=true python -m daily_news.workflow_runner
 
 ### Prerequisites
 
-- `oc` CLI logged in to `https://api.f80l034.fusion.tadn.ibm.com:6443`
-- Namespace `aifeeders` created
-- Image builds completed via `oc start-build`
+```bash
+oc login --token=<token> --server=https://<cluster-api>:6443
+oc new-project aifeeders  # or: oc project aifeeders
+```
 
 ### REST API endpoints (available from `daily-news-api`)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Liveness check |
-| `GET` | `/ready` | Readiness check |
-| `POST` | `/workflow/daily-news` | Trigger workflow (runs in background, returns `run_id` immediately) |
-| `GET` | `/workflow/{run_id}` | Poll status of a running/completed workflow |
-| `POST` | `/approval/{run_id}/approve` | Approve a HUMAN_REVIEW item for publishing |
-| `POST` | `/approval/{run_id}/reject` | Reject a HUMAN_REVIEW item |
-| `GET` | `/news/search` | Search news via MCP |
-
-> **Note:** `POST /workflow/daily-news` generates its own `run_id` — the request body is empty. Passing `run_id` in the body has no effect.
+| `GET` | `/health` | Service health check |
+| `GET` | `/ready` | Readiness probe |
+| `POST` | `/workflow/daily-news` | Trigger workflow (no body — `run_id` auto-generated) |
+| `GET` | `/workflow/{run_id}` | Get workflow run status |
+| `GET` | `/metrics` | Prometheus metrics |
 
 ### Step-by-step
 
 ```bash
-# 1. Create namespace
-oc apply -f openshift/namespace.yaml
-
-# 2. Create RBAC
-oc apply -f openshift/rbac.yaml
-
-# 3. Create ConfigMap (review values first)
+# 1. Apply ConfigMap and Secrets (fill in secrets.yaml first)
 oc apply -f openshift/configmap.yaml
-
-# 4. Create Secrets (fill in real values first — NEVER commit)
 oc apply -f openshift/secrets.yaml
 
-# 5. Deploy MCP servers
+# 2. Apply RBAC
+oc apply -f openshift/rbac.yaml
+
+# 3. Create ImageStreams (first time only)
+for svc in daily-news news-mcp pageindex-mcp evaluation-mcp linkedin-mcp; do
+  oc create imagestream $svc -n aifeeders 2>/dev/null || true
+done
+
+# 4. Build all images
+oc start-build daily-news     --from-dir=. -n aifeeders --follow
+oc start-build news-mcp       --from-dir=mcp_servers/news_mcp -n aifeeders --follow
+oc start-build pageindex-mcp  --from-dir=mcp_servers/pageindex_mcp -n aifeeders --follow
+oc start-build evaluation-mcp --from-dir=mcp_servers/evaluation_mcp -n aifeeders --follow
+oc start-build linkedin-mcp   --from-dir=mcp_servers/linkedin_mcp -n aifeeders --follow
+
+# 5. Deploy services
 oc apply -f openshift/news-mcp/
 oc apply -f openshift/pageindex-mcp/
 oc apply -f openshift/evaluation-mcp/
 oc apply -f openshift/linkedin-mcp/
-
-# 6. Deploy API
 oc apply -f openshift/api/
 
-# 7. Apply network policies
+# 6. Apply network policies, HPA, PDB, CronJob
 oc apply -f openshift/networkpolicy.yaml
-
-# 8. Create CronJob
+oc apply -f openshift/hpa.yaml
+oc apply -f openshift/pdb.yaml
 oc apply -f openshift/cronjob.yaml
 
-# 9. Verify all pods are running
+# 7. Authorise LinkedIn (open in browser)
+open https://linkedin-mcp-aifeeders.apps.<cluster>/oauth/start
+
+# 8. Verify
 oc get pods -n aifeeders
-
-# 10. Manually trigger a test run
-oc create job --from=cronjob/daily-ai-news test-run-$(date +%s) -n aifeeders
-
-# 11. Follow logs
-oc logs -f job/test-run-<id> -n aifeeders
+curl https://daily-news-api-aifeeders.apps.<cluster>/health
 ```
 
 ### Image builds
 
 ```bash
-# Build main API/worker image (includes src/ and prompts/)
+# Rebuild main image after code changes
 oc start-build daily-news --from-dir=. -n aifeeders --follow
+oc rollout restart deployment/daily-news-api -n aifeeders
 
-# Build individual MCP server images
-oc start-build linkedin-mcp --from-dir=mcp_servers/linkedin_mcp -n aifeeders --follow
+# Rebuild a specific MCP server
 oc start-build news-mcp --from-dir=mcp_servers/news_mcp -n aifeeders --follow
-oc start-build evaluation-mcp --from-dir=mcp_servers/evaluation_mcp -n aifeeders --follow
-oc start-build pageindex-mcp --from-dir=mcp_servers/pageindex_mcp -n aifeeders --follow
+oc rollout restart deployment/news-mcp -n aifeeders
 ```
 
 ### Platform resources also deployed
 
-| Resource | File | Purpose |
-|----------|------|---------|
-| HPA | `openshift/hpa.yaml` | `daily-news-api` autoscales 2–10 replicas on CPU/memory |
-| PDB | `openshift/pdb.yaml` | Ensures ≥1 replica available for `daily-news-api`, `news-mcp`, `linkedin-mcp` during node drains |
-| RBAC | `openshift/rbac.yaml` | ServiceAccount `daily-news` with minimal `get/list` on ConfigMaps, Secrets, Pods |
+| Resource | Details |
+|----------|---------|
+| HPA | `daily-news-api` — min:2, max:10, CPU:70%, Mem:80% |
+| PDB | `daily-news-api`, `news-mcp`, `linkedin-mcp` — minAvailable:1 |
+| NetworkPolicy | default-deny-all + 4 allow rules |
+| RBAC | ServiceAccount `daily-news` — get/list ConfigMaps, Secrets, Pods |
+| CronJob | `daily-ai-news` — `0 10 * * *` UTC, label `app: daily-news-worker` |
 
 ---
 
 ## Multi-Platform Deployment (Helm)
 
+The Helm chart at `deploy/helm/aifeeders/` supports OpenShift, Amazon EKS, and Azure AKS.
+
+See [`deploy/README.md`](deploy/README.md) for full per-platform instructions including:
+- Prerequisites per platform (oc / aws / az CLI)
+- Environment variable reference
+- Quick start for each platform
+- Secret management (ESO / AWS Secrets Manager / Azure Key Vault)
+- LinkedIn token rotation
+- Troubleshooting
+
+**Quick start:**
+
 ```bash
+# Export secrets (all platforms)
+export LLM_API_KEY="..."
+export GNEWS_API_KEY="..."
+export GNEWS_API_KEY_2="..."          # optional secondary key for auto-rotation
+export LINKEDIN_CLIENT_ID="..."
+export LINKEDIN_CLIENT_SECRET="..."
+export LINKEDIN_ACCESS_TOKEN="..."
+export LANGFUSE_PUBLIC_KEY="..."
+export LANGFUSE_SECRET_KEY="..."
+
 # OpenShift
 ./deploy/deploy.sh --platform openshift --environment prod --namespace aifeeders
 
-# AWS EKS
+# EKS
 ./deploy/deploy.sh --platform eks --environment prod --namespace aifeeders \
-  --image-registry 123456789.dkr.ecr.us-east-1.amazonaws.com/aifeeders
+  --image-registry 123456789.dkr.ecr.us-east-1.amazonaws.com/aifeeders --image-tag v1.0.0
 
-# Azure AKS
+# AKS
 ./deploy/deploy.sh --platform aks --environment prod --namespace aifeeders \
-  --image-registry myacr.azurecr.io/aifeeders
-
-# Dry run (no changes applied)
-./deploy/deploy.sh --platform openshift --environment prod --dry-run
-
-# Skip image builds (redeploy only)
-./deploy/deploy.sh --platform openshift --environment prod --skip-build
+  --image-registry myacr.azurecr.io/aifeeders --image-tag v1.0.0
 ```
 
 ---
 
 ## LinkedIn OAuth Setup
 
-The LinkedIn MCP server exposes OAuth 2.0 3-legged flow endpoints:
-
 ### Initial setup
 
-1. Go to: `https://linkedin-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/oauth/start`
-2. Authorise the LinkedIn app in your browser
-3. LinkedIn redirects to `/oauth/callback` — token is stored in the running pod
-4. Verify: `https://linkedin-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/oauth/status`
+1. Go to https://www.linkedin.com/developers/apps/new and create an app
+2. Under **Products** tab, request: **Share on LinkedIn** + **Sign In with LinkedIn using OpenID Connect**
+3. Under **Auth** → OAuth 2.0 settings, add redirect URI:
+   ```
+   https://linkedin-mcp-<namespace>.apps.<cluster-domain>/oauth/callback
+   ```
+4. Note your **Client ID** and **Client Secret** — add to `openshift/secrets.yaml`
+5. Trigger the OAuth flow: `open https://linkedin-mcp-<namespace>.apps.<cluster>/oauth/start`
+6. Complete the consent screen — the pod stores the token automatically
 
 ### Required LinkedIn app settings
 
 | Setting | Value |
 |---------|-------|
-| App Client ID | `<your-linkedin-client-id>` |
+| App Client ID | _(your app's client ID from LinkedIn Developer Portal)_ |
 | Products enabled | Share on LinkedIn + Sign In with LinkedIn (OpenID Connect) |
-| Redirect URI | `https://linkedin-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/oauth/callback` |
+| Redirect URI | `https://linkedin-mcp-aifeeders.apps.<your-cluster-domain>/oauth/callback` |
 | Scopes | `openid profile email w_member_social` |
 
 ### Token lifecycle
 
-- Access tokens expire after **60 days**
-- Re-run `/oauth/start` before expiry to obtain a fresh token
-- Token is stored in the pod's in-memory store — it is lost on pod restart
-- To persist across restarts: set `LINKEDIN_ACCESS_TOKEN` in the OpenShift secret
+LinkedIn access tokens expire after **60 days**. Set a calendar reminder.
+
+To reauthorise:
+```bash
+# 1. Open OAuth flow in browser
+open https://linkedin-mcp-aifeeders.apps.<cluster>/oauth/start
+
+# 2. Complete consent
+
+# 3. Persist the new token to survive pod restarts
+oc patch secret daily-news-secrets -n aifeeders \
+  --patch '{"stringData":{"LINKEDIN_ACCESS_TOKEN":"<new-token>"}}'
+oc rollout restart deployment/linkedin-mcp -n aifeeders
+```
 
 ### Comments API note
 
-The LinkedIn Comments API (`POST /rest/socialActions/{postUrn}/comments`) requires the **"Community Management API"** product on the LinkedIn Developer Portal. This product requires LinkedIn approval and is separate from "Share on LinkedIn". Until approved, all 5 persona perspectives are embedded directly in the post body (the current production behaviour).
+The LinkedIn Comments API (`partnerApiSocialActions.CREATE`) requires the **"Community Management API"** product — a separate LinkedIn product requiring manual approval. Until approved, comment calls return `403 PERMISSION_ERROR`. This is handled as a **soft skip** — one `INFO` log is emitted and all 5 persona perspectives remain in the main post body. No pipeline errors result.
 
 ---
 
@@ -489,50 +538,73 @@ The LinkedIn Comments API (`POST /rest/socialActions/{postUrn}/comments`) requir
 
 ### Health checks
 
-Every service exposes `/health`. Check from outside the cluster:
+Every service exposes `/health` (liveness) and `/ready` (readiness):
 
 ```bash
-# API
-curl https://daily-news-api-aifeeders.apps.f80l034.fusion.tadn.ibm.com/health
-
-# LinkedIn MCP (includes token status + audit log reference)
-curl https://linkedin-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/health
-
-# Evaluation MCP (shows guardrail layer status)
-curl https://evaluation-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/health
+CLUSTER="apps.<your-cluster>"
+for svc in daily-news-api news-mcp pageindex-mcp evaluation-mcp linkedin-mcp; do
+  echo "=== $svc ===" && curl -s https://${svc}-aifeeders.$CLUSTER/health | python3 -m json.tool
+done
 ```
+
+Key fields to check:
+
+| Service | Field | Healthy value |
+|---------|-------|---------------|
+| `news-mcp` | `keys_configured` | `2` (both keys present) |
+| `news-mcp` | `active_key_index` | `1` or `2` |
+| `evaluation-mcp` | `llm_configured` | `true` |
+| `linkedin-mcp` | `token_expired` | `false` |
+| `linkedin-mcp` | `scopes_sufficient` | `true` |
 
 ### Audit log
 
-The LinkedIn MCP server maintains the last 50 publish attempts:
+The linkedin-mcp maintains a rolling in-memory audit log of all publish and comment attempts:
 
 ```bash
-curl https://linkedin-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/audit
+curl https://linkedin-mcp-aifeeders.apps.<cluster>/audit | python3 -m json.tool
 ```
+
+Each entry includes: `timestamp`, `tool`, `actor_urn`, `post_urn`, `status`, `http_status`, `li_request_id`, `attempt`.
 
 ### Langfuse tracing
 
-Traces are sent to `https://us.cloud.langfuse.com` when both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are configured. The tracing layer uses three mechanisms:
+If `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are set, every workflow run is traced at https://us.cloud.langfuse.com. Each run generates:
+- One root trace (`daily_news_workflow`)
+- 6 spans for GNews searches
+- 5 parallel spans for persona generation
+- 1 span for evaluation with scores
+- 1 span for publish with URN
 
-- **`get_langfuse_callback(run_id=...)`** — LangChain `CallbackHandler` attached to every LLM chain invocation (summary + 5 persona agents). All traces share `trace_id = create_trace_id(seed=run_id)`.
-- **`start_span(name, run_id=...)`** — Manual spans for MCP calls and non-LangChain steps (news discovery, evaluate node).
-- **`@observe_node`** — Decorator available for entire LangGraph nodes (not currently applied by default but usable).
-
-Every workflow run's traces are linked by `run_id` so you can filter the entire run as a session in Langfuse.
-
-> **Note:** `langfuse_trace()` in `tracing.py` is a **no-op stub** retained for call-site compatibility. It always returns `None`. The real tracing goes through `get_langfuse_callback`.
+Filter by `run_id` (visible in CronJob logs) to see all spans for a single run.
 
 ### Log access
 
 ```bash
-# CronJob logs (most recent run)
-oc logs -l app=daily-news-worker --tail=200 -n aifeeders
+# Latest CronJob run
+oc logs -l app=daily-news-worker --tail=100 -n aifeeders
 
-# LinkedIn MCP logs
-oc logs -l app=linkedin-mcp -n aifeeders --tail=100
+# API (manual trigger)
+oc logs -l app=daily-news-api --tail=50 -n aifeeders
 
-# Follow live logs
-oc logs -f deployment/linkedin-mcp -n aifeeders
+# LinkedIn MCP (publishing errors)
+oc logs -l app=linkedin-mcp --tail=50 -n aifeeders
+
+# Evaluation MCP (guardrail scores)
+oc logs -l app=evaluation-mcp --tail=50 -n aifeeders
+```
+
+A successful run produces:
+```
+[RUN-xxx] discover_news started
+[RUN-xxx] discovered 45 raw articles
+[RUN-xxx] deduplicated: 45 → 38
+[RUN-xxx] selected 1 story for summarisation
+[RUN-xxx] summarised 1 articles
+[RUN-xxx] eval article=news-abc decision=PASS factuality=0.86 groundedness=0.86 hallucination=0.40
+[RUN-xxx] post published post_urn=urn:li:share:75081... status=published
+[RUN-xxx] Comments API not available (PERMISSION_ERROR) — personas in post body. Skipping.
+Workflow complete — status=PUBLISHED published=1 errors=0
 ```
 
 ---
@@ -541,39 +613,41 @@ oc logs -f deployment/linkedin-mcp -n aifeeders
 
 ### GNews returns no articles
 
-- **Free plan:** 100 requests/day. Check reset at midnight UTC.
-- **`hours=48` required:** The free plan returns sparse results for `hours=24` on compound queries.
+- **Quota exhausted:** Free plan allows 100 req/day, resets midnight UTC
+- **Auto-rotation:** If primary key is exhausted, `news-mcp` automatically switches to `GNEWS_API_KEY_2`. Check `active_key_index` in `/health`
+- **`hours=48` required:** Free plan returns sparse results for `hours=24` on compound queries
 - **Verify key:** `curl "https://gnews.io/api/v4/search?q=AI&apikey=<key>&max=1"`
 
-### LinkedIn post returns HTTP 201 but post appears blank on LinkedIn
+### LinkedIn post appears blank in feed card
 
-- **Root cause:** Multi-codepoint emoji (e.g. `🏛️` = U+1F3DB U+FE0F) or separator lines can cause LinkedIn's renderer to blank the `commentary` field.
-- **Current fix:** All personas use plain text + simple single-codepoint emoji. `─────` separators kept minimal.
-- **Test:** POST a minimal text payload directly via the audit endpoint to isolate the character.
+- **Root cause (fixed):** The first line of the post was `🤖 AI NEWS  |  <long headline>`. LinkedIn mobile clips long first lines at the emoji glyph. The headline after `|` was hidden.
+- **Fix applied:** Headline is now on its own line (line 2). Line 0: `🤖 AI NEWS`. Line 1: `<headline>`.
+- **Verification:** Check the first 3 lines of the composed post; line 1 should be the bare headline with no emoji prefix.
 
 ### Evaluation always returns REGENERATE
 
-- Check `EVAL_FACTUALITY_THRESHOLD` and `EVAL_HALLUCINATION_THRESHOLD` in the ConfigMap.
-- Live values: `0.50` / `0.50` / `0.85` — calibrated for qwen2-5-72b-instruct self-evaluation scores.
-- If the LLM gateway is unreachable, evaluation-mcp returns stub pass values.
+- **Root cause (fixed):** GNews free plan truncates article content to ~250 chars. The evaluator was comparing 500-char persona output against ~250 chars of source, scoring everything as hallucinated.
+- **Fix applied:** `_enrich_source()` in `EvaluationAgent` combines raw content with all `NewsSummary` fields before evaluation. Live thresholds: `factuality ≥ 0.50`, `groundedness ≥ 0.50`, `hallucination ≤ 0.85`.
+- **Further tuning:** `oc patch configmap daily-news-config -n aifeeders --patch '{"data":{"EVAL_HALLUCINATION_THRESHOLD":"0.90"}}'`
 
 ### LinkedIn token expired
 
-1. Visit: `https://linkedin-mcp-aifeeders.apps.f80l034.fusion.tadn.ibm.com/oauth/start`
-2. Re-authorise in browser
-3. Update `LINKEDIN_ACCESS_TOKEN` in the OpenShift secret to persist across pod restarts
+1. Open: `https://linkedin-mcp-aifeeders.apps.<cluster>/oauth/start`
+2. Complete consent in browser
+3. Persist the new token: `oc patch secret daily-news-secrets -n aifeeders --patch '{"stringData":{"LINKEDIN_ACCESS_TOKEN":"<token>"}}'`
+4. Restart: `oc rollout restart deployment/linkedin-mcp -n aifeeders`
 
 ### CronJob pod can't reach MCP servers
 
 - NetworkPolicy `allow-api-to-mcps` requires label `app: daily-news-worker` on CronJob pods
 - Verify: `oc get pods -l app=daily-news-worker -n aifeeders`
-- The label is in `openshift/cronjob.yaml` under `template.metadata.labels`
+- The label is in `openshift/cronjob.yaml` under `spec.jobTemplate.spec.template.metadata.labels`
 
 ### `publication_key` collision — same post published twice
 
-- Each run appends the last 8 chars of `run_id` to the publication key
-- CronJob runs omit the suffix → same article published once per day
-- Manual re-triggers always have a unique run_id suffix → fresh publish
+- Each manual trigger appends the last 8 chars of `run_id` to the key → unique per invocation
+- CronJob (scheduled runs) uses the same key for the same article on the same day → idempotent
+- The `linkedin-mcp` returns a cached result on duplicate keys (no duplicate LinkedIn post)
 
 ---
 
@@ -581,19 +655,33 @@ oc logs -f deployment/linkedin-mcp -n aifeeders
 
 | Constraint | Reason |
 |------------|--------|
-| LinkedIn Posts API: **3000 char limit** | Hard API limit — HTTP 400 if exceeded. Post is truncated at 2990 chars in code |
-| Comments API: **blocked** | Requires "Community Management API" product (needs LinkedIn approval). All personas in post body instead |
-| **Never retry 400/401/403/422** | These are permanent errors — retrying wastes quota and may trigger abuse detection |
-| **Comments sequential** — no `asyncio.gather` | LinkedIn rate-limits burst comment creates. 3s floor delay per comment |
+| LinkedIn Posts API: **3000 char limit** | Hard API limit — HTTP 400 if exceeded. Post is capped at 2990 chars |
+| **Comments API: soft-skipped** | Requires "Community Management API" product. 403 PERMISSION_ERROR → INFO log, personas in post body |
+| **Headline on own line** | LinkedIn mobile clips long first lines at the emoji. Headline on line 2 is always visible in the feed card preview |
+| **`_enrich_source()` in evaluation** | GNews free plan content is ~250 chars. Enriching with `NewsSummary` fields gives the evaluator enough grounded context to score fairly |
+| **Never retry 400/401/403/422** | These are permanent errors — retrying wastes quota and may trigger LinkedIn abuse detection |
+| **Comments sequential** | LinkedIn rate-limits burst comment creates. 3s floor delay per comment (enforced at MCP level) |
 | `pageindex-mcp` and `linkedin-mcp` **replicas: 1** | Both use in-memory state. Scale to >1 requires shared storage (Redis/Postgres) |
-| **`OTEL_EXPORTER_OTLP_ENDPOINT=""`** | No OTEL collector deployed in this cluster. Empty string disables OTLP export cleanly |
+| **`OTEL_EXPORTER_OTLP_ENDPOINT=""`** | No OTEL collector deployed. Empty string disables OTLP export cleanly |
 | **`hours=48`** for GNews search | Free plan compound queries return sparse results for 24h windows |
-| **1 article per run** | Keeps pipeline fast and debuggable. Increase `select_stories[:1]` for higher throughput |
-| **Evaluation thresholds 0.50/0.50/0.85** | Calibrated from observed qwen2-5-72b-instruct self-evaluation score distributions |
+| **1 article per run** | Keeps pipeline fast and the LinkedIn post focused. Change `[:1]` in `select_stories` to increase |
+| **Evaluation thresholds 0.50/0.50/0.85** | Calibrated from observed qwen2-5-72b-instruct self-evaluation score distributions on AI news |
 | **`run_id` suffix in `publication_key`** | Prevents idempotency collisions on same-day manual re-triggers after format changes |
 | **No markdown in LinkedIn posts** | `*bold*` renders as literal asterisks. Use ALL-CAPS + emoji for visual structure |
-| **GNews free plan: 100 req/day** | Resets at midnight UTC. Avoid running multiple test workflows in one day |
-| **MCP transport is `POST /call`** | `MCPHTTPClient` calls each server at `POST /call` with `{"tool": "...", "arguments": {...}}`. The MCP SDK streaming transport (`/mcp`) is mounted but not used by agents — REST is simpler and more reliable in this setup |
-| **`verify=False` on all LLM + MCP calls** | IBM LLM gateway and internal MCP server calls use self-signed certs. httpx disables TLS verification for internal cluster traffic |
-| **Persona LLM calls are parallel** (`asyncio.gather`) | All 5 persona agents run concurrently inside `PersonaAgentFactory.generate_all()`. This is intentional and safe — each is a stateless LLM call |
-| **Workflow `POST /daily-news` takes no body** | The route auto-generates `run_id`. Do not pass a body — it is ignored |
+| **GNews key rotation** | Primary key (GNEWS_API_KEY) auto-rotates to secondary (GNEWS_API_KEY_2) on 403. Health shows `active_key_index` |
+| **MCP transport is `POST /call`** | `MCPHTTPClient` sends `{"tool": "...", "arguments": {...}}`. The MCP SDK streaming transport (`/mcp`) is mounted but not used — REST is simpler and more reliable |
+| **`verify=False` on LLM + MCP calls** | IBM LLM gateway uses self-signed cert. Internal MCP calls are within the cluster |
+| **Persona LLM calls are parallel** | `asyncio.gather` — each is stateless and independent. Reduces `generate_personas` from ~50s to ~12s |
+| **`POST /workflow/daily-news` takes no body** | `run_id` is auto-generated server-side. Any body sent is ignored |
+
+---
+
+## Changelog
+
+| Version | Date | Change |
+|---------|------|--------|
+| `1.3.0` | 2026-09-22 | **Fix: headline on own line.** LinkedIn mobile was clipping `🤖 AI NEWS \| <headline>` at the emoji. Headline moved to line 2. |
+| `1.2.0` | 2026-09-22 | **Fix: evaluation source enrichment.** GNews free plan content (~250 chars) was causing hallucination=1.0. `_enrich_source()` now passes all `NewsSummary` fields as grounded reference. |
+| `1.2.0` | 2026-09-22 | **Fix: comment PERMISSION_ERROR soft-skip.** `publisher_agent.py` now treats LinkedIn Comments API 403 as a soft skip (INFO log, no pipeline error). First occurrence sets `_comments_blocked=True` to avoid 5 unnecessary API calls. |
+| `1.1.0` | 2026-09-22 | **Fix: GNews key rotation.** `news-mcp` automatically rotates from `GNEWS_API_KEY` to `GNEWS_API_KEY_2` on HTTP 403. Health endpoint reports `active_key_index` and `active_key_prefix`. |
+| `1.0.0` | 2026-09-21 | Initial production release. LangGraph workflow, 4 MCP servers, 6-layer guardrails, OpenShift CronJob, Helm chart for OpenShift/EKS/AKS. |

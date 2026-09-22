@@ -469,11 +469,14 @@ graph LR
 
 ## 10. LinkedIn Post Anatomy
 
+> **Feed card rendering fix:** The headline is on its own line (line 2) so LinkedIn mobile always shows it in the feed card preview. Previously `🤖 AI NEWS  |  <headline>` was on one line — LinkedIn clipped at the emoji glyph, hiding the headline.
+
 ```mermaid
 graph TB
     POST["LinkedIn Post (≤ 3000 chars)"]
 
-    POST --> B1["🤖 AI NEWS | headline"]
+    POST --> B0["Line 0: 🤖 AI NEWS"]
+    POST --> B1["Line 1: headline (own line — always visible in feed card)"]
     POST --> B2["2-3 sentence summary"]
     POST --> B3["📌 KEY POINTS\n  • fact 1\n  • fact 2\n  • fact 3"]
     POST --> B4["📈 Business — impact\n👷 Jobs — impact\n🔬 Tech — impact\n🏛 Policy — impact (optional)"]
@@ -487,6 +490,7 @@ graph TB
     POST --> B12["⚠️ DISCLAIMER: AI-simulated perspectives..."]
     POST --> B13["#AI #AgenticAI #ArtificialIntelligence ...<br/>(14 hashtags)"]
 
+    style B0 fill:#dbeafe
     style B1 fill:#dbeafe
     style B6 fill:#fef3c7
     style B12 fill:#fee2e2
@@ -601,3 +605,15 @@ A: Each persona call is stateless and independent. Parallelism reduces `generate
 
 **Q: Why is the evaluation threshold calibration important?**
 A: `qwen2-5-72b-instruct` self-evaluates news summaries conservatively — factuality scores cluster at 0.5–0.7, not 0.9+. Setting thresholds at 0.90 means every article fails and nothing publishes. Setting them at 0.50/0.50/0.85 allows content to pass while still blocking genuinely low-quality output.
+
+**Q: Why enrich the evaluation source text with `NewsSummary` fields?**
+A: GNews free plan truncates article content to ~250 chars. The `evaluation-mcp` was comparing 500-char persona output against ~250 chars of source text, causing `hallucination_score=1.0` and permanent REGENERATE loops. `_enrich_source()` in `EvaluationAgent` combines the raw content with all structured `NewsSummary` fields (headline, summary, key_points, business/job/tech impacts) giving the evaluator enough grounded context. Typical post-fix scores: `factuality≈0.85`, `hallucination≈0.40`.
+
+**Q: Why is the LinkedIn Comments API soft-skipped instead of raising an error?**
+A: The `partnerApiSocialActions.CREATE` 403 is a **permanent, known** error — the "Community Management API" product is not yet approved. Raising an ERROR log 5 times per run created false alarm fatigue and obscured real failures. The fix: first PERMISSION_ERROR sets `_comments_blocked=True`, logs INFO once (`"personas are embedded in post body"`), and all subsequent comment calls are skipped without any API round-trip. The pipeline completes cleanly.
+
+**Q: Why put the headline on its own line (line 2) instead of the same line as the emoji?**
+A: LinkedIn mobile's feed card renderer clips the first line of a post at the emoji glyph when the line is long. `🤖 AI NEWS  |  <headline>` was being displayed as just `🤖 AI NEWS` with everything after the emoji gap appearing blank. Separating them guarantees the feed card preview always shows both `🤖 AI NEWS` (line 0) and the full headline (line 1).
+
+**Q: Why support two GNews API keys (`GNEWS_API_KEY` + `GNEWS_API_KEY_2`)?**
+A: The GNews free plan allows 100 requests/day per key. A single key is exhausted after ~16 manual test runs (6 requests/run). Key rotation is transparent to the workflow — `news-mcp` detects HTTP 403, switches to the secondary key in-process, and retries the same call. Health endpoint shows `active_key_index` so operators can see which key is active without checking logs.
