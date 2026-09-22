@@ -147,7 +147,13 @@ class PublisherAgent:
                         run_id, post_urn, post_status)
 
         # ── Step 2: persona comments — sequential, never gather() ───────────
+        # NOTE: LinkedIn Comments API requires "Community Management API" product
+        # (partnerApiSocialActions.CREATE). Until that product is approved the
+        # comment calls will return HTTP 403 PERMISSION_ERROR.  All 5 personas
+        # are already embedded in the post body, so we attempt comments but
+        # treat PERMISSION_ERROR as a soft skip (not a pipeline error).
         comment_results: dict[str, dict] = {}
+        _comments_blocked = False  # set True on first PERMISSION_ERROR to skip rest
 
         if post_urn and post_status in ("published", "mock"):
             persona_map = {
@@ -159,6 +165,14 @@ class PublisherAgent:
             }
 
             for persona_name, label in self._PERSONA_ORDER:
+                # Once we know Comments API is blocked, skip remaining personas
+                if _comments_blocked:
+                    comment_results[persona_name] = {
+                        "status":      "skipped",
+                        "skip_reason": "comments_api_permission_error",
+                    }
+                    continue
+
                 persona_obj  = persona_map[persona_name]
                 comment_text = self._compose_comment(
                     label, persona_obj.perspective, persona_obj.evidence,
@@ -175,15 +189,28 @@ class PublisherAgent:
 
                     c_status = c_result.get("status", "error")
                     if c_status == "error":
-                        logger.error(
-                            "[%s] comment FAILED persona=%s | error_class=%s | "
-                            "http=%s | li_code=%s | li_message=%s",
-                            run_id, persona_name,
-                            c_result.get("error_class", "UNKNOWN"),
-                            c_result.get("http_status", "?"),
-                            c_result.get("li_error_code", "?"),
-                            c_result.get("li_message", "?"),
-                        )
+                        error_class = c_result.get("error_class", "UNKNOWN")
+                        if error_class == "PERMISSION_ERROR":
+                            # Comments API not approved — soft skip, not a pipeline error
+                            logger.info(
+                                "[%s] Comments API not available (PERMISSION_ERROR) — "
+                                "personas are embedded in post body. "
+                                "Skipping remaining comment attempts.",
+                                run_id,
+                            )
+                            _comments_blocked = True
+                            comment_results[persona_name]["status"] = "skipped"
+                            comment_results[persona_name]["skip_reason"] = "comments_api_permission_error"
+                        else:
+                            logger.error(
+                                "[%s] comment FAILED persona=%s | error_class=%s | "
+                                "http=%s | li_code=%s | li_message=%s",
+                                run_id, persona_name,
+                                error_class,
+                                c_result.get("http_status", "?"),
+                                c_result.get("li_error_code", "?"),
+                                c_result.get("li_message", "?"),
+                            )
                     else:
                         logger.info(
                             "[%s] comment OK persona=%s urn=%s",
