@@ -71,6 +71,12 @@ class PublisherAgent:
         ("linkedin", "🧠 TECH STRATEGIST MIND"),
     ]
 
+    # Hashtags appended after the disclaimer
+    _HASHTAGS = (
+        "#AI #AgenticAI #LLM #GenerativeAI #AINews #TechNews "
+        "#AIStrategy #MachineLearning #AIInnovation #DigitalTransformation #AILeadership"
+    )
+
     # Short disclaimer — AI-simulated mindsets notice
     _DISCLAIMER = (
         "─────────────────────────────────\n"
@@ -346,8 +352,8 @@ class PublisherAgent:
             ts_entry = _clip_at_sentence(ts_entry, 320)
             tech_block = f"\n─────────────────────────────────\n{ts_entry}\n"
 
-        # ── ④ Disclaimer ──────────────────────────────────────────────────────
-        tail = f"\n{self._DISCLAIMER}"
+        # ── ④ Disclaimer + hashtags ───────────────────────────────────────────
+        tail = f"\n{self._DISCLAIMER}\n\n{self._HASHTAGS}"
 
         text = news_block + persona_block + tech_block + tail
 
