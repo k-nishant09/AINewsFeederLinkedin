@@ -85,6 +85,7 @@ The script will display `[SET]` or `[MISSING]` — it **never prints values**.
 | `LINKEDIN_REFRESH_TOKEN` | _(empty)_ | Programmatic refresh token, if enabled |
 | `LINKEDIN_REDIRECT_URI` | _(from values.yaml)_ | Must match LinkedIn Developer Portal exactly |
 | `LANGFUSE_BASE_URL` | `https://us.cloud.langfuse.com` | Self-hosted Langfuse endpoint |
+| `GNEWS_API_KEY_2` | _(empty)_ | Secondary GNews key — auto-failover when primary key returns 403 (quota exhausted). If unset, all fetches use `GNEWS_API_KEY`. |
 
 ---
 
@@ -164,6 +165,7 @@ helm upgrade --install aifeeders deploy/helm/aifeeders \
   --set global.image.tag=latest \
   --set secrets.llmApiKey="${LLM_API_KEY}" \
   --set secrets.gnewsApiKey="${GNEWS_API_KEY}" \
+  --set secrets.gnewsApiKey2="${GNEWS_API_KEY_2}" \
   --set secrets.linkedinClientId="${LINKEDIN_CLIENT_ID}" \
   --set secrets.linkedinClientSecret="${LINKEDIN_CLIENT_SECRET}" \
   --set secrets.linkedinScopes="openid profile email w_member_social" \
@@ -343,6 +345,64 @@ or `app: daily-news-worker` to reach MCP servers on port 8000.
   kubectl run debug-pod --image=curlimages/curl:8.5.0 -n aifeeders \
     --labels="app=daily-news-worker" --rm -it -- sh
   ```
+
+---
+
+### LinkedIn post appears blank / feed card shows no text
+
+**Symptom:** The post publishes successfully (returns a `urn:li:share:…` URN) but the
+LinkedIn feed card renders blank or cuts off the text after the emoji.
+
+**Root cause:** LinkedIn's feed card renderer clips content that starts with an emoji
+on the same line as the headline.  The `🤖 AI NEWS` badge and the article headline must
+be on **separate lines**.
+
+**Fix (already applied in `daily-news-25`+):** `publisher_agent.py` formats the post as:
+
+```
+🤖 AI NEWS
+<headline>
+
+<body>
+```
+
+If you are running an older image, rebuild `daily-news` from the current source and
+redeploy:
+
+```bash
+# OpenShift
+oc start-build daily-news -n aifeeders --follow
+oc rollout restart deployment/daily-news -n aifeeders
+
+# EKS / AKS — rebuild and push, then roll the deployment
+docker build -t <registry>/daily-news:latest src/
+docker push <registry>/daily-news:latest
+kubectl rollout restart deployment/daily-news -n aifeeders
+```
+
+---
+
+### GNews returns 403 / news-mcp health shows `active_key_index: 2` but no `GNEWS_API_KEY_2`
+
+**Symptom:** `GET /health` on `news-mcp` shows `keys_configured: 1` and the run fails
+with `GNewsAPIError: 403` or the pipeline REGENERATE-loops with empty articles.
+
+**Root cause:** The primary GNews key quota is exhausted and no secondary key was
+configured.
+
+**Fix:**
+1. Obtain a second GNews API key from [gnews.io](https://gnews.io).
+2. Set `GNEWS_API_KEY_2` in the secret:
+
+   ```bash
+   # OpenShift
+   oc patch secret daily-news-secrets -n aifeeders \
+     --type=merge -p '{"stringData":{"GNEWS_API_KEY_2":"<new-key>"}}'
+   oc rollout restart deployment/news-mcp -n aifeeders
+   ```
+
+3. Verify: `curl -sf https://news-mcp.apps.<cluster>/health | python3 -m json.tool`
+   Response should show `"keys_configured": 2`.
 
 ---
 
