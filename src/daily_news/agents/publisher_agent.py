@@ -41,31 +41,40 @@ from daily_news.models.summary import NewsSummary
 logger = logging.getLogger(__name__)
 
 
+def _clip_at_sentence(text: str, limit: int) -> str:
+    """
+    Clip *text* to at most *limit* characters, but only at a sentence boundary
+    (last '.', '!', or '?' before the limit).  If no sentence boundary exists
+    within the limit, the full text is returned unchanged — this means the LLM
+    must produce short-enough sentences (enforced via the prompt).
+    """
+    if len(text) <= limit:
+        return text
+    clipped = text[:limit]
+    # Walk back to the last sentence-ending punctuation
+    for i in range(len(clipped) - 1, -1, -1):
+        if clipped[i] in ".!?":
+            return clipped[: i + 1]
+    # No sentence boundary found — return up to limit (fallback)
+    return clipped
+
+
+
 class PublisherAgent:
 
-    # Renamed persona display labels — bold-formatted for LinkedIn
+    # Persona display labels — used in post body section headers
     _PERSONA_ORDER = [
-        ("business", "💼 *Capitalist Mind*"),
-        ("labor",    "👷 *Working Professional Mind*"),
-        ("policy",   "🏛️ *Government Mind*"),
-        ("genz",     "🎓 *Young/Fresher Mind*"),
-        ("linkedin", "🧠 *Techies Mind*"),
+        ("business", "💼 CAPITALIST MIND"),
+        ("labor",    "👷 WORKING PROFESSIONAL MIND"),
+        ("policy",   "🏛️ GOVERNMENT MIND"),
+        ("genz",     "🎓 YOUNG / FRESHER MIND"),
+        ("linkedin", "🧠 TECH STRATEGIST MIND"),
     ]
 
-    # Rich hashtag set covering AI, Agentic AI, tech signals
-    _HASHTAGS = (
-        "#AI #AgenticAI #ArtificialIntelligence #LLM #GenerativeAI "
-        "#AINews #TechNews #FutureOfWork #AIStrategy #MachineLearning "
-        "#AIInnovation #DigitalTransformation #AILeadership #AIAgents"
-    )
-
-    # Disclaimer shown below perspectives
+    # Short disclaimer — AI-simulated mindsets notice
     _DISCLAIMER = (
         "─────────────────────────────────\n"
-        "⚠️ DISCLAIMER: These are AI-simulated perspectives across different "
-        "human mindsets — not verified opinions or professional advice. "
-        "Ongoing auditing and model training is in progress to analyse and "
-        "refine each mindset for accuracy and fairness.\n"
+        "⚠️ AI-simulated perspectives — not verified opinions or professional advice.\n"
         "🤖 Built with AIFeeders · Powered by Agentic AI"
     )
 
@@ -149,7 +158,7 @@ class PublisherAgent:
         # ── Step 2: persona comments — sequential, never gather() ───────────
         # NOTE: LinkedIn Comments API requires "Community Management API" product
         # (partnerApiSocialActions.CREATE). Until that product is approved the
-        # comment calls will return HTTP 403 PERMISSION_ERROR.  All 5 personas
+        # comment calls will return HTTP 403 PERMISSION_ERROR.  All personas
         # are already embedded in the post body, so we attempt comments but
         # treat PERMISSION_ERROR as a soft skip (not a pipeline error).
         comment_results: dict[str, dict] = {}
@@ -252,23 +261,24 @@ class PublisherAgent:
 
     def _compose_main_post(self, summary: NewsSummary, personas: "PersonaSetOutput | None" = None) -> str:
         """
-        Compose LinkedIn post in Twitter-thread style:
+        Compose LinkedIn post:
           ① News block  — headline, summary, key points, structured impacts
-          ② 🧵 Perspectives — 5 renamed personas, bold labels, evidence bullets
-          ③ Disclaimer — AI-simulated mindsets notice
-          ④ Hashtags   — AI, AgenticAI, tech signal tags
+          ② 🧵 Perspectives — 4 personas (Capitalist, Working Pro, Government, Young)
+          ③ Tech Strategist — standalone section for practitioner take
+          ④ Disclaimer — short AI-simulated mindsets notice
 
         LinkedIn Posts API hard limit: 3000 chars (HTTP 400 if exceeded).
-        Budget: news ~900 + personas ~1500 + disclaimer ~300 + hashtags ~150 = ~2850
+        Design budget: news ~750 + perspectives ~1700 + disclaimer ~120 = ~2570 (comfortable margin).
+
+        Truncation policy: each persona entry is clipped only at a sentence boundary
+        (last full stop) so no sentence is ever left incomplete.
         """
         POST_LIMIT = 2990  # safety margin under LinkedIn's 3000-char hard limit
 
         # ── ① News block ──────────────────────────────────────────────────────
-        # LinkedIn Posts API renders plain text only — no markdown, no HTML.
-        # Use emojis and ALL-CAPS labels for visual structure.
-        # Headline is on its own line so LinkedIn's feed card preview shows it
-        # (long first lines get clipped to just the emoji on mobile).
-        key_points = "\n".join(f"  • {p}" for p in summary.key_points)
+        # Plain text only — emojis + ALL-CAPS for visual structure.
+        # Headline on its own line so feed card preview renders it correctly on mobile.
+        key_points = "\n".join(f"  • {p}" for p in summary.key_points[:3])
         news_lines = [
             "🤖 AI NEWS",
             summary.headline,
@@ -278,34 +288,34 @@ class PublisherAgent:
             "📌 KEY POINTS",
             key_points,
             "",
-            f"📈 Business — {summary.business_impact}",
-            f"👷 Jobs     — {summary.job_impact}",
-            f"🔬 Tech     — {summary.technology_impact}",
+            f"📈 Business  {summary.business_impact}",
+            f"👷 Workforce  {summary.job_impact}",
+            f"🔬 Technology  {summary.technology_impact}",
         ]
         if summary.policy_impact:
-            news_lines.append(f"🏛️ Policy   — {summary.policy_impact}")
+            news_lines.append(f"🏛️ Policy  {summary.policy_impact}")
         news_lines += ["", f"🔗 {summary.source_url}"]
         news_block = "\n".join(news_lines)
 
-        # ── ② 5-persona thread ────────────────────────────────────────────────
+        # ── ② 4-persona perspectives ──────────────────────────────────────────
         persona_block = ""
         if personas is not None:
             persona_map = [
-                ("1/5  💼  CAPITALIST MIND",          personas.business),
-                ("2/5  👷  WORKING PROFESSIONAL MIND", personas.labor),
-                ("3/5  🏛️  GOVERNMENT MIND",           personas.policy),
-                ("4/5  🎓  YOUNG / FRESHER MIND",      personas.genz),
-                ("5/5  🧠  TECHIES MIND",              personas.linkedin),
+                ("1/4  💼  CAPITALIST MIND",          personas.business),
+                ("2/4  👷  WORKING PROFESSIONAL MIND", personas.labor),
+                ("3/4  🏛️  GOVERNMENT MIND",           personas.policy),
+                ("4/4  🎓  YOUNG / FRESHER MIND",      personas.genz),
             ]
-            # Calculate per-persona budget
+
+            # Budget: total limit minus fixed sections, split across 4 personas
             overhead = (
                 len(news_block)
                 + len(self._DISCLAIMER)
-                + len(self._HASHTAGS)
-                + 30  # separators + newlines
+                + 200   # tech strategist section estimate
+                + 80    # section separators + newlines
             )
             budget_total = POST_LIMIT - overhead
-            per_persona  = max(220, budget_total // 5)
+            per_persona  = max(280, budget_total // 4)
 
             p_lines = ["", "─────────────────────────────────", "🧵 PERSPECTIVES", ""]
             for label, p in persona_map:
@@ -316,14 +326,30 @@ class PublisherAgent:
                 entry = f"{label}\n{perspective}"
                 if evidence_bullets:
                     entry += f"\n{evidence_bullets}"
-                p_lines.append(entry[:per_persona])
+                # Clip at sentence boundary — never cut mid-sentence
+                entry = _clip_at_sentence(entry, per_persona)
+                p_lines.append(entry)
                 p_lines.append("")
             persona_block = "\n".join(p_lines)
 
-        # ── ③ + ④ Disclaimer + hashtags ──────────────────────────────────────
-        tail = f"\n{self._DISCLAIMER}\n\n{self._HASHTAGS}"
+        # ── ③ Tech Strategist — practitioner take ────────────────────────────
+        tech_block = ""
+        if personas is not None:
+            ts = personas.linkedin
+            ts_perspective = ts.perspective.strip()
+            ts_evidence = "\n".join(
+                f"  ▸ {ev.strip()}" for ev in ts.evidence[:2] if ev.strip()
+            )
+            ts_entry = f"🧠  TECH STRATEGIST MIND\n{ts_perspective}"
+            if ts_evidence:
+                ts_entry += f"\n{ts_evidence}"
+            ts_entry = _clip_at_sentence(ts_entry, 320)
+            tech_block = f"\n─────────────────────────────────\n{ts_entry}\n"
 
-        text = news_block + persona_block + tail
+        # ── ④ Disclaimer ──────────────────────────────────────────────────────
+        tail = f"\n{self._DISCLAIMER}"
+
+        text = news_block + persona_block + tech_block + tail
 
         # Final hard-cap at LinkedIn's 3000-char API limit
         return text[:POST_LIMIT]
