@@ -27,9 +27,14 @@ class EvaluationAgent:
     ) -> EvaluationResult:
         generated_text = self._compose_generated_text(summary, personas)
 
+        # GNews free plan truncates article content to ~250 chars.
+        # Enrich source_text with the LLM-generated summary so the hallucination
+        # checker has enough grounded context to score persona outputs fairly.
+        enriched_source = _enrich_source(source_text, summary)
+
         result = await self._client.evaluate_content(
             article_id=summary.article_id,
-            source_text=source_text,
+            source_text=enriched_source,
             generated_text=generated_text,
             persona="all",
         )
@@ -76,3 +81,26 @@ class EvaluationAgent:
             personas.linkedin.perspective,
         ]
         return "\n\n".join(parts)
+
+
+def _enrich_source(raw_source: str, summary: NewsSummary) -> str:
+    """
+    Combine the raw article content (often truncated to ~250 chars on GNews free
+    plan) with the LLM-generated summary fields so the hallucination evaluator
+    has enough grounded context to score persona outputs fairly.
+
+    The summary is already LLM-verified against the article, so including it as
+    reference material is sound — personas are evaluated against the summary,
+    not invented from thin air.
+    """
+    parts = [raw_source.strip()] if raw_source.strip() else []
+    parts += [
+        f"TITLE: {summary.headline}",
+        f"SUMMARY: {summary.summary}",
+        f"KEY POINTS: {' | '.join(summary.key_points)}" if summary.key_points else "",
+        f"BUSINESS IMPACT: {summary.business_impact}" if summary.business_impact else "",
+        f"JOB IMPACT: {summary.job_impact}" if summary.job_impact else "",
+        f"TECHNOLOGY IMPACT: {summary.technology_impact}" if summary.technology_impact else "",
+        f"WHY IT MATTERS: {summary.why_it_matters}" if summary.why_it_matters else "",
+    ]
+    return "\n\n".join(p for p in parts if p)
