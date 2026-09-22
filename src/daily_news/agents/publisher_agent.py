@@ -266,9 +266,12 @@ class PublisherAgent:
         # ── ① News block ──────────────────────────────────────────────────────
         # LinkedIn Posts API renders plain text only — no markdown, no HTML.
         # Use emojis and ALL-CAPS labels for visual structure.
+        # Headline is on its own line so LinkedIn's feed card preview shows it
+        # (long first lines get clipped to just the emoji on mobile).
         key_points = "\n".join(f"  • {p}" for p in summary.key_points)
         news_lines = [
-            f"🤖 AI NEWS  |  {summary.headline}",
+            "🤖 AI NEWS",
+            summary.headline,
             "",
             summary.summary,
             "",
