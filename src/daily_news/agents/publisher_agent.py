@@ -59,16 +59,15 @@ def _clip_at_sentence(text: str, limit: int) -> str:
     return clipped
 
 
-
 class PublisherAgent:
 
     # Persona display labels — used in post body section headers
     _PERSONA_ORDER = [
-        ("business", "💼 CAPITALIST MIND"),
-        ("labor",    "👷 WORKING PROFESSIONAL MIND"),
-        ("policy",   "🏛️ GOVERNMENT MIND"),
-        ("genz",     "🎓 YOUNG / FRESHER MIND"),
-        ("linkedin", "🧠 TECH STRATEGIST MIND"),
+        ("business", "💼  Capitalist Mind"),
+        ("labor",    "👷  Working Professional Mind"),
+        ("policy",   "🏛️  Government Mind"),
+        ("genz",     "🎓  Young / Fresher Mind"),
+        ("linkedin", "🧠  Tech Strategist Mind"),
     ]
 
     # Hashtags appended after the disclaimer
@@ -79,8 +78,8 @@ class PublisherAgent:
 
     # Short disclaimer — AI-simulated mindsets notice
     _DISCLAIMER = (
-        "─────────────────────────────────\n"
-        "⚠️ AI-simulated perspectives — not verified opinions or professional advice.\n"
+        "──────────────────\n"
+        "⚠️ These are AI-simulated perspectives — not verified opinions or professional advice.\n"
         "🤖 Built with AIFeeders · Powered by Agentic AI"
     )
 
@@ -267,95 +266,127 @@ class PublisherAgent:
 
     def _compose_main_post(self, summary: NewsSummary, personas: "PersonaSetOutput | None" = None) -> str:
         """
-        Compose LinkedIn post:
-          ① News block  — headline, summary, key points, structured impacts
-          ② 🧵 Perspectives — 4 personas (Capitalist, Working Pro, Government, Young)
-          ③ Tech Strategist — standalone section for practitioner take
-          ④ Disclaimer — short AI-simulated mindsets notice
+        Compose LinkedIn post with a clean, readable layout:
+
+          ① Header        — AI NEWS badge + headline (standalone for feed card)
+          ② Summary       — 2-3 sentences, breathing room
+          ③ Key Points    — bulleted, scannable
+          ④ Impact Tags   — Business / Workforce / Tech / Policy (when present)
+          ⑤ Source Link   — clean, clickable
+          ⑥ Perspectives  — 4 personas with evidence, numbered, spaced
+          ⑦ Tech Strategist — standalone practitioner take
+          ⑧ Disclaimer + Hashtags
 
         LinkedIn Posts API hard limit: 3000 chars (HTTP 400 if exceeded).
-        Design budget: news ~750 + perspectives ~1700 + disclaimer ~120 = ~2570 (comfortable margin).
+        Design budget: ~2600 chars with comfortable margin.
 
         Truncation policy: each persona entry is clipped only at a sentence boundary
         (last full stop) so no sentence is ever left incomplete.
         """
         POST_LIMIT = 2990  # safety margin under LinkedIn's 3000-char hard limit
 
-        # ── ① News block ──────────────────────────────────────────────────────
-        # Plain text only — emojis + ALL-CAPS for visual structure.
+        # ── ① Header + Headline ──────────────────────────────────────────────
         # Headline on its own line so feed card preview renders it correctly on mobile.
-        key_points = "\n".join(f"  • {p}" for p in summary.key_points[:3])
-        news_lines = [
-            "🤖 AI NEWS",
+        lines = [
+            "🤖  AI NEWS",
+            "",
             summary.headline,
             "",
-            summary.summary,
-            "",
-            "📌 KEY POINTS",
-            key_points,
-            "",
-            f"📈 Business  {summary.business_impact}",
-            f"👷 Workforce  {summary.job_impact}",
-            f"🔬 Technology  {summary.technology_impact}",
         ]
-        if summary.policy_impact:
-            news_lines.append(f"🏛️ Policy  {summary.policy_impact}")
-        news_lines += ["", f"🔗 {summary.source_url}"]
-        news_block = "\n".join(news_lines)
 
-        # ── ② 4-persona perspectives ──────────────────────────────────────────
-        persona_block = ""
+        # ── ② Summary ─────────────────────────────────────────────────────────
+        lines.append(summary.summary.strip())
+        lines.append("")
+
+        # ── ③ Key Points ──────────────────────────────────────────────────────
+        lines.append("📌  Key Points")
+        for p in summary.key_points[:3]:
+            lines.append(f"  • {p}")
+        lines.append("")
+
+        # ── ④ Impact Tags ─────────────────────────────────────────────────────
+        lines.append(f"📈  Business Impact   —  {summary.business_impact.strip()}")
+        lines.append(f"👷  Workforce Impact  —  {summary.job_impact.strip()}")
+        lines.append(f"🔬  Tech Impact       —  {summary.technology_impact.strip()}")
+        if summary.policy_impact:
+            lines.append(f"🏛️  Policy Impact     —  {summary.policy_impact.strip()}")
+        lines.append("")
+
+        # ── ⑤ Source Link ─────────────────────────────────────────────────────
+        lines.append(f"🔗  Source: {summary.source_url}")
+        lines.append("")
+
+        # ── ⑥ 4-Persona Perspectives ──────────────────────────────────────────
         if personas is not None:
+            lines.append("──────────────────")
+            lines.append("🧵  Perspectives")
+            lines.append("")
+
             persona_map = [
-                ("1/4  💼  CAPITALIST MIND",          personas.business),
-                ("2/4  👷  WORKING PROFESSIONAL MIND", personas.labor),
-                ("3/4  🏛️  GOVERNMENT MIND",           personas.policy),
-                ("4/4  🎓  YOUNG / FRESHER MIND",      personas.genz),
+                ("1/4", "💼  Capitalist Mind",          personas.business),
+                ("2/4", "👷  Working Professional Mind", personas.labor),
+                ("3/4", "🏛️  Government Mind",           personas.policy),
+                ("4/4", "🎓  Young / Fresher Mind",      personas.genz),
             ]
 
             # Budget: total limit minus fixed sections, split across 4 personas
-            overhead = (
-                len(news_block)
+            fixed_overhead = (
+                len("\n".join(lines))  # everything above
                 + len(self._DISCLAIMER)
-                + 200   # tech strategist section estimate
-                + 80    # section separators + newlines
+                + 350   # tech strategist section estimate
+                + 120   # section separators + newlines
             )
-            budget_total = POST_LIMIT - overhead
-            per_persona  = max(280, budget_total // 4)
+            budget_total = POST_LIMIT - fixed_overhead
+            per_persona  = max(300, budget_total // 4)
 
-            p_lines = ["", "─────────────────────────────────", "🧵 PERSPECTIVES", ""]
-            for label, p in persona_map:
+            for num, label, p in persona_map:
                 perspective = p.perspective.strip()
-                evidence_bullets = "\n".join(
-                    f"  ▸ {ev.strip()}" for ev in p.evidence[:2] if ev.strip()
-                )
-                entry = f"{label}\n{perspective}"
-                if evidence_bullets:
-                    entry += f"\n{evidence_bullets}"
-                # Clip at sentence boundary — never cut mid-sentence
-                entry = _clip_at_sentence(entry, per_persona)
-                p_lines.append(entry)
-                p_lines.append("")
-            persona_block = "\n".join(p_lines)
 
-        # ── ③ Tech Strategist — practitioner take ────────────────────────────
-        tech_block = ""
+                # Format evidence as clean bullets (max 2)
+                evidence_bullets = ""
+                if p.evidence:
+                    ev_lines = []
+                    for ev in p.evidence[:2]:
+                        ev = ev.strip()
+                        if ev:
+                            ev_lines.append(f"    ↳  {ev}")
+                    if ev_lines:
+                        evidence_bullets = "\n" + "\n".join(ev_lines)
+
+                entry = f"{num}  {label}\n{perspective}{evidence_bullets}"
+                entry = _clip_at_sentence(entry, per_persona)
+
+                lines.append(entry)
+                lines.append("")
+
+        # ── ⑦ Tech Strategist — practitioner take ────────────────────────────
         if personas is not None:
             ts = personas.linkedin
             ts_perspective = ts.perspective.strip()
-            ts_evidence = "\n".join(
-                f"  ▸ {ev.strip()}" for ev in ts.evidence[:2] if ev.strip()
-            )
-            ts_entry = f"🧠  TECH STRATEGIST MIND\n{ts_perspective}"
-            if ts_evidence:
-                ts_entry += f"\n{ts_evidence}"
-            ts_entry = _clip_at_sentence(ts_entry, 320)
-            tech_block = f"\n─────────────────────────────────\n{ts_entry}\n"
 
-        # ── ④ Disclaimer + hashtags ───────────────────────────────────────────
-        tail = f"\n{self._DISCLAIMER}\n\n{self._HASHTAGS}"
+            ts_evidence = ""
+            if ts.evidence:
+                ev_lines = []
+                for ev in ts.evidence[:2]:
+                    ev = ev.strip()
+                    if ev:
+                        ev_lines.append(f"    ↳  {ev}")
+                if ev_lines:
+                    ts_evidence = "\n" + "\n".join(ev_lines)
 
-        text = news_block + persona_block + tech_block + tail
+            ts_entry = f"🧠  Tech Strategist Mind\n{ts_perspective}{ts_evidence}"
+            ts_entry = _clip_at_sentence(ts_entry, 350)
+
+            lines.append("──────────────────")
+            lines.append(ts_entry)
+            lines.append("")
+
+        # ── ⑧ Disclaimer + Hashtags ───────────────────────────────────────────
+        lines.append(self._DISCLAIMER)
+        lines.append("")
+        lines.append(self._HASHTAGS)
+
+        text = "\n".join(lines)
 
         # Final hard-cap at LinkedIn's 3000-char API limit
         return text[:POST_LIMIT]
@@ -370,7 +401,7 @@ class PublisherAgent:
         if evidence:
             lines.append("")
             for ev in evidence[:3]:
-                lines.append(f"▸ {ev}")
+                lines.append(f"↳  {ev}")
         return "\n".join(lines)
 
     @staticmethod
