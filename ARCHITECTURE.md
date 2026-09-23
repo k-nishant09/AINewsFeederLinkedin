@@ -475,31 +475,105 @@ graph LR
 graph TB
     POST["LinkedIn Post (≤ 3000 chars)"]
 
-    POST --> B0["Line 0: 🤖 AI NEWS"]
-    POST --> B1["Line 1: headline (own line — always visible in feed card)"]
+    POST --> B0["🤖  AI NEWS (own line — feed card badge)"]
+    POST --> B1["Headline (own line — always visible in feed card)"]
     POST --> B2["2-3 sentence summary"]
-    POST --> B3["📌 KEY POINTS\n  • fact 1\n  • fact 2\n  • fact 3"]
-    POST --> B4["📈 Business — impact\n👷 Jobs — impact\n🔬 Tech — impact\n🏛 Policy — impact (optional)"]
-    POST --> B5["🔗 source URL"]
-    POST --> B6["─────────────────────────────────\n🧵 PERSPECTIVES"]
-    POST --> B7["1/5  💼  CAPITALIST MIND\nperspective + ▸ evidence"]
-    POST --> B8["2/5  👷  WORKING PROFESSIONAL MIND\n..."]
-    POST --> B9["3/5  🏛  GOVERNMENT MIND\n..."]
-    POST --> B10["4/5  🎓  YOUNG / FRESHER MIND\n..."]
-    POST --> B11["5/5  🧠  TECHIES MIND\n..."]
-    POST --> B12["⚠️ DISCLAIMER: AI-simulated perspectives..."]
-    POST --> B13["#AI #AgenticAI #ArtificialIntelligence ...<br/>(14 hashtags)"]
+    POST --> B3["📌  Key Points\n  • fact 1\n  • fact 2\n  • fact 3"]
+    POST --> B4["📈 Business Impact — ...\n👷 Workforce Impact — ...\n🔬 Tech Impact — ...\n🏛️ Policy Impact — ... (optional)"]
+    POST --> B5["🔗  Source: url"]
+    POST --> B6["──────────────────\n🧵  Perspectives"]
+    POST --> B7["💼  Capitalist Mind\nperspective\n    ↳ evidence"]
+    POST --> B8["👷  Working Professional Mind\n..."]
+    POST --> B9["🏛️  Government Mind\n..."]
+    POST --> B10["🎓  Young / Fresher Mind\n..."]
+    POST --> B11["──────────────────\n🧠  Tech Strategist Mind\n(standalone practitioner section)"]
+    POST --> B12["──────────────────\n⚠️ AI-simulated perspectives notice\n🤖 Built with AIFeeders"]
+    POST --> B13["#AI #AgenticAI #LLM ... (11 hashtags)"]
 
     style B0 fill:#dbeafe
     style B1 fill:#dbeafe
     style B6 fill:#fef3c7
+    style B11 fill:#ede9fe
     style B12 fill:#fee2e2
     style B13 fill:#f0fdf4
 ```
 
+> **Why Tech Strategist Mind is separate:** The technical practitioner voice is qualitatively different from the four "societal impact" personas. Giving it its own section after the `──────────────────` divider signals to readers that they're getting a deeper technical take, not just another stakeholder view.
+
+> **Why no numbers (1/4…4/4):** Removed. The emoji headers are visually distinct enough. Numbers added visual clutter without helping navigation in a single scrollable post.
+
 ---
 
-## 11. Technology Stack
+## 11. Persona Voice Architecture — How `skills.md` Works
+
+The five personas are not just different system prompts. They are defined in [`skills.md`](skills.md) with a full description of each persona's worldview, evidence style, and conversational voice. The prompt files load from `prompts/*.txt` at runtime.
+
+```mermaid
+graph TB
+    subgraph "Persona Definition Layer"
+        SK["skills.md\n(voice reference, anti-patterns,\nensemble design)"]
+    end
+
+    subgraph "Prompt Files (loaded at PersonaAgent init)"
+        PC["prompts/capitalist.txt\nFounder/operator voice\nP&L lens + anti-patterns"]
+        PL["prompts/labor.txt\nSlack-message energy\nNo HR-speak + anti-patterns"]
+        PP["prompts/policy.txt\nPolicy memo precision\nNamed regulations + anti-patterns"]
+        PG["prompts/genz.txt\nGroup chat energy\nSay WHY + anti-patterns"]
+        PLI["prompts/linkedin.txt\nRFC comment style\nName the trade-off + anti-patterns"]
+    end
+
+    subgraph "PersonaAgent (one per persona)"
+        PA["PersonaAgent.generate()\n→ LLM call\n→ persona enum injected\n  from agent context\n  (never from LLM output)"]
+    end
+
+    subgraph "Output"
+        PO["PersonaOutput\n.persona (injected)\n.perspective (LLM)\n.evidence (LLM)"]
+    end
+
+    SK -.->|"reference when\ntuning prompts"| PC & PL & PP & PG & PLI
+    PC & PL & PP & PG & PLI --> PA
+    PA --> PO
+```
+
+### Why `persona` is always injected from the agent context
+
+The `PydanticOutputParser` asks the LLM to fill in the `persona` field as an enum value (`"business"`, `"linkedin"`, etc.). When a prompt says `Persona: Tech Strategist Mind`, some LLMs fill the field with the display name instead of the internal key. This causes a `KeyError` when building `PersonaSetOutput`.
+
+**Fix (applied in `persona_agent.py`):**
+```python
+# After LLM parse, always override persona + article_id from agent context:
+return PersonaOutput(
+    persona=self._persona,        # ← from PersonaAgent.__init__, never from LLM
+    article_id=summary.article_id,
+    perspective=raw.perspective,
+    evidence=raw.evidence,
+)
+```
+
+### Anti-pattern architecture
+
+Each prompt file contains **two sections**:
+1. **✗ Anti-patterns** — exact bad outputs taken from real live runs. These are the sentences the LLM actually produced before the prompts were strengthened.
+2. **✓ Good examples** — the target voice, taken from `skills.md` sample monologues.
+
+When a persona voice drifts back to corporate-speak, add the bad output as a new `✗` line in the relevant `.txt` file, then rebuild.
+
+### Persona ensemble design
+
+The five personas are designed to create productive tension:
+
+| Tension | What it illuminates |
+|---------|-------------------|
+| Capitalist vs. Working Professional | Value capture vs. value creation |
+| Government vs. Capitalist | Regulation cost vs. opportunity |
+| Young/Fresher vs. Tech Strategist | Entry-level perspective vs. practitioner depth |
+| Tech Strategist vs. Capitalist | Build-vs-buy decision vs. unit economics |
+
+No single persona has the full picture. The value is in the ensemble.
+
+---
+
+## 12. Technology Stack
 
 ```mermaid
 graph LR
@@ -540,7 +614,7 @@ graph LR
 
 ---
 
-## 12. CI/CD and Image Build Flow
+## 13. CI/CD and Image Build Flow
 
 ```mermaid
 sequenceDiagram
@@ -566,7 +640,7 @@ sequenceDiagram
 
 ---
 
-## 13. Summary: All Components at a Glance
+## 14. Summary: All Components at a Glance
 
 | Component | Type | Replicas | State | Calls |
 |-----------|------|----------|-------|-------|
@@ -617,3 +691,9 @@ A: LinkedIn mobile's feed card renderer clips the first line of a post at the em
 
 **Q: Why support two GNews API keys (`GNEWS_API_KEY` + `GNEWS_API_KEY_2`)?**
 A: The GNews free plan allows 100 requests/day per key. A single key is exhausted after ~16 manual test runs (6 requests/run). Key rotation is transparent to the workflow — `news-mcp` detects HTTP 403, switches to the secondary key in-process, and retries the same call. Health endpoint shows `active_key_index` so operators can see which key is active without checking logs.
+
+**Q: What is `skills.md` and why does it exist alongside the prompt files?**
+A: `skills.md` is the human-readable reference document for each persona's voice, worldview, and evidence style. The `prompts/*.txt` files are the machine-readable instructions derived from it. `skills.md` exists because LLM personas drift over time — when a persona starts sounding generic, you need a clear description of what "good" looks like to recalibrate the prompt. The anti-pattern examples in each `.txt` file are taken directly from real bad outputs recorded in `skills.md`. Without this separation, there's no authoritative source to return to when quality degrades.
+
+**Q: Why were the persona numbers (1/4…4/4) removed from post headers?**
+A: They were added originally to give readers a sense of progress through the perspectives section. In practice, the emoji headers (`💼`, `👷`, `🏛️`, `🎓`) are visually distinct enough to separate sections. The numbers added clutter and made the headers harder to scan quickly. Removed in v1.4.
