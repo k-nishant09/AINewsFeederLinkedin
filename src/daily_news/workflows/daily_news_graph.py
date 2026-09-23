@@ -1,6 +1,6 @@
 """
-LangGraph Daily News Workflow — with Langfuse tracing on every node
-====================================================================
+LangGraph Daily News Workflow — with Jev System One decision nodes
+==================================================================
 
 State machine:
 
@@ -9,15 +9,24 @@ State machine:
           └─► deduplicate
                 └─► fetch_articles
                       └─► index_pageindex
-                            └─► select_stories
-                                  └─► summarize
-                                        └─► generate_personas
-                                              └─► evaluate
-                                                    ├─► REGENERATE ─► summarize  (max retries)
-                                                    ├─► HUMAN_REVIEW ─► human_approval gate
-                                                    └─► PASS
-                                                          └─► publish
-                                                                └─► END
+                            └─► jev_prefilter         ← NEW: Jev scores all articles
+                                  └─► summarize             picks best by relevance
+                                        └─► jev_route_personas  ← NEW: Jev picks relevant personas
+                                              └─► generate_personas  (subset only)
+                                                    └─► evaluate      ← UPDATED: Jev scores content
+                                                          ├─► REGENERATE ─► summarize  (max retries)
+                                                          ├─► HUMAN_REVIEW ─► human_approval gate
+                                                          └─► PASS
+                                                                └─► publish
+                                                                      └─► END
+
+Jev integration points
+──────────────────────
+1. jev_prefilter      replaces blind [:1] article selection
+2. jev_route_personas replaces always-run-all-five persona generation
+3. EvaluationAgent    uses JevClient.evaluate_content() for scoring
+
+All three fall back gracefully when JEV_ENABLED=false or on network error.
 """
 from __future__ import annotations
 
@@ -26,9 +35,12 @@ import logging
 import uuid
 from typing import Literal, TypedDict
 
+from daily_news.agents.published_store import published_store
+
 from langgraph.graph import END, START, StateGraph
 
 from daily_news.agents.evaluation_agent import EvaluationAgent
+from daily_news.agents.jev_agents import jev_prefilter_articles, jev_route_personas
 from daily_news.agents.persona_agent import PersonaAgentFactory
 from daily_news.agents.publisher_agent import PublisherAgent
 from daily_news.agents.summary_agent import SummaryAgent
@@ -36,6 +48,7 @@ from daily_news.mcp.news import NewsMCPClient
 from daily_news.mcp.pageindex import PageIndexMCPClient
 from daily_news.models.evaluation import EvaluationDecision
 from daily_news.models.news import NewsCategory
+from daily_news.models.persona import PersonaType
 from daily_news.observability.tracing import langfuse_trace, flush_langfuse
 
 logger = logging.getLogger(__name__)
@@ -66,6 +79,11 @@ class NewsWorkflowState(TypedDict):
     # PageIndex
     pageindex_documents: list[dict]
 
+    # Jev decision signals
+    jev_persona_hints: list[str]     # from jev_prefilter — persona suggestions from article text
+    jev_active_personas: list[str]   # from jev_route_personas — confirmed active persona values
+    jev_prefilter_scores: dict       # from jev_prefilter — raw scores for the winning article (for post display)
+
     # Generation
     summaries: list[dict]
     persona_outputs: list[dict]
@@ -91,8 +109,6 @@ async def discover_news(state: NewsWorkflowState) -> NewsWorkflowState:
     run_id = state["run_id"]
     logger.info("[%s] discover_news started", run_id)
 
-    # Top-level Langfuse trace for the entire workflow run
-    # All subsequent spans from agents share session_id=run_id
     trace = langfuse_trace(
         name="daily_news_workflow",
         run_id=run_id,
@@ -130,36 +146,51 @@ async def discover_news(state: NewsWorkflowState) -> NewsWorkflowState:
 
 
 async def deduplicate(state: NewsWorkflowState) -> NewsWorkflowState:
-    seen: set[str] = set()
+    run_id = state["run_id"]
+    raw    = state["raw_articles"]
+
+    # ── Pass 1: within-run dedup by title+URL hash ────────────────────────────
+    seen_hash: set[str] = set()
     unique: list[dict] = []
-    for article in state["raw_articles"]:
+    for article in raw:
         content_hash = hashlib.md5(
             (article.get("title", "") + article.get("url", "")).encode()
         ).hexdigest()
         article["content_hash"] = content_hash
-        if content_hash not in seen:
-            seen.add(content_hash)
+        if content_hash not in seen_hash:
+            seen_hash.add(content_hash)
             unique.append(article)
 
+    after_hash = len(unique)
+
+    # ── Pass 2: cross-run dedup — drop anything published today already ───────
+    unique = published_store.filter_unpublished(unique)
+    after_store = len(unique)
+
     logger.info(
-        "[%s] deduplicated: %d → %d",
-        state["run_id"],
-        len(state["raw_articles"]),
-        len(unique),
+        "[%s] deduplicated: %d raw → %d unique → %d unpublished-today",
+        run_id, len(raw), after_hash, after_store,
     )
+
+    if after_store == 0:
+        logger.warning(
+            "[%s] deduplicate: all articles already published today — nothing to do",
+            run_id,
+        )
+
     return {**state, "deduplicated_articles": unique, "workflow_status": "DEDUPLICATED"}
 
 
 async def fetch_articles(state: NewsWorkflowState) -> NewsWorkflowState:
     client = NewsMCPClient()
     enriched: list[dict] = []
-    for article in state["deduplicated_articles"][:30]:  # cap at 30 for cost
+    for article in state["deduplicated_articles"][:30]:  # cap at 30 for Jev scoring budget
         try:
             full = await client.fetch_article(article.get("url", ""))
             enriched.append({**article, **full})
         except Exception as exc:  # noqa: BLE001
             logger.warning("fetch failed for %s: %s", article.get("url"), exc)
-            enriched.append(article)  # use shallow metadata if fetch fails
+            enriched.append(article)
 
     return {**state, "selected_articles": enriched, "workflow_status": "FETCHED"}
 
@@ -183,12 +214,27 @@ async def index_pageindex(state: NewsWorkflowState) -> NewsWorkflowState:
     return {**state, "pageindex_documents": documents, "workflow_status": "INDEXED"}
 
 
-async def select_stories(state: NewsWorkflowState) -> NewsWorkflowState:
-    # Select 1 article per run — summarise → 5 persona comments → publish in one shot.
-    # Increase this to process more articles per CronJob invocation once pipeline is stable.
-    selected = state["selected_articles"][:1]
-    logger.info("[%s] selected %d story for summarisation", state["run_id"], len(selected))
-    return {**state, "selected_articles": selected, "workflow_status": "SELECTED"}
+# ── Jev node wrappers ─────────────────────────────────────────────────────────
+# jev_prefilter_articles and jev_route_personas are imported from jev_agents.
+# They are registered directly in the graph below.
+# Wrapper aliases make graph registration explicit.
+
+async def jev_prefilter(state: NewsWorkflowState) -> NewsWorkflowState:
+    """
+    Graph node: Jev scores all fetched articles, picks the best one.
+    Replaces the old select_stories[:1] hard-cut.
+    Populates state.jev_persona_hints as a warm signal for jev_router.
+    """
+    return await jev_prefilter_articles(state)
+
+
+async def jev_router(state: NewsWorkflowState) -> NewsWorkflowState:
+    """
+    Graph node: Jev decides which personas are relevant for this article.
+    Runs after summarize so it has access to structured NewsSummary fields.
+    Populates state.jev_active_personas consumed by generate_personas.
+    """
+    return await jev_route_personas(state)
 
 
 async def summarize(state: NewsWorkflowState) -> NewsWorkflowState:
@@ -204,7 +250,6 @@ async def summarize(state: NewsWorkflowState) -> NewsWorkflowState:
                 question="key business and technology facts",
             )
             sections_text = sections_resp.get("sections_text", "")
-            # run_id passed → Langfuse CallbackHandler created inside agent
             summary = await agent.summarize(
                 article_id=article["article_id"],
                 title=article.get("title", ""),
@@ -224,12 +269,29 @@ async def summarize(state: NewsWorkflowState) -> NewsWorkflowState:
 
 
 async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
+    """
+    Runs persona LLM agents only for the Jev-selected active personas.
+    Falls back to all five if jev_active_personas is empty.
+    """
     from daily_news.models.summary import NewsSummary
 
     run_id = state["run_id"]
     factory = PersonaAgentFactory()
     pi_client = PageIndexMCPClient()
     persona_outputs: list[dict] = []
+
+    # Jev-selected personas — fall back to all if missing
+    active_values: list[str] = state.get("jev_active_personas", [])
+    if active_values:
+        try:
+            active_personas = [PersonaType(v) for v in active_values]
+        except ValueError:
+            logger.warning("[%s] invalid jev_active_personas values %s — running all", run_id, active_values)
+            active_personas = list(PersonaType)
+    else:
+        active_personas = list(PersonaType)
+
+    logger.info("[%s] generate_personas: running %s", run_id, [p.value for p in active_personas])
 
     for summary_dict in state["summaries"]:
         summary = NewsSummary(**summary_dict)
@@ -239,8 +301,9 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
                 question="jobs, policy, business, and technology evidence",
             )
             evidence = sections_resp.get("sections_text", "")
-            # run_id passed → all 5 parallel persona traces share session_id=run_id
-            persona_set = await factory.generate_all(summary, evidence, run_id=run_id)
+            persona_set = await factory.generate_all(
+                summary, evidence, run_id=run_id, personas=active_personas
+            )
             persona_outputs.append(persona_set.model_dump())
         except Exception as exc:  # noqa: BLE001
             logger.error("persona generation failed for %s: %s", summary.article_id, exc, exc_info=True)
@@ -265,7 +328,6 @@ async def evaluate(state: NewsWorkflowState) -> NewsWorkflowState:
              if a["article_id"] == summary.article_id),
             "",
         )
-        # Trace evaluation scores as a Langfuse span on the run trace
         trace = langfuse_trace(
             name="evaluate",
             run_id=f"{run_id}:eval:{summary.article_id}",
@@ -284,9 +346,11 @@ async def evaluate(state: NewsWorkflowState) -> NewsWorkflowState:
                     "policy_check":  result.policy_check,
                 })
             result_dict = result.model_dump()
-            logger.info("[%s] eval article=%s decision=%s factuality=%.2f groundedness=%.2f hallucination=%.2f",
-                        run_id, summary.article_id, result.decision.value,
-                        result.factuality, result.groundedness, result.hallucination)
+            logger.info(
+                "[%s] eval article=%s decision=%s factuality=%.2f groundedness=%.2f hallucination=%.2f",
+                run_id, summary.article_id, result.decision.value,
+                result.factuality, result.groundedness, result.hallucination,
+            )
             results.append(result_dict)
         except Exception as exc:  # noqa: BLE001
             logger.error("evaluation failed for %s: %s", summary.article_id, exc)
@@ -294,7 +358,6 @@ async def evaluate(state: NewsWorkflowState) -> NewsWorkflowState:
             if trace:
                 trace.update(output={"error": str(exc)}, level="ERROR")
 
-    # Increment retry_count if any REGENERATE decisions so route_evaluation can cap the loop
     any_regen = any(r.get("decision") == EvaluationDecision.REGENERATE.value for r in results)
     new_retry = state.get("retry_count", 0) + (1 if any_regen else 0)
 
@@ -310,15 +373,13 @@ async def publish(state: NewsWorkflowState) -> NewsWorkflowState:
     agent = PublisherAgent()
     linkedin_results: list[dict] = []
 
-    # Build evaluation lookup: article_id → EvaluationResult
     eval_by_article: dict[str, EvaluationResult] = {}
     for r in state["evaluation_results"]:
         try:
             eval_by_article[r["article_id"]] = EvaluationResult(**r)
         except Exception:
-            pass  # malformed eval dict — publisher_agent will gate on None
+            pass
 
-    # Only publish items that PASSED evaluation
     passed_ids = {
         r["article_id"]
         for r in state["evaluation_results"]
@@ -339,19 +400,24 @@ async def publish(state: NewsWorkflowState) -> NewsWorkflowState:
             tags=["publish"],
             metadata={"run_id": run_id},
         )
+        jev_scores = state.get("jev_prefilter_scores") or {}
         try:
-            result = await agent.publish(summary, personas, run_id, evaluation=evaluation)
+            result = await agent.publish(
+                summary, personas, run_id,
+                evaluation=evaluation,
+                jev_scores=jev_scores or None,
+            )
             if span_trace:
                 comments = result.get("comments", {})
                 span_trace.update(output={
-                    "publication_key":   result.get("publication_key"),
-                    "post_urn":          result.get("post_urn"),
-                    "post_status":       result.get("post_status"),
-                    "comments_posted":   sum(
+                    "publication_key":  result.get("publication_key"),
+                    "post_urn":         result.get("post_urn"),
+                    "post_status":      result.get("post_status"),
+                    "comments_posted":  sum(
                         1 for v in comments.values()
                         if v.get("status") in ("published", "mock")
                     ),
-                    "comments_failed":   sum(
+                    "comments_failed":  sum(
                         1 for v in comments.values()
                         if v.get("status") == "error"
                     ),
@@ -363,7 +429,6 @@ async def publish(state: NewsWorkflowState) -> NewsWorkflowState:
             if span_trace:
                 span_trace.update(output={"error": str(exc)}, level="ERROR")
 
-    # Flush all pending Langfuse events for this run
     flush_langfuse()
     return {**state, "linkedin_results": linkedin_results, "workflow_status": "PUBLISHED"}
 
@@ -380,17 +445,15 @@ def route_evaluation(state: NewsWorkflowState) -> Literal["publish", "summarize"
 
     if EvaluationDecision.REGENERATE.value in decisions:
         if retry_count < MAX_RETRIES:
-            # retry_count is incremented inside the evaluate node on REGENERATE
             logger.info("[%s] REGENERATE decision — retry %d/%d", state["run_id"], retry_count, MAX_RETRIES)
             return "summarize"
-        # Max retries exceeded — publish whatever passed, skip the rest
         logger.warning("[%s] max retries (%d) exceeded — publishing PASS items only", state["run_id"], MAX_RETRIES)
         return "publish"
 
     if all(d == EvaluationDecision.PASS.value for d in decisions):
         return "publish"
 
-    # HUMAN_REVIEW or BLOCK mixed in — publishing agent filters by passed_ids internally
+    # HUMAN_REVIEW or BLOCK mixed in — publishing agent filters by passed_ids
     return "publish"
 
 
@@ -399,32 +462,34 @@ def route_evaluation(state: NewsWorkflowState) -> Literal["publish", "summarize"
 def build_daily_news_graph():
     graph = StateGraph(NewsWorkflowState)
 
-    graph.add_node("discover_news", discover_news)
-    graph.add_node("deduplicate", deduplicate)
-    graph.add_node("fetch_articles", fetch_articles)
+    graph.add_node("discover_news",   discover_news)
+    graph.add_node("deduplicate",     deduplicate)
+    graph.add_node("fetch_articles",  fetch_articles)
     graph.add_node("index_pageindex", index_pageindex)
-    graph.add_node("select_stories", select_stories)
-    graph.add_node("summarize", summarize)
+    graph.add_node("jev_prefilter",   jev_prefilter)       # NEW — replaces select_stories
+    graph.add_node("summarize",       summarize)
+    graph.add_node("jev_router",      jev_router)           # NEW — persona routing
     graph.add_node("generate_personas", generate_personas)
-    graph.add_node("evaluate", evaluate)
-    graph.add_node("publish", publish)
+    graph.add_node("evaluate",        evaluate)
+    graph.add_node("publish",         publish)
 
-    graph.add_edge(START, "discover_news")
-    graph.add_edge("discover_news", "deduplicate")
-    graph.add_edge("deduplicate", "fetch_articles")
-    graph.add_edge("fetch_articles", "index_pageindex")
-    graph.add_edge("index_pageindex", "select_stories")
-    graph.add_edge("select_stories", "summarize")
-    graph.add_edge("summarize", "generate_personas")
+    graph.add_edge(START,             "discover_news")
+    graph.add_edge("discover_news",   "deduplicate")
+    graph.add_edge("deduplicate",     "fetch_articles")
+    graph.add_edge("fetch_articles",  "index_pageindex")
+    graph.add_edge("index_pageindex", "jev_prefilter")      # Jev scores + selects best article
+    graph.add_edge("jev_prefilter",   "summarize")
+    graph.add_edge("summarize",       "jev_router")          # Jev decides relevant personas
+    graph.add_edge("jev_router",      "generate_personas")
     graph.add_edge("generate_personas", "evaluate")
 
     graph.add_conditional_edges(
         "evaluate",
         route_evaluation,
         {
-            "publish": "publish",
+            "publish":   "publish",
             "summarize": "summarize",
-            "__end__": END,
+            "__end__":   END,
         },
     )
     graph.add_edge("publish", END)
@@ -443,6 +508,9 @@ def make_initial_state(run_id: str | None = None) -> NewsWorkflowState:
         deduplicated_articles=[],
         selected_articles=[],
         pageindex_documents=[],
+        jev_persona_hints=[],
+        jev_active_personas=[],
+        jev_prefilter_scores={},
         summaries=[],
         persona_outputs=[],
         evaluation_results=[],

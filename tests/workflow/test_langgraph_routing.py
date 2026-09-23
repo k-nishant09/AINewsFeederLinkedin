@@ -41,7 +41,9 @@ def test_route_evaluation_regenerate_exceeds_retries():
     state["evaluation_results"] = [
         {"article_id": "x", "decision": EvaluationDecision.REGENERATE.value}
     ]
-    assert route_evaluation(state) == "__end__"
+    # When retries are exhausted the router sends to publish so any PASS items
+    # that did succeed can still be published — it does NOT hard-stop to __end__.
+    assert route_evaluation(state) == "publish"
 
 
 def test_route_evaluation_empty_results():

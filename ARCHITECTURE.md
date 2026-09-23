@@ -1,699 +1,982 @@
-# AIFeeders — Architecture
+# AIFeeders — Complete Architecture
 
-This document describes the production architecture of AIFeeders using Mermaid diagrams. It covers the complete system topology, the LangGraph agent workflow, all MCP servers and their tools, the 6-layer guardrail pipeline, data models, and deployment layout.
+> **Rearchitected with Jev System One.** Four personas. Deterministic publish gates. Zero-accumulation builds. EKS-portable by design. Current as of build #56.
 
 ---
 
-## 1. System Architecture — High Level
+## Table of Contents
 
-```mermaid
-graph TB
-    subgraph "External"
-        GNews["GNews API<br/>(news search)"]
-        LLM["IBM LLM Gateway<br/>qwen2-5-72b-instruct<br/>(OpenAI-compatible, self-signed cert)"]
-        LinkedIn["LinkedIn REST API<br/>Posts API v202609<br/>(Comments API blocked — needs approval)"]
-        Langfuse["Langfuse<br/>(optional LLM tracing)"]
-    end
+1. [System Overview](#1-system-overview)
+2. [LangGraph Workflow — Complete State Machine](#2-langgraph-workflow--complete-state-machine)
+3. [Jev System One — Why and How](#3-jev-system-one--why-and-how)
+4. [PublishedStore — Deduplication and Memory](#4-publishedstore--deduplication-and-memory)
+5. [Four-Persona Architecture](#5-four-persona-architecture)
+6. [LinkedIn Post Format](#6-linkedin-post-format)
+7. [MCP Microservices](#7-mcp-microservices)
+8. [OpenShift Deployment Layout](#8-openshift-deployment-layout)
+9. [Build Architecture — Zero Old-Build Accumulation](#9-build-architecture--zero-old-build-accumulation)
+10. [EKS Portability — Simple and Easy Deployment](#10-eks-portability--simple-and-easy-deployment)
+11. [Data Flow — End to End](#11-data-flow--end-to-end)
+12. [Technology Stack](#12-technology-stack)
+13. [File Layout](#13-file-layout)
 
-    subgraph "OpenShift — namespace: aifeeders"
-        CronJob["CronJob: daily-ai-news<br/>0 10 * * * UTC<br/>label: app=daily-news-worker"]
-        API["daily-news-api<br/>FastAPI (HPA: 2–10 replicas)"]
+---
 
-        subgraph "LangGraph Workflow (compiled StateGraph)"
-            Graph["daily_news_graph<br/>9-node StateGraph"]
-        end
+## 1. System Overview
 
-        subgraph "MCP Servers — all port 8000, POST /call REST"
-            NewsMCP["news-mcp<br/>(GNews adapter)"]
-            PageMCP["pageindex-mcp<br/>(in-memory doc store)<br/>⚠️ replicas: 1"]
-            EvalMCP["evaluation-mcp<br/>(6-layer guardrails)"]
-            LIMCP["linkedin-mcp<br/>(OAuth + Posts API)<br/>⚠️ replicas: 1"]
-        end
-    end
+AIFeeders is an **agentic AI news pipeline** that runs once daily at 10:00 UTC. It discovers the most relevant AI news, scores and filters it via Jev System One (the AI decision engine), generates four audience-specific perspectives via LLM, evaluates them for factual quality, and publishes a single structured LinkedIn post — automatically, with no human pressing a button.
 
-    CronJob -->|"python -m daily_news.workflow_runner"| Graph
-    API -->|"POST /workflow/daily-news<br/>(no body, auto run_id)"| Graph
-
-    Graph -->|"MCPHTTPClient POST /call"| NewsMCP
-    Graph -->|"MCPHTTPClient POST /call"| PageMCP
-    Graph -->|"MCPHTTPClient POST /call"| EvalMCP
-    Graph -->|"MCPHTTPClient POST /call"| LIMCP
-
-    NewsMCP -->|"GET /search (HTTPS)"| GNews
-    EvalMCP -->|"POST /chat/completions<br/>verify=False"| LLM
-    Graph -->|"ChatOpenAI<br/>verify=False"| LLM
-    LIMCP -->|"POST /rest/posts (HTTPS)"| LinkedIn
-    Graph -.->|"get_langfuse_callback<br/>+ start_span (optional)"| Langfuse
+```
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                             AIFEEDERS SYSTEM                                     │
+│                                                                                  │
+│  ┌──────────┐    ┌─────────────────────────────────────────────────────────────┐ │
+│  │ CronJob  │───►│               LangGraph Workflow (daily-news)               │ │
+│  │10:00 UTC │    │                                                             │ │
+│  └──────────┘    │  discover ─► dedup ─► fetch ─► prefilter ─► summarise      │ │
+│                  │  ─► route ─► generate ─► evaluate ─► publish               │ │
+│                  └──────────────────────┬────────────────────────────────────  │ │
+│                                         │                                       │ │
+│         ┌───────────────────────────────┼────────────────────────────┐         │ │
+│         ▼                               ▼                             ▼         │ │
+│  ┌─────────────┐             ┌───────────────────┐         ┌──────────────────┐ │ │
+│  │  news-mcp   │             │  evaluation-mcp   │         │  linkedin-mcp    │ │ │
+│  │  GNews API  │             │  LLM fallback     │         │  LinkedIn API    │ │ │
+│  └─────────────┘             └───────────────────┘         └──────────────────┘ │ │
+│                                                                                  │ │
+│         ┌──────────────────────────────────────────────────────────────┐        │ │
+│         │                  pageindex-mcp  (RAG context)                │        │ │
+│         └──────────────────────────────────────────────────────────────┘        │ │
+│                                                                                  │ │
+│  ┌───────────────────────────────────────────────────────────────────────────┐  │ │
+│  │                         JEV GATEWAY  (external)                           │  │ │
+│  │     POST /v1/systemone  ·  Bearer auth  ·  question types: choice/score/noul│ │ │
+│  │     Model: Qwen/Qwen3.5-2B  ·  method: lora_decision_head                │  │ │
+│  └───────────────────────────────────────────────────────────────────────────┘  │ │
+└──────────────────────────────────────────────────────────────────────────────────┘ │
 ```
 
 ---
 
-## 2. LangGraph Workflow — State Machine
+## 2. LangGraph Workflow — Complete State Machine
 
-```mermaid
-flowchart TD
-    START([START]) --> A[discover_news]
-    A --> B[deduplicate]
-    B --> C[fetch_articles]
-    C --> D[index_pageindex]
-    D --> E[select_stories]
-    E --> F[summarize]
-    F --> G[generate_personas]
-    G --> H{evaluate}
+Every run is a single LangGraph state machine. State is a `TypedDict` passed forward through nodes immutably — each node returns `{**state, changed_keys}`. No shared mutable global state between nodes.
 
-    H -->|"PASS"| I[publish]
-    H -->|"REGENERATE<br/>retry_count < 2"| F
-    H -->|"REGENERATE<br/>retry_count ≥ 2<br/>(max retries)"| I
-    H -->|"BLOCK or HUMAN_REVIEW<br/>(no items in passed_ids)"| I
-
-    I --> END([END])
-
-    style START fill:#22c55e,color:#fff
-    style END fill:#ef4444,color:#fff
-    style H fill:#f59e0b,color:#fff
-    style I fill:#3b82f6,color:#fff
 ```
+START
+  └─► discover_news        6 GNews queries → ~18 raw articles
+        └─► deduplicate    Pass 1: SHA-256 hash dedup (same article, two sources → one)
+              │             Pass 2: PublishedStore.filter_unpublished() → skip published-today
+              └─► fetch_articles      Full HTML fetch + parse (capped at 30)
+                    └─► index_pageindex    Chunk + index in PageIndex for RAG retrieval
+                          └─► jev_prefilter       ← Jev Decision #1
+                                │  Scores all articles in parallel (semaphore=5)
+                                │  Selects top 2 by composite score
+                                └─► summarise             LLM reads article → structured summary
+                                      └─► jev_route_personas  ← Jev Decision #2
+                                            │  Picks relevant personas from summary
+                                            └─► generate_personas  (active subset only, parallel)
+                                                  └─► evaluate     ← Jev Decision #3
+                                                        │  Factuality / groundedness / hallucination
+                                                        ├─► REGENERATE ──► back to summarise (max 2 retries)
+                                                        ├─► HUMAN_REVIEW ──► approval gate
+                                                        └─► PASS
+                                                              └─► publish   3 deterministic gates
+                                                                    └─► END
+```
+
+### Node responsibilities
+
+| Node | What it does | Cost | Fallback |
+|---|---|---|---|
+| `discover_news` | 6 GNews searches via news-mcp, ~18 articles | 6 API calls | Logs warnings, continues with 0 |
+| `deduplicate` | SHA-256 hash dedup + PublishedStore cross-run filter | Disk read | Skip all if all published |
+| `fetch_articles` | Full HTML fetch for each article (capped at 30) | 30 HTTP fetches | Skip unfetchable articles |
+| `index_pageindex` | Chunk + index articles for RAG retrieval | In-process | Skip on error |
+| `jev_prefilter` | Score every article via Jev (5 concurrent), pick top 2 | 1 Jev call/article | Fall back to `[:2]` |
+| `summarise` | LLM reads article + PageIndex context → structured summary | 1 LLM call | Error propagated |
+| `jev_route_personas` | Jev decides which of 4 personas are relevant per summary | 1 Jev call | Fall back to all 4 |
+| `generate_personas` | Parallel LLM calls for active personas only | 1–4 LLM calls | Stub empty persona |
+| `evaluate` | Jev primary / EvaluationMCP fallback — quality scoring | 1 Jev call | PASS on error |
+| `publish` | 3-gate dedup → compose post → LinkedIn post + comments | 1–5 LinkedIn calls | Log error, continue |
 
 ### Workflow State (`NewsWorkflowState`)
 
-```mermaid
-classDiagram
-    class NewsWorkflowState {
-        +str run_id
-        +list raw_articles
-        +list deduplicated_articles
-        +list selected_articles
-        +list pageindex_documents
-        +list summaries
-        +list persona_outputs
-        +list evaluation_results
-        +int retry_count
-        +str approval_status
-        +list linkedin_results
-        +str workflow_status
-        +list errors
-    }
+```python
+class NewsWorkflowState(TypedDict):
+    run_id: str                        # "RUN-{UUID8}" — unique per execution, Langfuse seed
+
+    # News discovery
+    raw_articles: list[dict]           # All articles from GNews (up to ~18)
+    deduplicated_articles: list[dict]  # After hash dedup + PublishedStore filter
+    selected_articles: list[dict]      # Top 2 chosen by Jev prefilter
+
+    # PageIndex (RAG)
+    pageindex_documents: list[dict]    # Indexed document handles
+
+    # Jev decision signals — flow forward through the pipeline
+    jev_persona_hints: list[str]       # Prefilter → router: warm persona suggestions from article text
+    jev_active_personas: list[str]     # Router → generate_personas: confirmed active persona values
+    jev_prefilter_scores: dict         # Prefilter → publisher: scores for #1 article (rendered in post)
+
+    # Generation
+    summaries: list[dict]              # NewsSummary per selected article
+    persona_outputs: list[dict]        # PersonaSetOutput per article (4 personas each)
+
+    # Evaluation
+    evaluation_results: list[dict]     # EvaluationResult per article
+    retry_count: int                   # Incremented on REGENERATE decision
+
+    # Publishing
+    approval_status: str               # "PENDING" | "APPROVED" | "REJECTED"
+    linkedin_results: list[dict]       # Final publish audit records
+
+    # Run metadata
+    workflow_status: str               # STARTED → DISCOVERED → DEDUPLICATED → … → PUBLISHED
+    errors: list[str]                  # Non-fatal errors collected per node
 ```
 
 ---
 
-## 3. Agent Architecture
+## 3. Jev System One — Why and How
 
-```mermaid
-graph LR
-    subgraph "LangGraph Nodes"
-        SUM["SummaryAgent<br/>LangChain chain<br/>temperature=0.2"]
-        PER["PersonaAgentFactory<br/>asyncio.gather<br/>5× parallel<br/>temperature=0.4"]
-        EVA["EvaluationAgent<br/>deterministic gate<br/>applies thresholds"]
-        PUB["PublisherAgent<br/>no LLM calls<br/>composition + POST /call"]
-    end
+### The Core Problem It Solves
 
-    subgraph "MCP Clients — MCPHTTPClient POST /call"
-        NC["NewsMCPClient → news-mcp"]
-        PC["PageIndexMCPClient → pageindex-mcp"]
-        EC["EvaluationMCPClient → evaluation-mcp"]
-        LC["LinkedInMCPClient → linkedin-mcp"]
-    end
+Before Jev, AIFeeders made these decisions blindly:
+- **Article selection**: picked the first 2 articles from GNews in whatever order they arrived
+- **Persona routing**: always called all LLM personas regardless of relevance (wasted cost)
+- **Content evaluation**: called an LLM to evaluate an LLM — expensive, hallucination risk in the evaluation itself
 
-    subgraph "LLM gateway (qwen2-5-72b, verify=False)"
-        SLLM["prompts/summary.txt<br/>→ NewsSummary (Pydantic)"]
-        PLLM1["prompts/capitalist.txt"]
-        PLLM2["prompts/labor.txt"]
-        PLLM3["prompts/policy.txt"]
-        PLLM4["prompts/genz.txt"]
-        PLLM5["prompts/linkedin.txt"]
-        ELLM["factuality + hallucination<br/>injection + policy prompts"]
-    end
+Jev System One is a **lightweight probabilistic AI decision model** built on a fine-tuned Qwen/Qwen3.5-2B with a lora_decision_head. It answers structured multi-question queries in a single HTTP call, returning calibrated float scores and named values — no free text generation. This makes it:
+- **Fast**: < 2 seconds per call (vs. 10–30s for a full LLM generation)
+- **Deterministic-enough**: threshold comparisons on calibrated floats (0–1 range)
+- **Zero hallucination risk in decisions**: returns scores and named labels, not generated text
+- **Cheap**: uses far fewer tokens than a reasoning LLM
 
-    subgraph "Observability"
-        LF["Langfuse<br/>get_langfuse_callback<br/>+ start_span"]
-    end
+### Gateway Contract
 
-    SUM --> PC
-    SUM --> SLLM
-    SUM -.->|"traces"| LF
-    PER --> PC
-    PER --> PLLM1 & PLLM2 & PLLM3 & PLLM4 & PLLM5
-    PER -.->|"5 traces"| LF
-    EVA --> EC
-    EC --> ELLM
-    PUB --> LC
+```
+Health (no auth):
+  GET  /health
+  → {"status": "ready", "model": "Qwen/Qwen3.5-2B", "method": "lora_decision_head"}
 
-    style PUB fill:#3b82d4,color:#fff
-    style EVA fill:#f59e0b,color:#fff
+Inference:
+  POST /v1/systemone
+  Authorization: Bearer <JEV_API_KEY>
+  Content-Type: application/json
+
+  Request body:
+  {
+    "state": "<unstructured text context for the model>",
+    "questions": {
+      "<key>": {
+        "type": "noul|choice|score",
+        "instructions": "...",
+        "criteria": { ... }  // for choice/score
+      }
+    }
+  }
+
+  Response:
+  {
+    "answers": {
+      "<key>": { "type": "...", "noul": 0.87, "choice": "label", "score": 2.3,
+                 "probabilities": {...}, "confidence": 0.93 }
+    },
+    "model": "Qwen/Qwen3.5-2B",
+    "usage": {"input_tokens": 165, "output_tokens": 0}
+  }
 ```
 
-> **Key design point:** `PublisherAgent` makes **no LLM calls**. It is a deterministic composition layer — text is assembled from pre-evaluated model outputs then posted via `MCPHTTPClient`. The LLM never decides what to publish.
+### Question Types
+
+| Type | What it returns | Use cases in AIFeeders |
+|---|---|---|
+| `noul` | Float 0.0–1.0 (>0.5 = yes) | `is_ai_topic`, `relevance_score`, `persona_fit_*`, `estimated_engagement`, `pii_detected` |
+| `choice` | Named label from a provided dict | `event_type` (product_launch/funding/…), `controversy_level` (low/medium/high), `skip_reason`, `policy_check` (PASS/REVIEW/FAIL) |
+| `score` | Float 0..N-1 (normalised ÷ 4 → 0–1) | `significance` (0–4), `factuality`, `groundedness`, `hallucination`, `toxicity` |
 
 ---
 
-## 4. MCP Server Tools Map
+### Jev Integration Point 1 — `jev_prefilter_articles` (Article Selection)
 
-```mermaid
-graph TB
-    subgraph "news-mcp (GNews adapter)"
-        N1["news_search_latest(query, hours, limit)"]
-        N2["news_search_by_category(category, hours)"]
-        N3["news_search_ai_tech(hours)"]
-        N4["news_search_ai_finance(hours)"]
-        N5["news_top_headlines_technology(limit)"]
-        N6["news_fetch_article(url)"]
-    end
+**When**: After `index_pageindex`, before `summarise`. Called once per run.
 
-    subgraph "pageindex-mcp (document store)"
-        P1["pageindex_index_document(id, title, content, url)"]
-        P2["pageindex_get_relevant_sections(doc_id, question)"]
-        P3["pageindex_search_document(doc_id, query)"]
-        P4["pageindex_get_document(doc_id)"]
-    end
+**Why**: Replaces blind `articles[:2]` slicing. Instead of picking articles by arrival order, Jev scores every article on 11 dimensions in a single batch call.
 
-    subgraph "evaluation-mcp (guardrail pipeline)"
-        E0["evaluation_evaluate_all(article_id, source, generated, persona)"]
-        E1["guardrail_prompt_injection(text)"]
-        E2["guardrail_factuality(source, generated)"]
-        E3["guardrail_hallucination(source, generated)"]
-        E4["guardrail_pii(text)"]
-        E5["guardrail_policy(generated, persona)"]
-        E6["guardrail_social_media_format(text, platform)"]
-        E0 --> E1 & E2 & E3 & E4 & E5 & E6
-    end
+**Mechanism**:
+1. All fetched articles (up to 30) are sent to Jev with `asyncio.Semaphore(5)` — at most 5 concurrent calls
+2. Each article gets one `POST /v1/systemone` call with these questions:
 
-    subgraph "linkedin-mcp (publishing)"
-        L1["linkedin_create_post(text, publication_key)"]
-        L2["linkedin_create_comment(post_urn, text, key)"]
-        L3["linkedin_validate_token()"]
-        L4["linkedin_get_profile()"]
-        L5["linkedin_get_profile_posts(count)"]
-        L6["linkedin_get_post(post_id)"]
-        L7["linkedin_get_publish_status(post_id)"]
-        L8["linkedin_get_comments(post_urn)"]
-        L9["linkedin_create_comment_reply(post_urn, parent_urn, text)"]
-        L10["linkedin_enable_comments(post_urn)"]
-        L11["linkedin_disable_comments(post_urn)"]
-        L12["linkedin_get_audit()"]
-    end
+```
+is_ai_topic           noul   "Is this primarily about AI?" → hard gate (must be > 0.5 to proceed)
+relevance_score       noul   "How relevant to AI professionals?" → 0–1
+event_type            choice "product_launch|funding|regulation|research|acquisition|other"
+significance          score  "0–4 scale: minor → landmark"
+controversy_level     choice "low|medium|high"
+persona_fit_business  noul   "Relevant to business execs focused on ROI?"
+persona_fit_policy    noul   "Relevant to AI policy makers?"
+persona_fit_genz      noul   "Relevant to generalist readers?"
+persona_fit_linkedin  noul   "Relevant to tech practitioners?"
+estimated_engagement  noul   "Likely to drive LinkedIn engagement?"
+skip_reason           choice "not_ai|low_quality|none"
+```
+
+3. Composite score: `relevance × 0.6 + engagement × 0.4`
+4. Top 2 articles by composite score proceed. Non-AI articles (`is_ai_topic < 0.5`) are skipped.
+5. `persona_fit_*` scores > 0.5 are stored as `jev_persona_hints` in state (warm signal for the router)
+6. The #1 article's full score set is stored in `jev_prefilter_scores` → rendered in the `⚙️ Jev Decision` block of the published post
+
+**Fallback**: If Jev is disabled (`JEV_ENABLED=false`) or any call fails, the node falls back to `articles[:2]` without error.
+
+**State output**:
+```python
+state["selected_articles"]    = [top_article_1, top_article_2]
+state["jev_persona_hints"]    = ["business", "policy"]         # from article-level scoring
+state["jev_prefilter_scores"] = {
+    "event_type": "research",
+    "relevance_score": 0.87,
+    "significance": 0.75,
+    "estimated_engagement": 0.62,
+    "controversy_level": "medium",
+    "active_personas": ["business", "policy", "genz", "linkedin"],
+    "persona_scores": {"business": 0.91, "policy": 0.83, ...}
+}
 ```
 
 ---
 
-## 5. Guardrail Pipeline — Evaluation MCP
+### Jev Integration Point 2 — `jev_route_personas` (Persona Routing)
 
-```mermaid
-flowchart LR
-    IN(["Generated Text<br/>+ Source Text"]) --> L1
+**When**: After `summarise`, before `generate_personas`. Called once per article summary.
 
-    subgraph "6-Layer Guardrail Pipeline"
-        L1["Layer 1<br/>Prompt Injection<br/>Regex + LLM classifier"]
-        L2["Layer 2<br/>Factuality<br/>LLM claim grounding<br/>score 0→1"]
-        L3["Layer 3<br/>Hallucination<br/>LLM unsupported statements<br/>score 0→1"]
-        L4["Layer 4<br/>PII Detection<br/>Regex only<br/>(email, phone, SSN, card)"]
-        L5["Layer 5<br/>Policy<br/>LLM toxicity + bias<br/>+ brand safety"]
-        L6["Layer 6<br/>Format<br/>Char count, hashtags,<br/>unsafe URLs, duplicate hash"]
+**Why**: Replaces always-running-all-4-personas. A policy article doesn't need a Capitalist Mind perspective. A product launch doesn't need Government Mind. Running all 4 wastes LLM cost and dilutes post quality.
 
-        L1 --> L2 --> L3 --> L4 --> L5 --> L6
-    end
+**Mechanism**:
+1. The `NewsSummary` dict (headline, summary, impacts, key_points) is serialised as the Jev `state` field
+2. 4 `noul` questions are asked in one call:
 
-    L6 --> GATE{Deterministic<br/>Decision Gate}
-
-    GATE -->|"PII found<br/>OR injection HIGH<br/>OR toxicity > 0.3"| BLOCK["BLOCK<br/>❌ Never published"]
-    GATE -->|"political bias<br/>OR policy violations"| HR["HUMAN_REVIEW<br/>⚠️ Excluded from auto-publish"]
-    GATE -->|"factuality < 0.50<br/>OR grounding < 0.50<br/>OR hallucination > 0.85"| REGEN["REGENERATE<br/>🔄 Retry summarize (max 2×)"]
-    GATE -->|"all layers pass"| PASS["PASS<br/>✅ publish_eligible = True"]
-
-    style BLOCK fill:#ef4444,color:#fff
-    style HR fill:#f59e0b,color:#fff
-    style REGEN fill:#8b5cf6,color:#fff
-    style PASS fill:#22c55e,color:#fff
+```
+needs_business  noul   "Does this have implications for business revenue / competition?"
+needs_policy    noul   "Does this involve AI regulation / governance?"
+needs_genz      noul   "Would a generalist find this relevant to everyday life?"
+needs_linkedin  noul   "Does this have implications for tech strategy / workforce?"
 ```
 
-### Guardrail Thresholds (live production values)
+3. Any persona scoring > 0.5 is activated
+4. The result is **merged (union)** with `jev_persona_hints` from the prefilter step — if either signal says a persona matters, it runs
+5. Fallback: always at least one persona active (`linkedin` as default if all score ≤ 0.5)
 
-| Layer | Metric | Threshold | Action on Fail |
-|-------|--------|-----------|----------------|
-| Prompt Injection | risk_level | `HIGH` or `MEDIUM` | BLOCK |
-| Factuality | factuality_score | < 0.50 | REGENERATE |
-| Factuality | grounding_score | < 0.50 | REGENERATE |
-| Hallucination | hallucination_score | > 0.85 | REGENERATE |
-| PII | pii_detected | `True` | BLOCK |
-| Policy | toxicity_score | > 0.30 | BLOCK |
-| Policy | political_bias_detected | `True` | HUMAN_REVIEW |
-| Policy | policy_violations | non-empty | HUMAN_REVIEW |
-| Format | char_count > 3000 | any violation | REGENERATE |
+**Effect**: On a regulation article, only `policy` + `genz` may activate → 2 LLM calls instead of 4 → 50% LLM cost saving.
+
+**State output**:
+```python
+state["jev_active_personas"] = ["business", "policy", "genz", "linkedin"]
+# Or for a regulation-only story:
+state["jev_active_personas"] = ["policy", "genz"]
+```
 
 ---
 
-## 6. Data Models
+### Jev Integration Point 3 — `EvaluationAgent` (Content Quality Gating)
 
-```mermaid
-classDiagram
-    class NewsSummary {
-        +str article_id
-        +str headline
-        +str summary
-        +list~str~ key_points
-        +str why_it_matters
-        +str business_impact
-        +str job_impact
-        +str technology_impact
-        +str policy_impact  "optional"
-        +str source
-        +str source_url
-    }
+**When**: After `generate_personas`, before `publish`. Called once per article.
 
-    class PersonaType {
-        <<enumeration>>
-        BUSINESS
-        LABOR
-        POLICY
-        GENZ
-        LINKEDIN
-    }
+**Why**: Replaces LLM-calls-evaluating-LLM-outputs. The evaluation MCP used to call a generation model to score another generation model — expensive, and the evaluator itself could hallucinate. Jev scores content quality using the same lora_decision_head without generating text.
 
-    class PersonaOutput {
-        +PersonaType persona
-        +str perspective
-        +list~str~ evidence
-        +str article_id
-    }
+**Mechanism**:
+1. `source_text` = original article content enriched with the LLM-generated summary fields
+2. `generated_text` = headline + summary + all active persona perspectives concatenated
+3. One `POST /v1/systemone` call with 9 questions:
 
-    class PersonaSetOutput {
-        +str article_id
-        +PersonaOutput business
-        +PersonaOutput labor
-        +PersonaOutput policy
-        +PersonaOutput genz
-        +PersonaOutput linkedin
-    }
-
-    class EvaluationResult {
-        +str article_id
-        +EvaluationDecision decision
-        +bool publish_eligible
-        +float factuality
-        +float groundedness
-        +float hallucination
-        +float relevance
-        +float persona_adherence
-        +float toxicity
-        +str policy_check
-        +list~str~ unsupported_claims
-        +float overall_score
-        +str notes
-        +bool pii_detected
-        +bool prompt_injection_detected
-        +bool political_bias_detected
-        +list~str~ guardrail_failures
-        +dict layer_results
-    }
-
-    class EvaluationDecision {
-        <<enumeration>>
-        PASS
-        FAIL
-        REGENERATE
-        BLOCK
-        HUMAN_REVIEW
-    }
-
-    NewsSummary --> EvaluationResult : "source for evaluation"
-    PersonaSetOutput --> EvaluationResult : "generated text for evaluation"
-    EvaluationResult --> EvaluationDecision : "decision"
-    PersonaSetOutput "1" *-- "5" PersonaOutput : "contains"
-    PersonaOutput --> PersonaType : "persona type"
+```
+factuality              score  "How factually accurate is the generated content vs the source?"  (0–4)
+groundedness            score  "Are all claims supported by the source article?"                  (0–4)
+hallucination           score  "How much content is not present in the source?"                  (0–4, INVERTED)
+relevance               score  "How topically relevant is the generated content?"                 (0–4)
+toxicity                score  "How toxic or harmful is the generated content?"                  (0–4, INVERTED)
+pii_detected            noul   "Does it contain PII (names, emails, phone numbers)?"
+prompt_injection_detected noul "Does it contain adversarial instructions / prompt injection?"
+political_bias_detected noul   "Does it advocate for a political party or ideology?"
+policy_check            choice "PASS|REVIEW|FAIL — does it comply with responsible publishing?"
+overall_score           score  "Overall quality as a LinkedIn post?"                             (0–4)
 ```
 
-> **Note on `FAIL`:** The `EvaluationDecision.FAIL` enum value exists in `models/evaluation.py` but the current decision gate in `evaluation_agent.py` never emits it. The active set is PASS / REGENERATE / BLOCK / HUMAN_REVIEW.
+4. Scores are normalised: `raw / 4.0 → 0–1`. Hallucination and toxicity are left as-is (0=clean, 1=bad)
+5. `EvaluationAgent._apply_gate()` applies deterministic thresholds — **the model is advisory only**:
+
+```
+Hard BLOCK (never publishes):
+  pii_detected = true              → EvaluationDecision.BLOCK
+  prompt_injection_detected = true → EvaluationDecision.BLOCK
+
+Quality REGENERATE (back to summarise, max 2 retries):
+  factuality    < 0.50 (EVAL_FACTUALITY_THRESHOLD)
+  groundedness  < 0.50 (EVAL_GROUNDEDNESS_THRESHOLD)
+  hallucination > 0.85 (EVAL_HALLUCINATION_THRESHOLD — note: inverted)
+
+Policy HUMAN_REVIEW (approval gate):
+  political_bias_detected = true
+  policy_check != "PASS"
+
+PASS: all above conditions false → eligible for publish
+```
+
+**Fallback**: If Jev fails, `EvaluationMCPClient` (LLM-based) is used instead. If that also fails, the decision defaults to PASS (availability > safety for a daily news bot).
 
 ---
 
-## 7. LinkedIn Publishing Flow
+## 4. PublishedStore — Deduplication and Memory
 
-```mermaid
-sequenceDiagram
-    participant WF as LangGraph Workflow
-    participant PA as PublisherAgent
-    participant LIMCP as linkedin-mcp
-    participant LI as LinkedIn API
+### The Problem
 
-    WF ->> PA: publish(summary, personas, run_id, evaluation)
+The CronJob runs once daily at 10:00 UTC, but it can also be:
+- **Retried automatically** on pod failure
+- **Triggered manually** by an operator
+- **Run twice** if two operators trigger it simultaneously
 
-    alt evaluation.publish_eligible == False
-        PA -->> WF: {status: "skipped", reason: "guardrail_block"}
-    end
+Without persistent deduplication, any of these scenarios would republish the same article on the same day, spamming LinkedIn followers.
 
-    PA ->> PA: _compose_main_post() → text (≤2990 chars)
-    PA ->> PA: _make_publication_key() → idempotency key
+### Design
 
-    PA ->> LIMCP: linkedin_create_post(text, publication_key)
-
-    alt publication_key already in _published_posts
-        LIMCP -->> PA: {post_urn: cached_urn, idempotent: true}
-    else new post
-        LIMCP ->> LI: POST /rest/posts {author, commentary, visibility...}
-        LI -->> LIMCP: HTTP 201 + x-restli-id: urn:li:share:xxxxx
-        LIMCP -->> PA: {post_urn: "urn:li:share:xxxxx", status: "published"}
-    end
-
-    Note over PA,LIMCP: Comments API currently blocked (needs LinkedIn approval)<br/>All 5 personas are embedded in the main post body
-
-    WF -->> WF: linkedin_results = [{post_urn, publication_key, status}]
 ```
+File:        /tmp/aifeeders_published.json   (env: AIFEEDERS_STORE_PATH)
+Key format:  "{article_id}:{YYYY-MM-DD}"     — one entry per article per calendar day
+Value:       ISO-8601 timestamp of publish   — e.g. "2025-07-15T10:04:37.123456+00:00"
+TTL:         7 days (env: AIFEEDERS_STORE_TTL_DAYS, default: 7)
+Thread safety: threading.Lock — safe for a single process with multiple async tasks
+Memory:      In-memory dict cache, loaded once per process lifetime, flushed after each write
+```
+
+### Three Deduplication Gates — In Order
+
+```
+Gate 1 — graph node: deduplicate
+────────────────────────────────
+Called: Before any LLM work begins
+Method: PublishedStore.filter_unpublished(articles)
+Effect: Removes all articles published today from the candidate list
+Purpose: Cost avoidance — never summarise or generate personas for an article
+         that was already published today
+Risk:    None — if store is corrupt/missing, all articles pass through (safe default)
+
+Gate 2 — publisher agent: pre-publish check
+────────────────────────────────────────────
+Called: Inside PublisherAgent.publish(), right before the LinkedIn API call
+Method: PublishedStore.is_published(article_id)
+Effect: Skips publishing with reason "already_published_today"
+Purpose: Catches race conditions — if two workflow runs reach publish simultaneously,
+         the second one will be blocked at this gate even if Gate 1 let it through
+Risk:    None — skipping is safe
+
+Gate 3 — LinkedIn MCP: idempotency key
+────────────────────────────────────────
+Called: By LinkedInMCPClient.create_post(), passed as publication_key
+Key:    "{article_id}:{YYYY-MM-DD}:{headline_hash[:12]}"
+        Note: NO run_id in the key — it is stable across all retries on the same day
+Effect: LinkedIn MCP rejects duplicate posts with the same idempotency key
+Purpose: Defence-in-depth — even if both Gate 1 and Gate 2 fail (e.g., pod restart
+         between Gate 2 check and mark_published call), LinkedIn MCP itself blocks
+         the duplicate
+```
+
+### Store Lifecycle per Workflow Run
+
+```
+Pod starts (fresh or restarted)
+  │
+  ▼
+Process starts — PublishedStore._loaded = False, _cache = {}
+  │
+  ▼
+First call to any Store method triggers _ensure_loaded()
+  ├─► Read /tmp/aifeeders_published.json
+  ├─► Purge entries older than 7 days (auto-TTL)
+  └─► Load into _cache dict
+  │
+  ▼
+deduplicate node calls filter_unpublished()
+  └─► Checks each article_id against _cache
+      Returns only articles NOT in cache (unpublished today)
+  │
+  ▼
+[LLM work — summarise, route, generate, evaluate]
+  │
+  ▼
+publish node calls is_published() — Gate 2 re-check
+  │
+  ▼
+LinkedInMCPClient.create_post() succeeds
+  │
+  ▼
+published_store.mark_published(article_id)
+  ├─► Writes "{article_id}:{today}" → ISO timestamp to _cache
+  └─► Flushes _cache to /tmp/aifeeders_published.json atomically
+  │
+  ▼
+Any subsequent retry today:
+  deduplicate → filter_unpublished() → article_id found in cache → skipped
+```
+
+### Memory Usage
+
+The store is a lazy-loaded, write-through in-memory cache backed by a JSON file.
+
+- **RAM**: The cache dict holds at most `7 days × 2 articles/day = 14 entries`. Each entry is ~60 bytes. Total in-memory footprint: **< 1 KB**.
+- **Disk**: The JSON file contains at most 14 entries after auto-purge. File size: **< 2 KB**.
+- **Load cost**: One file read per process lifetime (double-checked locking pattern).
+- **Write cost**: One file write after each successful `mark_published()` call (typically 1–2 per day).
+
+### Failure Safety
+
+If the store file cannot be read (permissions error, disk full, corrupt JSON):
+- The error is **logged at WARNING level** but NOT raised
+- The cache starts empty → all articles are treated as unpublished
+- Publishing proceeds normally
+- Worst case: a duplicate post. Acceptable for a daily news bot — availability beats deduplication.
+
+---
+
+## 5. Four-Persona Architecture
+
+Personas were consolidated from 5 to 4 by merging "Working Professional Mind" and "Tech Strategist Mind" into a unified "Tech & Workforce Mind". This reduces LLM cost, reduces post length, and produces a richer combined perspective.
+
+| Key | Display name | Emoji | Voice | Focus |
+|---|---|---|---|---|
+| `business` | Capitalist Mind | 💼 | Founder/operator. P&L lens. Ends with a pointed decision question. | ROI, margins, competitive moat, build-vs-buy |
+| `policy` | Government Mind | 🏛️ | Policy memo precision. Names specific regulations. | Compliance, cross-jurisdiction governance, enforcement |
+| `genz` | Generalist Mind | 🎓 | Plain English. For people outside the AI bubble. | Everyday impact, what it means for non-specialists |
+| `linkedin` | Tech & Workforce Mind | 🧠 | Dual lens: architecture decisions + career reality. | Tech strategy, engineering trade-offs, workforce/skills |
+
+Each persona always produces: **3 sentences of perspective + 2 evidence bullets** from the article.
+
+Prompt files: `prompts/capitalist.txt`, `prompts/policy.txt`, `prompts/genz.txt`, `prompts/linkedin.txt`.
+Voice guide: `skills.md`.
+
+### Lenient Parser (`_PersonaOutputRaw`)
+
+The LLM sometimes outputs the display name (`"generalist"`, `"tech & workforce"`) instead of the internal enum key (`"genz"`, `"linkedin"`). The lenient parser avoids Pydantic `ValidationError` by accepting `persona: str` and injecting the correct `PersonaType` from agent context after parsing.
+
+### Persona Routing Logic (Jev-controlled)
+
+```
+Article: "EU AI Act enforcement begins Q1 2027"
+  jev_route_personas:
+    needs_policy    → 0.93  ✓ activate policy
+    needs_genz      → 0.71  ✓ activate genz
+    needs_linkedin  → 0.55  ✓ activate linkedin
+    needs_business  → 0.34  ✗ skip business
+
+  Result: 3 LLM calls instead of 4 (25% savings)
+  Merged with prefilter hints (union): ["policy", "genz", "linkedin"]
+```
+
+---
+
+## 6. LinkedIn Post Format
+
+The post is composed **deterministically** by `PublisherAgent._compose_main_post()`. No LLM is involved in post composition — it is pure string assembly from structured data with a running character budget tracker.
+
+**Hard limit**: 3000 characters (LinkedIn API). Budget tracked with `remaining` counter, pre-reserving 440 chars for footer.
+
+```
+🤖  AI NEWS  ·  Agentic AI
+
+<headline>
+
+<summary — full LLM text, no cap>
+
+⚙️  Jev Decision
+  💼  Primary audience : Business (market strategy & ROI)  — 93% Jev score
+  📋  Story type       : Research Report
+  🎯  AI relevance     : 91%   Market signal: [████░]
+  ⚡  Engagement est.  : 74%   Controversy: Medium
+  👥  Audience impact  : 💼 Business 93%  ›  🧠 Tech+Workforce 89%  ›  🎓 Generalist 76%
+  🔥  AI market shift  : HIGH / MODERATE / INFORMATIONAL
+
+📌  What you need to know
+  • <key point 1 — hard-capped at 90 chars>
+  • <key point 2>
+  • <key point 3>
+
+📈  Business   —  <business_impact — 90 chars max>
+👷  Workforce  —  <job_impact — 90 chars max>
+🔬  Tech       —  <technology_impact — 90 chars max>
+🏛️  Policy     —  <policy_impact — 90 chars max, only if present>
+
+🔗  Read more: <source_url>
+
+🧵  Perspectives  ·  Jev-selected audience mindsets
+
+💼  Capitalist Mind
+<perspective — clipped to per_persona budget at sentence boundary>
+  • <evidence bullet 1 — always built first, never clipped>
+  • <evidence bullet 2>
+
+🏛️  Government Mind     [same structure, only if Jev activated]
+🎓  Generalist Mind     [same structure, only if Jev activated]
+🧠  Tech & Workforce    [same structure, only if Jev activated]
+
+⚙️  Jev Decision  —  💼 Business Strategists  ›  🧠 Tech & Workforce  ›  🎓 Generalists
+
+💬  Real Human Take — drop yours below. 👇
+
+⚠️ AI-simulated perspectives — not verified opinions or professional advice.
+🤖 AIFeeders  ·  Agentic AI  ·  Powered by Jev
+
+#AI #AgenticAI #Jev #AINews #GenerativeAI #TechNews
+#MachineLearning #AIStrategy #AIInnovation #DigitalTransformation #AILeadership
+```
+
+### Budget Allocation
+
+| Section | Strategy |
+|---|---|
+| Hook + headline | Variable (~100 chars) |
+| Summary | Full LLM text |
+| Jev Decision block | ~350 chars fixed |
+| Key points | Hard-capped 90 chars each |
+| Impact lines | Hard-capped 90 chars each |
+| Source | Fixed |
+| Footer (verdict + CTA + disclaimer + hashtags) | **Reserved 440 chars upfront** |
+| Persona perspectives | `(remaining - header_cost) ÷ n_active_personas` each, min 180 |
+| Evidence bullets | **Always 2 per persona** — built before perspective clip, never truncated |
+
+---
+
+## 7. MCP Microservices
+
+Each concern is isolated in its own FastAPI service. The main workflow talks to them over HTTP. They are independently deployable, independently scalable, and independently testable.
+
+| Service | Port | Purpose | Upstream | Replicas |
+|---|---|---|---|---|
+| `daily-news-api` | 8000 | FastAPI trigger, health, metrics | LangGraph workflow | 2 (HPA 2–4) |
+| `news-mcp` | 8000 | Fetch and parse AI news via GNews | GNews API | 2 |
+| `pageindex-mcp` | 8000 | Full HTML fetch, chunk, in-memory index for RAG | None | 1 (in-memory) |
+| `evaluation-mcp` | 8000 | LLM-based content quality scoring (Jev fallback only) | OpenAI-compatible LLM | 2 |
+| `linkedin-mcp` | 8000 | Create LinkedIn posts and comments via OAuth | LinkedIn Marketing API | **1** (stateful OAuth token) |
+| `jev-gateway` | — | Jev System One decision engine (external, IBM) | — | — |
+
+All MCP servers expose:
+- `GET /health` — liveness check, returns `{"status": "healthy"}`
+- `POST /call` — MCP tool invocation: `{ "tool": "...", "arguments": {...} }`
 
 ---
 
 ## 8. OpenShift Deployment Layout
 
-```mermaid
-graph TB
-    subgraph "OpenShift Cluster (aifeeders namespace)"
-
-        subgraph "Ingress"
-            Router["OpenShift Router<br/>(HAProxy)"]
-        end
-
-        subgraph "Application Layer"
-            API["Deployment: daily-news-api<br/>replicas: 2<br/>image: daily-news:latest"]
-        end
-
-        subgraph "CronJob"
-            CJ["CronJob: daily-ai-news<br/>schedule: 0 10 * * *<br/>label: app=daily-news-worker"]
-        end
-
-        subgraph "MCP Servers"
-            NM["Deployment: news-mcp<br/>replicas: 2<br/>image: news-mcp:latest"]
-            PM["Deployment: pageindex-mcp<br/>replicas: 1 ⚠️<br/>image: pageindex-mcp:latest"]
-            EM["Deployment: evaluation-mcp<br/>replicas: 2<br/>image: evaluation-mcp:latest"]
-            LM["Deployment: linkedin-mcp<br/>replicas: 1 ⚠️<br/>image: linkedin-mcp:latest"]
-        end
-
-        subgraph "Config"
-            CM["ConfigMap: daily-news-config<br/>(thresholds, URLs, API versions)"]
-            SEC["Secret: daily-news-secrets<br/>(tokens, API keys)"]
-        end
-
-        subgraph "Networking"
-            NP1["NetworkPolicy: default-deny-all"]
-            NP2["NetworkPolicy: allow-api-to-mcps<br/>(app=daily-news-api<br/>OR app=daily-news-worker)"]
-            NP3["NetworkPolicy: allow-router-to-api"]
-            NP4["NetworkPolicy: allow-router-to-linkedin-mcp<br/>(OAuth browser flow)"]
-            NP5["NetworkPolicy: allow-egress-internet"]
-        end
-
-        subgraph "Platform"
-            HPA["HPA: daily-news-api<br/>min:2 max:10<br/>CPU:70% / Mem:80%"]
-            PDB["PodDisruptionBudget<br/>minAvailable:1<br/>(api, news-mcp, linkedin-mcp)"]
-            RBAC2["ServiceAccount: daily-news<br/>Role: get/list ConfigMaps, Secrets, Pods"]
-        end
-    end
-
-    Router -->|"HTTPS"| API
-    Router -->|"HTTPS (OAuth)"| LM
-    API --> CM & SEC
-    CJ --> CM & SEC
-    NM --> CM & SEC
-    PM --> CM & SEC
-    EM --> CM & SEC
-    LM --> CM & SEC
-    API & CJ & NM & PM & EM & LM --> RBAC
-
-    style PM fill:#fef3c7
-    style LM fill:#fef3c7
+```
+Namespace: aifeeders
+│
+├── Deployments (always-on)
+│   ├── daily-news-api        2 replicas, HPA 2–4
+│   │                         Runs: FastAPI + LangGraph workflow
+│   ├── news-mcp              2 replicas
+│   │                         Runs: GNews adapter
+│   ├── evaluation-mcp        2 replicas
+│   │                         Runs: LLM evaluation fallback
+│   ├── linkedin-mcp          1 replica — stateful (OAuth token in memory)
+│   │                         Runs: LinkedIn API adapter
+│   └── pageindex-mcp         1 replica — stateful (in-memory article index)
+│                             Runs: RAG index server
+│
+├── CronJob: daily-ai-news
+│   └── Schedule: 0 10 * * *  (10:00 UTC daily)
+│       Triggers: POST /workflow/daily-news on daily-news-api
+│
+├── BuildConfigs (binary source builds)
+│   ├── daily-news            successfulBuildsHistoryLimit: 1
+│   ├── news-mcp              successfulBuildsHistoryLimit: 1
+│   ├── evaluation-mcp        successfulBuildsHistoryLimit: 1
+│   ├── linkedin-mcp          successfulBuildsHistoryLimit: 1
+│   └── pageindex-mcp         successfulBuildsHistoryLimit: 1
+│
+├── ImageStreams (one per service, :latest tag only)
+│
+├── ConfigMap: aifeeders-config
+│   └── Non-secret settings: URLs, flags, thresholds
+│
+└── Secret: aifeeders-secrets
+    └── API keys: GNEWS_API_KEY, LLM_API_KEY, JEV_API_KEY, LINKEDIN_*, LANGFUSE_*
 ```
 
-> ⚠️ `pageindex-mcp` and `linkedin-mcp` **must stay at replicas: 1** until backed by shared storage (Redis/PostgreSQL). Yellow = in-memory state constraint.
->
-> **HPA applies only to `daily-news-api`** (stateless, CPU/memory-driven). MCP servers are not HPA'd — each has a fixed replica count.
+### Network Policy
+
+Only `daily-news-api` has egress to external endpoints (Jev gateway, GNews, LLM, LinkedIn). MCP services are cluster-internal only. `linkedin-mcp` has egress to LinkedIn API endpoints.
 
 ---
 
-## 9. Network Policy — Who Can Talk to Whom
+## 9. Build Architecture — Zero Old-Build Accumulation
 
-```mermaid
-graph LR
-    Internet(["Internet / Browser"])
-    Router["OpenShift Router"]
+### The Core Design Principle
 
-    API["daily-news-api<br/>app=daily-news-api"]
-    Worker["CronJob Pod<br/>app=daily-news-worker"]
+**Old builds are deleted automatically. No manual cleanup. Ever.**
 
-    NM["news-mcp<br/>role=mcp-server"]
-    PM["pageindex-mcp<br/>role=mcp-server"]
-    EM["evaluation-mcp<br/>role=mcp-server"]
-    LM["linkedin-mcp<br/>role=mcp-server"]
-
-    GNews(["GNews API"])
-    LLM(["LLM Gateway"])
-    LinkedInExt(["LinkedIn API"])
-
-    Internet -->|"HTTPS"| Router
-    Router -->|"HTTP :8000"| API
-    Router -->|"HTTP :8000<br/>(OAuth endpoints)"| LM
-
-    API -->|"HTTP :8000"| NM & PM & EM & LM
-    Worker -->|"HTTP :8000"| NM & PM & EM & LM
-
-    NM -->|"HTTPS egress"| GNews
-    EM -->|"HTTPS egress"| LLM
-    API -->|"HTTPS egress"| LLM
-    LM -->|"HTTPS egress"| LinkedInExt
-
-    style Internet fill:#e5e7eb
-    style GNews fill:#e5e7eb
-    style LLM fill:#e5e7eb
-    style LinkedInExt fill:#e5e7eb
+All `BuildConfig` resources are patched with:
+```yaml
+spec:
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 1
 ```
 
-**Default-deny-all** is in place. Only the edges shown above are permitted.
+After each new successful build, OpenShift deletes the previous build object and its pod automatically. The namespace always has exactly one build per service — the latest one.
+
+### How Binary Builds Work
+
+```
+Developer laptop
+  │
+  ├─ python -m pytest tests/  ← must pass before building
+  │
+  ├─ rsync -a (exclude: .venv/ __pycache__/ .git/ .env dist/ build/)
+  │       └─► clean tmpdir  (< 1 MB uploaded — not 270 MB)
+  │
+  └─ oc start-build daily-news --from-dir=$TMPDIR
+          │
+          └─► OpenShift BuildConfig
+                  │
+                  └─► BuildPod (python:3.11-ubi9 base image)
+                          │
+                          ├─ COPY src/ prompts/ pyproject.toml README.md
+                          ├─ pip install -e . (layer-cached — runs in ~15s warm)
+                          └─► push to ImageStream :latest
+                                  │
+                                  └─► Deployment rollout trigger
+                                          │
+                                          └─► New pods pull :latest → old pods terminate
+```
+
+### Why `.venv/` Must Always Be Excluded
+
+The `.venv/` directory is **269 MB**. Including it in the build context upload causes a timeout before the build even starts. The `pip install` inside the BuildPod is layer-cached by OpenShift — it runs in 10–15 seconds on a warm cache. Never include `.venv/` in build context.
+
+### Build Command (Canonical)
+
+```bash
+TMPDIR=$(mktemp -d) && \
+rsync -a \
+  --exclude='.venv/' \
+  --exclude='**/__pycache__/' \
+  --exclude='**/*.pyc' \
+  --exclude='.git/' \
+  --exclude='.pytest_cache/' \
+  --exclude='*.egg-info/' \
+  --exclude='.env' \
+  --exclude='.env.*' \
+  --exclude='dist/' \
+  --exclude='build/' \
+  --exclude='htmlcov/' \
+  --exclude='.coverage' \
+  --exclude='.tox/' \
+  --exclude='.DS_Store' \
+  . "$TMPDIR/" && \
+oc start-build daily-news --from-dir="$TMPDIR" -n aifeeders --output=name
+```
 
 ---
 
-## 10. LinkedIn Post Anatomy
+## 10. EKS Portability — Simple and Easy Deployment
 
-> **Feed card rendering fix:** The headline is on its own line (line 2) so LinkedIn mobile always shows it in the feed card preview. Previously `🤖 AI NEWS  |  <headline>` was on one line — LinkedIn clipped at the emoji glyph, hiding the headline.
+The entire platform is designed so that moving from OpenShift to EKS requires **changing only the image build and registry** steps. Everything else is standard Kubernetes.
 
-```mermaid
-graph TB
-    POST["LinkedIn Post (≤ 3000 chars)"]
+### What is Identical on EKS
 
-    POST --> B0["🤖  AI NEWS (own line — feed card badge)"]
-    POST --> B1["Headline (own line — always visible in feed card)"]
-    POST --> B2["2-3 sentence summary"]
-    POST --> B3["📌  Key Points\n  • fact 1\n  • fact 2\n  • fact 3"]
-    POST --> B4["📈 Business Impact — ...\n👷 Workforce Impact — ...\n🔬 Tech Impact — ...\n🏛️ Policy Impact — ... (optional)"]
-    POST --> B5["🔗  Source: url"]
-    POST --> B6["──────────────────\n🧵  Perspectives"]
-    POST --> B7["💼  Capitalist Mind\nperspective\n    ↳ evidence"]
-    POST --> B8["👷  Working Professional Mind\n..."]
-    POST --> B9["🏛️  Government Mind\n..."]
-    POST --> B10["🎓  Young / Fresher Mind\n..."]
-    POST --> B11["──────────────────\n🧠  Tech Strategist Mind\n(standalone practitioner section)"]
-    POST --> B12["──────────────────\n⚠️ AI-simulated perspectives notice\n🤖 Built with AIFeeders"]
-    POST --> B13["#AI #AgenticAI #LLM ... (11 hashtags)"]
+| Component | Status |
+|---|---|
+| All Deployment YAML files | ✅ Identical — copy-paste |
+| All Service YAML files | ✅ Identical |
+| CronJob YAML | ✅ Identical (same schedule, same trigger) |
+| ConfigMap YAML | ✅ Identical |
+| RBAC (Role/RoleBinding) YAML | ✅ Identical |
+| NetworkPolicy YAML | ✅ Identical (requires Calico or Cilium CNI) |
+| Application code | ✅ Identical — no OpenShift SDK calls |
+| Environment variables | ✅ Identical — all injected from ConfigMap/Secret |
 
-    style B0 fill:#dbeafe
-    style B1 fill:#dbeafe
-    style B6 fill:#fef3c7
-    style B11 fill:#ede9fe
-    style B12 fill:#fee2e2
-    style B13 fill:#f0fdf4
+### What Changes for EKS
+
+| Component | OpenShift | EKS |
+|---|---|---|
+| Image build | `BuildConfig` + `oc start-build` | `docker build` + `docker push` |
+| Image registry | Internal `image-registry.openshift-image-registry.svc` | `<account>.dkr.ecr.<region>.amazonaws.com` |
+| Image pull auth | Auto from ImageStream | `imagePullSecrets` referencing ECR credentials |
+| `image:` field in Deployment YAML | `image-registry.openshift-image-registry.svc/aifeeders/daily-news:latest` | `<account>.dkr.ecr.us-east-1.amazonaws.com/aifeeders/daily-news:latest` |
+| Secrets management | Kubernetes Secret (or OpenShift vault) | External Secrets Operator + AWS Secrets Manager (recommended) |
+| LinkedIn OAuth port-forward | `oc port-forward` | `kubectl port-forward` (identical syntax) |
+
+### EKS Build Flow
+
+```bash
+# Step 1: Run tests (never skip this)
+python -m pytest tests/unit tests/workflow -q --tb=short
+
+# Step 2: Set registry variables
+export AWS_ACCOUNT=123456789012
+export AWS_REGION=us-east-1
+export ECR_REGISTRY=$AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
+export IMAGE_NAME=aifeeders/daily-news
+
+# Step 3: Build image (same Dockerfile as OpenShift)
+docker build -t $IMAGE_NAME:latest .
+
+# Step 4: Authenticate to ECR
+aws ecr get-login-password --region $AWS_REGION | \
+  docker login --username AWS --password-stdin $ECR_REGISTRY
+
+# Step 5: Tag and push
+docker tag $IMAGE_NAME:latest $ECR_REGISTRY/$IMAGE_NAME:latest
+docker push $ECR_REGISTRY/$IMAGE_NAME:latest
+
+# Step 6: Old image in ECR is NOT deleted automatically (unlike OpenShift's limit:1)
+# Use a lifecycle policy on the ECR repository to keep only N images:
+aws ecr put-lifecycle-policy \
+  --repository-name aifeeders/daily-news \
+  --lifecycle-policy-text '{"rules":[{"rulePriority":1,"description":"Keep last 3","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":3},"action":{"type":"expire"}}]}'
 ```
 
-> **Why Tech Strategist Mind is separate:** The technical practitioner voice is qualitatively different from the four "societal impact" personas. Giving it its own section after the `──────────────────` divider signals to readers that they're getting a deeper technical take, not just another stakeholder view.
+### EKS Launch Flow
 
-> **Why no numbers (1/4…4/4):** Removed. The emoji headers are visually distinct enough. Numbers added visual clutter without helping navigation in a single scrollable post.
+```bash
+# After image is pushed:
+
+# Option A: kubectl set image (imperative, for quick updates)
+kubectl set image deployment/daily-news-api \
+  daily-news=$ECR_REGISTRY/$IMAGE_NAME:latest \
+  -n aifeeders
+
+kubectl rollout restart deployment/daily-news-api -n aifeeders
+kubectl rollout status deployment/daily-news-api -n aifeeders --timeout=60s
+
+# Option B: Update image tag in deployment YAML (declarative, for GitOps)
+# Edit openshift/deployments/daily-news-api.yaml — change image: field
+kubectl apply -f openshift/deployments/daily-news-api.yaml -n aifeeders
+
+# Trigger a run
+kubectl create job live-run-$(date +%s) --from=cronjob/daily-ai-news -n aifeeders
+
+# Watch
+kubectl logs -f job/live-run-<id> -n aifeeders | grep -E "status=|published"
+# Expected: Workflow complete — status=PUBLISHED published=2 errors=0
+```
+
+### EKS First-Time Setup (Complete)
+
+```bash
+# 1. Create namespace
+kubectl create namespace aifeeders
+
+# 2. Create ECR repositories (once)
+for repo in daily-news news-mcp evaluation-mcp linkedin-mcp pageindex-mcp; do
+  aws ecr create-repository --repository-name aifeeders/$repo --region $AWS_REGION
+done
+
+# 3. Create imagePullSecret for ECR
+kubectl create secret docker-registry ecr-credentials \
+  --docker-server=$ECR_REGISTRY \
+  --docker-username=AWS \
+  --docker-password=$(aws ecr get-login-password --region $AWS_REGION) \
+  -n aifeeders
+
+# 4. Apply RBAC, ConfigMap, Secrets
+kubectl apply -f openshift/rbac.yaml -n aifeeders
+kubectl apply -f openshift/configmap.yaml -n aifeeders
+# Edit secrets.yaml with real values:
+kubectl apply -f openshift/secrets.yaml -n aifeeders
+
+# 5. Build and push all images (same ECR loop as above)
+
+# 6. Deploy all services
+kubectl apply -f openshift/deployments/ -n aifeeders
+kubectl apply -f openshift/services/ -n aifeeders
+kubectl apply -f openshift/cronjob.yaml -n aifeeders
+
+# 7. Authorise LinkedIn
+kubectl port-forward svc/linkedin-mcp 8080:8000 -n aifeeders
+# Browser: http://localhost:8080/auth/linkedin
+
+# 8. Smoke test
+kubectl patch configmap aifeeders-config -n aifeeders \
+  --type=merge -p '{"data":{"PUBLISHING_ENABLED":"false"}}'
+kubectl create job smoke-$(date +%s) --from=cronjob/daily-ai-news -n aifeeders
+# Expected: status=EVALUATED published=0 errors=0
+kubectl patch configmap aifeeders-config -n aifeeders \
+  --type=merge -p '{"data":{"PUBLISHING_ENABLED":"true"}}'
+```
+
+### Production EKS Recommendations
+
+| Topic | Recommendation |
+|---|---|
+| Secrets | Use **External Secrets Operator** + AWS Secrets Manager (not raw K8s Secrets) |
+| IAM | Use **IRSA** (IAM Roles for Service Accounts) if any pod accesses AWS services |
+| Node sizing | `t3.medium` minimum; `t3.large` recommended for `daily-news-api` (LLM calls are memory-intensive) |
+| NetworkPolicy | Requires CNI with NetworkPolicy support — use **Calico** or **Cilium** |
+| Image lifecycle | Set ECR lifecycle policy to retain last 3 images (no auto-delete unlike OpenShift) |
+| LinkedIn MCP | 1 replica only — stateful OAuth token. Use a `StatefulSet` with a persistent volume if token persistence across pod restarts is needed |
 
 ---
 
-## 11. Persona Voice Architecture — How `skills.md` Works
+## 11. Data Flow — End to End
 
-The five personas are not just different system prompts. They are defined in [`skills.md`](skills.md) with a full description of each persona's worldview, evidence style, and conversational voice. The prompt files load from `prompts/*.txt` at runtime.
-
-```mermaid
-graph TB
-    subgraph "Persona Definition Layer"
-        SK["skills.md\n(voice reference, anti-patterns,\nensemble design)"]
-    end
-
-    subgraph "Prompt Files (loaded at PersonaAgent init)"
-        PC["prompts/capitalist.txt\nFounder/operator voice\nP&L lens + anti-patterns"]
-        PL["prompts/labor.txt\nSlack-message energy\nNo HR-speak + anti-patterns"]
-        PP["prompts/policy.txt\nPolicy memo precision\nNamed regulations + anti-patterns"]
-        PG["prompts/genz.txt\nGroup chat energy\nSay WHY + anti-patterns"]
-        PLI["prompts/linkedin.txt\nRFC comment style\nName the trade-off + anti-patterns"]
-    end
-
-    subgraph "PersonaAgent (one per persona)"
-        PA["PersonaAgent.generate()\n→ LLM call\n→ persona enum injected\n  from agent context\n  (never from LLM output)"]
-    end
-
-    subgraph "Output"
-        PO["PersonaOutput\n.persona (injected)\n.perspective (LLM)\n.evidence (LLM)"]
-    end
-
-    SK -.->|"reference when\ntuning prompts"| PC & PL & PP & PG & PLI
-    PC & PL & PP & PG & PLI --> PA
-    PA --> PO
 ```
-
-### Why `persona` is always injected from the agent context
-
-The `PydanticOutputParser` asks the LLM to fill in the `persona` field as an enum value (`"business"`, `"linkedin"`, etc.). When a prompt says `Persona: Tech Strategist Mind`, some LLMs fill the field with the display name instead of the internal key. This causes a `KeyError` when building `PersonaSetOutput`.
-
-**Fix (applied in `persona_agent.py`):**
-```python
-# After LLM parse, always override persona + article_id from agent context:
-return PersonaOutput(
-    persona=self._persona,        # ← from PersonaAgent.__init__, never from LLM
-    article_id=summary.article_id,
-    perspective=raw.perspective,
-    evidence=raw.evidence,
-)
+10:00 UTC — CronJob fires
+  │
+  ▼
+discover_news
+  ├─ 6 parallel GNews queries across 6 AI categories:
+  │    "artificial intelligence LLM agentic"
+  │    "AI finance investment funding"
+  │    "AI enterprise automation business"
+  │    "AI jobs automation workforce"
+  │    "AI regulation policy governance"
+  │    "AI product launch announcement"
+  └─ ~18 raw articles collected
+  │
+  ▼
+deduplicate  (no LLM, no API calls — pure memory + disk)
+  ├─ Pass 1: SHA-256(title+url) → skip exact duplicates (same story, two sources)
+  └─ Pass 2: PublishedStore.filter_unpublished() → skip articles published today already
+  │
+  ▼
+fetch_articles (capped at 30)
+  └─ Full HTML fetch + parse for each article via news-mcp
+  │
+  ▼
+index_pageindex
+  └─ Chunk each article, store in PageIndex for RAG retrieval during summarise
+  │
+  ▼
+jev_prefilter  [Jev Decision #1]
+  ├─ asyncio.Semaphore(5) — 5 concurrent Jev calls
+  ├─ Each article: one POST /v1/systemone → 11 answers
+  ├─ Filter: is_ai_topic < 0.5 → skip
+  ├─ Score:  composite = relevance×0.6 + engagement×0.4
+  ├─ Select: top 2 by composite score → state["selected_articles"]
+  ├─ Store:  jev_persona_hints = persona_fit scores for #1 article
+  └─ Store:  jev_prefilter_scores = full score set for #1 → rendered in post
+  │
+  ▼
+summarise  [1 LLM call per selected article]
+  ├─ Fetch PageIndex context: "key business and technology facts"
+  └─ LLM output: headline, summary, key_points[3], business_impact,
+                 job_impact, technology_impact, policy_impact, source_url
+  │
+  ▼
+jev_route_personas  [Jev Decision #2]
+  ├─ One POST /v1/systemone per summary → 4 noul questions
+  ├─ Activate personas where noul > 0.5
+  ├─ Merge (union) with jev_persona_hints from prefilter
+  └─ state["jev_active_personas"] = ["business", "policy", "genz", "linkedin"]
+  │
+  ▼
+generate_personas  [1 LLM call per active persona]
+  ├─ Fetch PageIndex context: "jobs, policy, business, technology evidence"
+  ├─ PersonaAgentFactory.generate_all(summary, evidence, personas=active)
+  └─ PersonaSetOutput{business, policy, genz, linkedin}
+  │
+  ▼
+evaluate  [Jev Decision #3]
+  ├─ source = raw article content + enriched summary fields
+  ├─ generated = headline + summary + all persona perspectives
+  ├─ JevClient.evaluate_content() → 9 quality scores
+  └─ EvaluationAgent._apply_gate() → deterministic decision:
+       BLOCK      → never published (PII / prompt injection)
+       REGENERATE → back to summarise (max 2 retries, then publish PASS items only)
+       HUMAN_REVIEW → approval gate (not yet wired to UI)
+       PASS       → proceeds to publish
+  │
+  ▼
+publish  [3 deterministic gates, then LinkedIn API]
+  ├─ Gate 1: PUBLISHING_ENABLED=true?  (ConfigMap flag, false for smoke tests)
+  ├─ Gate 2: PublishedStore.is_published(article_id)?  → skip if already published today
+  ├─ Gate 3: evaluation.publish_eligible = True?
+  ├─ Compose: _compose_main_post(summary, personas, jev_scores) → deterministic string ≤ 3000 chars
+  ├─ POST to LinkedIn: LinkedInMCPClient.create_post(text, publication_key)
+  │      publication_key = "{article_id}:{YYYY-MM-DD}:{headline_hash[:12]}"
+  │      On success: PublishedStore.mark_published(article_id)
+  └─ Per-persona comments (sequential, never parallel):
+         LinkedInMCPClient.create_comment(post_urn, text, comment_key) × 4 personas
+         PERMISSION_ERROR = soft skip (Comments API not yet approved — personas in post body)
+  │
+  ▼
+END — Workflow complete — status=PUBLISHED published=2 errors=0
 ```
-
-### Anti-pattern architecture
-
-Each prompt file contains **two sections**:
-1. **✗ Anti-patterns** — exact bad outputs taken from real live runs. These are the sentences the LLM actually produced before the prompts were strengthened.
-2. **✓ Good examples** — the target voice, taken from `skills.md` sample monologues.
-
-When a persona voice drifts back to corporate-speak, add the bad output as a new `✗` line in the relevant `.txt` file, then rebuild.
-
-### Persona ensemble design
-
-The five personas are designed to create productive tension:
-
-| Tension | What it illuminates |
-|---------|-------------------|
-| Capitalist vs. Working Professional | Value capture vs. value creation |
-| Government vs. Capitalist | Regulation cost vs. opportunity |
-| Young/Fresher vs. Tech Strategist | Entry-level perspective vs. practitioner depth |
-| Tech Strategist vs. Capitalist | Build-vs-buy decision vs. unit economics |
-
-No single persona has the full picture. The value is in the ensemble.
 
 ---
 
 ## 12. Technology Stack
 
-```mermaid
-graph LR
-    subgraph "Language & Runtime"
-        PY["Python 3.11"]
-        UBI["Red Hat UBI9"]
-    end
-
-    subgraph "AI / Agents"
-        LGR["LangGraph 1.x<br/>(state machine)"]
-        LCH["LangChain 1.x<br/>(LLM chains)"]
-        OAI["langchain-openai<br/>(OpenAI-compatible client)"]
-        LFU["Langfuse<br/>(LLM tracing)"]
-    end
-
-    subgraph "APIs & Protocols"
-        FA["FastAPI + Uvicorn<br/>(REST + health)"]
-        MCP["MCP (Streamable HTTP)<br/>(tool protocol)"]
-        HX["httpx<br/>(async HTTP client)"]
-    end
-
-    subgraph "Config & Models"
-        PD["Pydantic v2<br/>(data models)"]
-        PS["pydantic-settings<br/>(env config)"]
-    end
-
-    subgraph "Observability"
-        OT["OpenTelemetry<br/>(disabled — no collector)"]
-        PM["Prometheus<br/>(metrics endpoint)"]
-    end
-
-    subgraph "Platform"
-        OS["OpenShift 4.x"]
-        K8S["Kubernetes batch/v1<br/>(CronJob)"]
-        HELM["Helm 3<br/>(multi-cloud chart)"]
-    end
-```
+| Layer | Technology | Version | Role |
+|---|---|---|---|
+| Workflow orchestration | LangGraph | 1.x | State machine with conditional edges |
+| LLM calls | LangChain + ChatOpenAI | 1.x | Summarisation + persona generation |
+| LLM model | Qwen2.5-72B-Instruct (configurable) | — | Default on IBM gateway |
+| AI decision engine | Jev System One | — | Article scoring, persona routing, content evaluation |
+| Web framework | FastAPI + Uvicorn | 0.14x | MCP servers + API trigger |
+| Data models | Pydantic v2 | 2.x | State validation, settings, API contracts |
+| HTTP client | httpx (async) | 0.28x | All outbound HTTP calls |
+| Retry logic | tenacity | 9.x | LLM call retries |
+| Observability | Langfuse v4 | 4.x | LLM trace per run session |
+| Metrics | Prometheus client | 0.26x | `/metrics` endpoint on daily-news-api |
+| Container base | python:3.11-ubi9 | — | UBI9 = Red Hat universal base image |
+| Container platform | OpenShift 4.x / Kubernetes 1.27+ | — | Production runtime |
+| Container registry | OpenShift internal ImageStream / ECR (EKS) | — | Per-build image storage |
 
 ---
 
-## 13. CI/CD and Image Build Flow
+## 13. File Layout
 
-```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant OC as oc CLI
-    participant IS as ImageStream (OpenShift)
-    participant Build as BuildConfig
-    participant Deploy as Deployment
-
-    Dev ->> OC: oc start-build daily-news --from-dir=. --follow
-    OC ->> Build: Stream source code to BuildConfig
-    Build ->> Build: docker build (UBI9/Python 3.11)
-    Build ->> IS: Push image → image-registry.../aifeeders/daily-news:latest
-    Build -->> OC: Build complete
-
-    Dev ->> OC: oc rollout restart deployment/daily-news-api
-    OC ->> Deploy: Trigger rolling update
-    Deploy ->> IS: Pull latest image
-    Deploy -->> OC: Rollout complete (new pods healthy)
-
-    Note over Dev,Deploy: CronJob always uses :latest tag<br/>No explicit restart needed for CronJob
 ```
-
----
-
-## 14. Summary: All Components at a Glance
-
-| Component | Type | Replicas | State | Calls |
-|-----------|------|----------|-------|-------|
-| `daily-news-api` | Deployment | 2 (HPA: 2–10) | Stateless | LangGraph graph (BackgroundTask) |
-| `daily-ai-news` | CronJob | 1 per run | Stateless | LangGraph graph (ainvoke) |
-| `news-mcp` | Deployment | 2 | Stateless | GNews API |
-| `pageindex-mcp` | Deployment | **1** | In-memory doc store | — |
-| `evaluation-mcp` | Deployment | 2 | Stateless | LLM Gateway (verify=False) |
-| `linkedin-mcp` | Deployment | **1** | In-memory token + idempotency registry | LinkedIn Posts API |
-| `SummaryAgent` | LangGraph node | — | Stateless | pageindex-mcp (context), LLM via ChatOpenAI |
-| `PersonaAgentFactory` | LangGraph node | — | Stateless | pageindex-mcp (evidence), LLM × 5 **parallel** |
-| `EvaluationAgent` | LangGraph node | — | Stateless | evaluation-mcp (POST /call), deterministic gate |
-| `PublisherAgent` | LangGraph node | — | Stateless | linkedin-mcp (POST /call), **no LLM** |
-
-**Bold replicas = must stay at 1** due to in-memory state.
-
-### Why this architecture? — Architect's Q&A
-
-**Q: Why 4 separate MCP servers instead of one monolith?**
-A: Each server owns one integration boundary and its own credentials. `linkedin-mcp` holds the LinkedIn token; no agent ever sees it. `evaluation-mcp` can be replaced or upgraded independently without touching the news pipeline. Each server is testable in isolation with a single `curl POST /call`.
-
-**Q: Why MCP at all — why not direct Python function calls?**
-A: The MCP boundary makes each service independently deployable, independently scalable (within its replica constraints), and independently testable. It also enforces the security principle: agents never hold external API keys.
-
-**Q: Why `POST /call` REST instead of MCP streaming transport?**
-A: The MCP SDK streaming transport (`/mcp` endpoint) is complex to debug and adds overhead for synchronous request-response tool calls. `MCPHTTPClient.call()` in `src/daily_news/mcp/client.py` is 15 lines of plain httpx — trivial to debug, trace, and test.
-
-**Q: Why is `PublisherAgent` an agent at all if it makes no LLM calls?**
-A: Because it is a workflow node that makes decisions (eligibility gate, character budgeting, composition logic) and has a side effect (POST to LinkedIn). "Agent" here means "autonomous unit with a specific responsibility" — not "LLM-calling agent". Keeping it separate from the LangGraph graph makes the publishing logic testable without running the full graph.
-
-**Q: Why `pageindex-mcp` instead of a real vector database?**
-A: Vector databases add operational complexity (deployment, embeddings model, indexing latency). For a single-article-per-run pipeline, keyword-overlap section scoring gives sufficient evidence retrieval. The MCP boundary means swapping to a vector DB later requires changing only `pageindex-mcp/server.py`.
-
-**Q: Why run 5 persona LLM calls in parallel?**
-A: Each persona call is stateless and independent. Parallelism reduces `generate_personas` latency from ~50s sequential to ~12s. The 5 traces all share the same `run_id`-seeded trace in Langfuse so they appear as siblings in the session view.
-
-**Q: Why is the evaluation threshold calibration important?**
-A: `qwen2-5-72b-instruct` self-evaluates news summaries conservatively — factuality scores cluster at 0.5–0.7, not 0.9+. Setting thresholds at 0.90 means every article fails and nothing publishes. Setting them at 0.50/0.50/0.85 allows content to pass while still blocking genuinely low-quality output.
-
-**Q: Why enrich the evaluation source text with `NewsSummary` fields?**
-A: GNews free plan truncates article content to ~250 chars. The `evaluation-mcp` was comparing 500-char persona output against ~250 chars of source text, causing `hallucination_score=1.0` and permanent REGENERATE loops. `_enrich_source()` in `EvaluationAgent` combines the raw content with all structured `NewsSummary` fields (headline, summary, key_points, business/job/tech impacts) giving the evaluator enough grounded context. Typical post-fix scores: `factuality≈0.85`, `hallucination≈0.40`.
-
-**Q: Why is the LinkedIn Comments API soft-skipped instead of raising an error?**
-A: The `partnerApiSocialActions.CREATE` 403 is a **permanent, known** error — the "Community Management API" product is not yet approved. Raising an ERROR log 5 times per run created false alarm fatigue and obscured real failures. The fix: first PERMISSION_ERROR sets `_comments_blocked=True`, logs INFO once (`"personas are embedded in post body"`), and all subsequent comment calls are skipped without any API round-trip. The pipeline completes cleanly.
-
-**Q: Why put the headline on its own line (line 2) instead of the same line as the emoji?**
-A: LinkedIn mobile's feed card renderer clips the first line of a post at the emoji glyph when the line is long. `🤖 AI NEWS  |  <headline>` was being displayed as just `🤖 AI NEWS` with everything after the emoji gap appearing blank. Separating them guarantees the feed card preview always shows both `🤖 AI NEWS` (line 0) and the full headline (line 1).
-
-**Q: Why support two GNews API keys (`GNEWS_API_KEY` + `GNEWS_API_KEY_2`)?**
-A: The GNews free plan allows 100 requests/day per key. A single key is exhausted after ~16 manual test runs (6 requests/run). Key rotation is transparent to the workflow — `news-mcp` detects HTTP 403, switches to the secondary key in-process, and retries the same call. Health endpoint shows `active_key_index` so operators can see which key is active without checking logs.
-
-**Q: What is `skills.md` and why does it exist alongside the prompt files?**
-A: `skills.md` is the human-readable reference document for each persona's voice, worldview, and evidence style. The `prompts/*.txt` files are the machine-readable instructions derived from it. `skills.md` exists because LLM personas drift over time — when a persona starts sounding generic, you need a clear description of what "good" looks like to recalibrate the prompt. The anti-pattern examples in each `.txt` file are taken directly from real bad outputs recorded in `skills.md`. Without this separation, there's no authoritative source to return to when quality degrades.
-
-**Q: Why were the persona numbers (1/4…4/4) removed from post headers?**
-A: They were added originally to give readers a sense of progress through the perspectives section. In practice, the emoji headers (`💼`, `👷`, `🏛️`, `🎓`) are visually distinct enough to separate sections. The numbers added clutter and made the headers harder to scan quickly. Removed in v1.4.
+AINewsfeederLinkedin/
+├── src/daily_news/
+│   ├── agents/
+│   │   ├── evaluation_agent.py    Jev primary / EvaluationMCP fallback; deterministic _apply_gate()
+│   │   ├── jev_agents.py          jev_prefilter_articles, jev_route_personas graph nodes
+│   │   ├── persona_agent.py       4-persona factory; _PersonaOutputRaw lenient parser
+│   │   ├── published_store.py     File-backed dedup store; 7-day TTL; thread-safe
+│   │   ├── publisher_agent.py     Post composition + 3-gate LinkedIn publish
+│   │   └── summary_agent.py       LLM summarisation agent
+│   ├── config/
+│   │   └── settings.py            Pydantic settings; all env var aliases; lru_cache singleton
+│   ├── mcp/
+│   │   ├── jev_client.py          JevClient: prefilter_article, route_personas, evaluate_content
+│   │   ├── evaluation.py          EvaluationMCPClient (LLM fallback)
+│   │   ├── linkedin.py            LinkedInMCPClient (posts + comments)
+│   │   ├── news.py                NewsMCPClient (GNews adapter)
+│   │   └── pageindex.py           PageIndexMCPClient (RAG index + retrieval)
+│   ├── models/
+│   │   ├── evaluation.py          EvaluationResult, EvaluationDecision
+│   │   ├── news.py                NewsArticle, NewsCategory
+│   │   ├── persona.py             PersonaType (4), PersonaOutput, PersonaSetOutput
+│   │   └── summary.py             NewsSummary
+│   ├── observability/
+│   │   └── tracing.py             Langfuse trace callbacks; flush_langfuse()
+│   └── workflows/
+│       └── daily_news_graph.py    LangGraph state machine; all 10 nodes; build_daily_news_graph()
+├── prompts/
+│   ├── capitalist.txt             Capitalist Mind prompt (ROI, moat, P&L)
+│   ├── policy.txt                 Government Mind prompt (regulation, governance)
+│   ├── genz.txt                   Generalist Mind prompt (plain English, everyday impact)
+│   └── linkedin.txt               Tech & Workforce Mind prompt (strategy, careers)
+├── tests/
+│   ├── unit/
+│   │   ├── test_jev_client.py     JevClient unit tests (mocked gateway)
+│   │   ├── test_published_store.py PublishedStore: dedup gates, TTL, failure safety
+│   │   ├── test_evaluation_gate.py _apply_gate() deterministic threshold tests
+│   │   └── test_publisher_idempotency.py Publication key stability tests
+│   └── workflow/
+│       └── test_langgraph_routing.py LangGraph conditional edge routing tests
+├── scripts/
+│   └── verify_jev.py              Live 5-check Jev gateway probe (health + 3 question types)
+├── openshift/
+│   ├── buildconfigs/              BuildConfig YAMLs — one per service
+│   ├── deployments/               Deployment YAMLs — one per service
+│   ├── services/                  Service YAMLs — one per service
+│   ├── configmap.yaml             Non-secret settings
+│   ├── secrets.yaml.example       Secret template (never commit secrets.yaml)
+│   ├── rbac.yaml                  Role + RoleBinding for CronJob SA
+│   └── cronjob.yaml               CronJob — 0 10 * * * UTC
+├── skills.md                      Persona voice guide (4 personas, tone, evidence rules)
+├── ARCHITECTURE.md                This file
+├── RUNBOOK.md                     Day-to-day operations guide
+└── README.md                      Getting-started guide
+```

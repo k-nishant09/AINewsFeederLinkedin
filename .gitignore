@@ -4,9 +4,12 @@
 
 # ── Secrets — NEVER commit ────────────────────────────────────────────────────
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 secrets/
+openshift/secrets.local.yaml
+openshift/secrets.*.yaml
+!openshift/secrets.yaml
 
 # ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/

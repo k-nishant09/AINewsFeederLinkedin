@@ -32,6 +32,7 @@ import hashlib
 import logging
 from datetime import date, timezone, datetime
 
+from daily_news.agents.published_store import published_store
 from daily_news.config.settings import get_settings
 from daily_news.mcp.linkedin import LinkedInMCPClient
 from daily_news.models.evaluation import EvaluationResult
@@ -43,20 +44,23 @@ logger = logging.getLogger(__name__)
 
 def _clip_at_sentence(text: str, limit: int) -> str:
     """
-    Clip *text* to at most *limit* characters, but only at a sentence boundary
-    (last '.', '!', or '?' before the limit).  If no sentence boundary exists
-    within the limit, the full text is returned unchanged — this means the LLM
-    must produce short-enough sentences (enforced via the prompt).
+    Clip *text* to at most *limit* characters at a sentence boundary
+    (last '.', '!', or '?' before the limit).  Falls back to hard-clipping
+    at the limit if no sentence boundary is found within it.
     """
     if len(text) <= limit:
         return text
     clipped = text[:limit]
-    # Walk back to the last sentence-ending punctuation
     for i in range(len(clipped) - 1, -1, -1):
         if clipped[i] in ".!?":
             return clipped[: i + 1]
-    # No sentence boundary found — return up to limit (fallback)
+    # No sentence boundary — hard-clip at limit
     return clipped
+
+
+def _hard_clip(text: str, limit: int) -> str:
+    """Hard-clip *text* to *limit* characters (no sentence-boundary search)."""
+    return text if len(text) <= limit else text[:limit]
 
 
 class PublisherAgent:
@@ -64,23 +68,21 @@ class PublisherAgent:
     # Persona display labels — used in post body section headers
     _PERSONA_ORDER = [
         ("business", "💼  Capitalist Mind"),
-        ("labor",    "👷  Working Professional Mind"),
         ("policy",   "🏛️  Government Mind"),
-        ("genz",     "🎓  Young / Fresher Mind"),
-        ("linkedin", "🧠  Tech Strategist Mind"),
+        ("genz",     "🎓  Generalist Mind"),
+        ("linkedin", "🧠  Tech & Workforce Mind"),
     ]
 
-    # Hashtags appended after the disclaimer
+    # Hashtags — discoverable, not spammy
     _HASHTAGS = (
-        "#AI #AgenticAI #LLM #GenerativeAI #AINews #TechNews "
-        "#AIStrategy #MachineLearning #AIInnovation #DigitalTransformation #AILeadership"
+        "#AI #AgenticAI #Jev #AINews #GenerativeAI #TechNews "
+        "#MachineLearning #AIStrategy #AIInnovation #DigitalTransformation #AILeadership"
     )
 
-    # Short disclaimer — AI-simulated mindsets notice
+    # Footer — disclaimer + attribution, concise
     _DISCLAIMER = (
-        "──────────────────\n"
-        "⚠️ These are AI-simulated perspectives — not verified opinions or professional advice.\n"
-        "🤖 Built with AIFeeders · Powered by Agentic AI"
+        "⚠️ AI-simulated perspectives — not verified opinions or professional advice.\n"
+        "🤖 AIFeeders  ·  Agentic AI  ·  Powered by Jev"
     )
 
     def __init__(self) -> None:
@@ -95,6 +97,7 @@ class PublisherAgent:
         personas:   PersonaSetOutput,
         run_id:     str,
         evaluation: EvaluationResult | None = None,
+        jev_scores: dict | None = None,
     ) -> dict:
         """
         Publish main post then add 5 persona perspective comments.
@@ -116,7 +119,15 @@ class PublisherAgent:
             )
             return self._skipped_result(summary, "publishing_disabled")
 
-        # ── Publishing gate 2: evaluation.publish_eligible ─────────────────
+        # ── Publishing gate 2: already published today (cross-run dedup) ───
+        if published_store.is_published(summary.article_id):
+            logger.info(
+                "[%s] already published today — skipping article=%s",
+                run_id, summary.article_id,
+            )
+            return self._skipped_result(summary, "already_published_today")
+
+        # ── Publishing gate 3: evaluation.publish_eligible ─────────────────
         if evaluation is not None and not evaluation.publish_eligible:
             logger.warning(
                 "[%s] publish_eligible=false (decision=%s) — skipping article=%s",
@@ -126,8 +137,11 @@ class PublisherAgent:
             )
             return self._skipped_result(summary, f"guardrail_block:{evaluation.decision.value}")
 
-        publication_key = self._make_publication_key(summary.article_id, summary.headline, run_id)
-        main_text       = self._compose_main_post(summary, personas)
+        # Stable publication key — no run_id suffix so it is identical across
+        # CronJob retries on the same day.  LinkedIn MCP uses this for its own
+        # idempotency; our PublishedStore uses article_id+date (set below).
+        publication_key = self._make_publication_key(summary.article_id, summary.headline)
+        main_text       = self._compose_main_post(summary, personas, jev_scores=jev_scores)
 
         # ── Step 1: publish the main post ───────────────────────────────────
         logger.info("[%s] publishing main post article=%s key=%s",
@@ -159,6 +173,9 @@ class PublisherAgent:
         else:
             logger.info("[%s] post published post_urn=%s status=%s",
                         run_id, post_urn, post_status)
+            # Mark as published in the persistent store immediately after success
+            # so any subsequent retry within the same day is blocked at gate 2.
+            published_store.mark_published(summary.article_id)
 
         # ── Step 2: persona comments — sequential, never gather() ───────────
         # NOTE: LinkedIn Comments API requires "Community Management API" product
@@ -264,132 +281,213 @@ class PublisherAgent:
 
     # ── Composition helpers ───────────────────────────────────────────────────
 
-    def _compose_main_post(self, summary: NewsSummary, personas: "PersonaSetOutput | None" = None) -> str:
+    def _compose_main_post(
+        self,
+        summary: NewsSummary,
+        personas: "PersonaSetOutput | None" = None,
+        jev_scores: dict | None = None,
+    ) -> str:
         """
-        Compose LinkedIn post with a clean, readable layout:
+        Social-first LinkedIn post layout (3000-char hard limit):
 
-          ① Header        — AI NEWS badge + headline (standalone for feed card)
-          ② Summary       — 2-3 sentences, breathing room
-          ③ Key Points    — bulleted, scannable
-          ④ Impact Tags   — Business / Workforce / Tech / Policy (when present)
-          ⑤ Source Link   — clean, clickable
-          ⑥ Perspectives  — 4 personas with evidence, numbered, spaced
-          ⑦ Tech Strategist — standalone practitioner take
-          ⑧ Disclaimer + Hashtags
-
-        LinkedIn Posts API hard limit: 3000 chars (HTTP 400 if exceeded).
-        Design budget: ~2600 chars with comfortable margin.
-
-        Truncation policy: each persona entry is clipped only at a sentence boundary
-        (last full stop) so no sentence is ever left incomplete.
+          ① Hook          — punchy 1-liner that stops the scroll
+          ② Context       — 2 sentences of substance
+          ③ Jev Decision  — transparent AI scoring: who, why, market signal
+          ④ What it means — 3 bulleted key points
+          ⑤ Impact snap   — Business / Workforce / Tech / Policy one-liners
+          ⑥ Source
+          ⑦ Perspectives  — Jev-routed mindsets, each scored, max 2 evidence bullets
+          ⑧ Tech Take     — standalone strategist view
+          ⑨ Jev Verdict   — final audience call + CTA question
+          ⑩ Footer        — disclaimer + attribution + hashtags
         """
-        POST_LIMIT = 2990  # safety margin under LinkedIn's 3000-char hard limit
+        POST_LIMIT = 3000
 
-        # ── ① Header + Headline ──────────────────────────────────────────────
-        # Headline on its own line so feed card preview renders it correctly on mobile.
-        lines = [
-            "🤖  AI NEWS",
-            "",
-            summary.headline,
-            "",
-        ]
+        # ── Fixed-cost blocks ──────────────────────────────────────────────────
+        # No dividers used — saving ~170 chars for content.
+        # Tail cost: verdict line(90) + CTA(42) + disclaimer(156) +
+        # hashtags(131) + newlines(10) = ~429. Use 440 as safe ceiling.
+        FOOTER_COST  = 440
+        VERDICT_COST = 0   # already folded into FOOTER_COST
 
-        # ── ② Summary ─────────────────────────────────────────────────────────
-        lines.append(summary.summary.strip())
-        lines.append("")
+        # Per-field caps that keep variable sections predictable
+        KEY_POINT_CAP    = 90   # each key point bullet
+        IMPACT_LINE_CAP  = 90   # each impact line (business/workforce/tech/policy)
 
-        # ── ③ Key Points ──────────────────────────────────────────────────────
-        lines.append("📌  Key Points")
-        for p in summary.key_points[:3]:
-            lines.append(f"  • {p}")
-        lines.append("")
+        # Shared persona metadata used across multiple sections
+        _PMETA = {
+            "business": ("💼", "Business",      "market strategy & ROI"),
+            "policy":   ("🏛️", "Policy",        "regulation & governance"),
+            "genz":     ("🎓", "Generalist",    "everyday impact & learning"),
+            "linkedin": ("🧠", "Tech+Workforce","strategy, tech & careers"),
+        }
+        _PV = {
+            "business": "💼 Business Strategists",
+            "policy":   "🏛️ Policy Makers",
+            "genz":     "🎓 Generalists",
+            "linkedin": "🧠 Tech & Workforce",
+        }
 
-        # ── ④ Impact Tags ─────────────────────────────────────────────────────
-        lines.append(f"📈  Business Impact   —  {summary.business_impact.strip()}")
-        lines.append(f"👷  Workforce Impact  —  {summary.job_impact.strip()}")
-        lines.append(f"🔬  Tech Impact       —  {summary.technology_impact.strip()}")
+        # Pull Jev signals upfront — used in multiple sections
+        has_jev   = bool(jev_scores and jev_scores.get("relevance_score"))
+        ps_scores = (jev_scores or {}).get("persona_scores", {})
+        active_p  = (jev_scores or {}).get("active_personas", [])
+        ranked    = sorted(
+            [(p, ps_scores.get(p, 0.0)) for p in active_p],
+            key=lambda x: x[1], reverse=True,
+        ) if has_jev else []
+
+        # Running char budget tracker — deduct as each section is built
+        remaining = POST_LIMIT - FOOTER_COST - VERDICT_COST
+
+        def _add(block: str, lines: list[str]) -> None:
+            """Append block to lines and deduct from remaining."""
+            nonlocal remaining
+            lines.append(block)
+            remaining -= len(block) + 1  # +1 for the \n join
+
+        # ── ① Hook ──────────────────────────────────────────────────────────
+        lines: list[str] = []
+        _add("🤖  AI NEWS  ·  Agentic AI", lines)
+        _add("", lines)
+        _add(summary.headline, lines)
+        _add("", lines)
+
+        # ── ② Context — full summary text, no cap ────────────────────────────
+        _add(summary.summary.strip(), lines)
+        _add("", lines)
+
+        # ── ③ Jev Decision ────────────────────────────────────────────────────
+        _add("⚙️  Jev Decision", lines)
+        _add("", lines)
+
+        if has_jev:
+            event_type   = str(jev_scores.get("event_type", "other")).replace("_", " ").title()
+            relevance    = jev_scores.get("relevance_score", 0.0)
+            significance = jev_scores.get("significance", 0.0)
+            engagement   = jev_scores.get("estimated_engagement", 0.0)
+            controversy  = str(jev_scores.get("controversy_level", "low")).title()
+
+            if ranked:
+                top_p, top_s = ranked[0]
+                em, lbl, desc = _PMETA.get(top_p, ("🎯", top_p.title(), ""))
+                _add(f"  {em}  Primary audience : {lbl} ({desc})  — {top_s:.0%} Jev score", lines)
+
+            bars    = round(min(max(significance * 5, 0.0), 5.0))
+            sig_bar = "█" * bars + "░" * (5 - bars)
+            _add(f"  📋  Story type      : {event_type}", lines)
+            _add(f"  🎯  AI relevance    : {relevance:.0%}   Market signal: [{sig_bar}]", lines)
+            _add(f"  ⚡  Engagement est. : {engagement:.0%}   Controversy: {controversy}", lines)
+
+            if ranked:
+                ranked_str = "  ›  ".join(
+                    f"{_PMETA.get(p, ('','',''))[0]} {_PMETA.get(p, ('',p,''))[1]} {s:.0%}"
+                    for p, s in ranked
+                )
+                _add(f"  👥  Audience impact : {ranked_str}", lines)
+
+            if significance >= 0.6 and relevance >= 0.75:
+                _add("  🔥  AI market shift : HIGH — potential to reshape the landscape.", lines)
+            elif significance >= 0.4 and relevance >= 0.60:
+                _add("  📡  AI market shift : MODERATE — notable movement, worth tracking.", lines)
+            else:
+                _add("  📊  AI market shift : INFORMATIONAL — relevant, not yet market-moving.", lines)
+        else:
+            if active_p:
+                routed_str = "  ·  ".join(
+                    f"{_PMETA.get(p, ('','',''))[0]} {_PMETA.get(p, ('',p,''))[1]}"
+                    for p in active_p
+                )
+                _add(f"  👥  Jev routed to   : {routed_str}", lines)
+            _add("  📋  Classified by Jev System One", lines)
+
+        _add("", lines)
+
+        # ── ④ What it means ───────────────────────────────────────────────────
+        _add("📌  What you need to know", lines)
+        for pt in summary.key_points[:3]:
+            _add(f"  • {_hard_clip(pt.strip(), KEY_POINT_CAP)}", lines)
+        _add("", lines)
+
+        # ── ⑤ Impact snap — hard-capped so personas always get enough budget ──
+        _add(f"📈  Business   —  {_hard_clip(summary.business_impact.strip(), IMPACT_LINE_CAP)}", lines)
+        _add(f"👷  Workforce  —  {_hard_clip(summary.job_impact.strip(), IMPACT_LINE_CAP)}", lines)
+        _add(f"🔬  Tech       —  {_hard_clip(summary.technology_impact.strip(), IMPACT_LINE_CAP)}", lines)
         if summary.policy_impact:
-            lines.append(f"🏛️  Policy Impact     —  {summary.policy_impact.strip()}")
-        lines.append("")
+            _add(f"🏛️  Policy     —  {_hard_clip(summary.policy_impact.strip(), IMPACT_LINE_CAP)}", lines)
+        _add("", lines)
 
-        # ── ⑤ Source Link ─────────────────────────────────────────────────────
-        lines.append(f"🔗  Source: {summary.source_url}")
-        lines.append("")
+        # ── ⑥ Source ─────────────────────────────────────────────────────────
+        _add(f"🔗  Read more: {summary.source_url}", lines)
+        _add("", lines)
 
-        # ── ⑥ 4-Persona Perspectives ──────────────────────────────────────────
+        # ── ⑦ Perspectives — all 4 personas, each with 2 evidence bullets ────
         if personas is not None:
-            lines.append("──────────────────")
-            lines.append("🧵  Perspectives")
-            lines.append("")
-
             persona_map = [
-                ("💼  Capitalist Mind",          personas.business),
-                ("👷  Working Professional Mind", personas.labor),
-                ("🏛️  Government Mind",           personas.policy),
-                ("🎓  Young / Fresher Mind",      personas.genz),
+                ("business", "💼  Capitalist Mind",      personas.business),
+                ("policy",   "🏛️  Government Mind",       personas.policy),
+                ("genz",     "🎓  Generalist Mind",       personas.genz),
+                ("linkedin", "🧠  Tech & Workforce Mind", personas.linkedin),
+            ]
+            active_pm = [
+                (key, label, p)
+                for key, label, p in persona_map
+                if p.perspective and p.perspective.strip()
             ]
 
-            # Budget: total limit minus fixed sections, split across 4 personas
-            fixed_overhead = (
-                len("\n".join(lines))  # everything above
-                + len(self._DISCLAIMER)
-                + 350   # tech strategist section estimate
-                + 120   # section separators + newlines
-            )
-            budget_total = POST_LIMIT - fixed_overhead
-            per_persona  = max(300, budget_total // 4)
+            if active_pm:
+                # Deduct section header line before dividing budget per persona
+                section_header_cost = len("🧵  Perspectives  ·  Jev-selected audience mindsets") + 2
+                persona_budget = max(0, remaining - section_header_cost)
+                per_persona    = max(180, persona_budget // len(active_pm))
 
-            for label, p in persona_map:
-                perspective = p.perspective.strip()
+                _add("🧵  Perspectives  ·  Jev-selected audience mindsets", lines)
+                _add("", lines)
 
-                # Format evidence as clean bullets (max 2)
-                evidence_bullets = ""
-                if p.evidence:
-                    ev_lines = []
-                    for ev in p.evidence[:2]:
-                        ev = ev.strip()
-                        if ev:
-                            ev_lines.append(f"    ↳  {ev}")
-                    if ev_lines:
-                        evidence_bullets = "\n" + "\n".join(ev_lines)
+                for key, label, p in active_pm:
+                    # Build the 2 evidence bullets first — they are mandatory
+                    ev_lines = [
+                        f"  • {ev.strip()}"
+                        for ev in (p.evidence or [])[:2]
+                        if ev.strip()
+                    ]
+                    ev_block = "\n".join(ev_lines)
+                    ev_cost  = len(ev_block) + 2 if ev_block else 0  # +2 for \n prefix
 
-                entry = f"{label}\n{perspective}{evidence_bullets}"
-                entry = _clip_at_sentence(entry, per_persona)
+                    # Clip perspective to whatever is left after label + bullets
+                    label_cost = len(label) + 1  # +1 for \n
+                    perspective_limit = max(80, per_persona - label_cost - ev_cost - 4)
+                    clipped_perspective = _clip_at_sentence(
+                        p.perspective.strip(), perspective_limit
+                    )
 
-                lines.append(entry)
-                lines.append("")
+                    # Assemble: label \n perspective \n bullet1 \n bullet2
+                    parts = [f"{label}\n{clipped_perspective}"]
+                    if ev_block:
+                        parts.append(ev_block)
+                    _add("\n".join(parts), lines)
+                    _add("", lines)
 
-        # ── ⑦ Tech Strategist — practitioner take ────────────────────────────
-        if personas is not None:
-            ts = personas.linkedin
-            ts_perspective = ts.perspective.strip()
+        # ── ⑧ Jev Verdict + CTA ──────────────────────────────────────────────
+        if ranked:
+            top3 = "  ›  ".join(_PV.get(p, p.title()) for p, _ in ranked[:3])
+            _add(f"⚙️  Jev Decision  —  {top3}", lines)
+        elif active_p:
+            top3 = "  ›  ".join(_PV.get(p, p.title()) for p in active_p[:3])
+            _add(f"⚙️  Jev Decision  —  {top3}", lines)
+        else:
+            _add("⚙️  Jev Decision  —  classified & routed via decision model.", lines)
+        _add("", lines)
+        _add("💬  Real Human Take — drop yours below. 👇", lines)
+        _add("", lines)
 
-            ts_evidence = ""
-            if ts.evidence:
-                ev_lines = []
-                for ev in ts.evidence[:2]:
-                    ev = ev.strip()
-                    if ev:
-                        ev_lines.append(f"    ↳  {ev}")
-                if ev_lines:
-                    ts_evidence = "\n" + "\n".join(ev_lines)
+        # ── ⑩ Footer ─────────────────────────────────────────────────────────
+        _add(self._DISCLAIMER, lines)
+        _add("", lines)
+        _add(self._HASHTAGS, lines)
 
-            ts_entry = f"🧠  Tech Strategist Mind\n{ts_perspective}{ts_evidence}"
-            ts_entry = _clip_at_sentence(ts_entry, 350)
-
-            lines.append("──────────────────")
-            lines.append(ts_entry)
-            lines.append("")
-
-        # ── ⑧ Disclaimer + Hashtags ───────────────────────────────────────────
-        lines.append(self._DISCLAIMER)
-        lines.append("")
-        lines.append(self._HASHTAGS)
-
-        text = "\n".join(lines)
-
-        # Final hard-cap at LinkedIn's 3000-char API limit
-        return text[:POST_LIMIT]
+        # Final join — LinkedIn hard limit is 3000 chars; slice only as safety net
+        return "\n".join(lines)[:POST_LIMIT]
 
     @staticmethod
     def _compose_comment(label: str, perspective: str, evidence: list[str]) -> str:
@@ -405,16 +503,18 @@ class PublisherAgent:
         return "\n".join(lines)
 
     @staticmethod
-    def _make_publication_key(article_id: str, headline: str, run_id: str = "") -> str:
+    def _make_publication_key(article_id: str, headline: str) -> str:
         """
-        Idempotency key: article_id + today's date + headline hash.
-        run_id suffix lets manual re-triggers publish fresh posts on the same day
-        (e.g. after a format change). CronJob omits run_id so it stays stable.
+        Stable idempotency key for the LinkedIn MCP layer:
+            {article_id}:{YYYY-MM-DD}:{headline_hash[:12]}
+
+        No run_id suffix — identical across all CronJob retries on the same day.
+        Cross-run deduplication is enforced by PublishedStore (gate 2), which checks
+        article_id+date before this key is even generated.
         """
         today        = date.today().isoformat()
         content_hash = hashlib.sha256(headline.encode()).hexdigest()[:12]
-        suffix       = f":{run_id[-8:]}" if run_id else ""
-        return f"{article_id}:{today}:{content_hash}{suffix}"
+        return f"{article_id}:{today}:{content_hash}"
 
     @staticmethod
     def _skipped_result(summary: NewsSummary, reason: str) -> dict:

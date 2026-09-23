@@ -8,10 +8,9 @@ from pydantic import BaseModel
 
 class PersonaType(str, Enum):
     BUSINESS = "business"
-    LABOR = "labor"
-    POLICY = "policy"
-    GENZ = "genz"
-    LINKEDIN = "linkedin"
+    POLICY   = "policy"
+    GENZ     = "genz"      # display: Generalist Mind
+    LINKEDIN = "linkedin"  # display: Tech & Workforce Mind (merged labor + tech strategist)
 
 
 class PersonaOutput(BaseModel):
@@ -24,7 +23,6 @@ class PersonaOutput(BaseModel):
 class PersonaSetOutput(BaseModel):
     article_id: str
     business: PersonaOutput
-    labor: PersonaOutput
-    policy: PersonaOutput
-    genz: PersonaOutput
+    policy:   PersonaOutput
+    genz:     PersonaOutput
     linkedin: PersonaOutput

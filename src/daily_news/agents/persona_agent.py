@@ -22,20 +22,27 @@ import httpx
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from daily_news.config.settings import get_settings
 from daily_news.models.persona import PersonaOutput, PersonaSetOutput, PersonaType
 from daily_news.models.summary import NewsSummary
 from daily_news.observability.tracing import get_langfuse_callback
 
+
+class _PersonaOutputRaw(BaseModel):
+    """Lenient parse target — accepts any string for persona so the LLM's
+    display-name output doesn't fail validation. The real PersonaType is
+    injected from agent context after parsing."""
+    persona:     str
+    perspective: str
+    evidence:    list[str]
+    article_id:  str
+
 PERSONA_FOCUS: dict[PersonaType, dict] = {
     PersonaType.BUSINESS: {
         "name": "Capitalist Mind",
         "focus": "revenue growth, cost reduction, productivity gains, market disruption, enterprise adoption, ROI, competitive advantage, investment thesis",
-    },
-    PersonaType.LABOR: {
-        "name": "Working Professional Mind",
-        "focus": "job security, employment impact, automation threats, worker reskilling, wage effects, career transitions, union implications, income distribution",
     },
     PersonaType.POLICY: {
         "name": "Government Mind",
@@ -46,12 +53,12 @@ PERSONA_FOCUS: dict[PersonaType, dict] = {
         ),
     },
     PersonaType.GENZ: {
-        "name": "Young / Fresher Mind",
-        "focus": "career entry, learning opportunities, everyday technology impact, digital culture, skill building, entrepreneurial angles, generational opportunity",
+        "name": "Generalist Mind",
+        "focus": "broad societal impact, everyday technology use, learning opportunities, career entry, digital culture, skill building, entrepreneurial angles, what this means for people outside the tech bubble",
     },
     PersonaType.LINKEDIN: {
-        "name": "Tech Strategist Mind",
-        "focus": "technology strategy, product innovation, platform implications, engineering trade-offs, startup opportunities, build-vs-buy decisions, architectural impact, what practitioners should do next",
+        "name": "Tech & Workforce Mind",
+        "focus": "technology strategy, engineering trade-offs, build-vs-buy decisions, architectural impact, AND workforce implications — job security, automation threats, worker reskilling, career transitions, what practitioners and knowledge workers should do next",
     },
 }
 
@@ -94,14 +101,13 @@ class PersonaAgent:
             http_client=httpx.Client(verify=False),
             http_async_client=httpx.AsyncClient(verify=False),
         )
-        self._parser = PydanticOutputParser(pydantic_object=PersonaOutput)
+        self._parser = PydanticOutputParser(pydantic_object=_PersonaOutputRaw)
 
         # Map persona enum values to prompt file names
         _PROMPT_FILE_MAP = {
             PersonaType.BUSINESS: "capitalist",
-            PersonaType.LABOR: "labor",
-            PersonaType.POLICY: "policy",
-            PersonaType.GENZ: "genz",
+            PersonaType.POLICY:   "policy",
+            PersonaType.GENZ:     "genz",
             PersonaType.LINKEDIN: "linkedin",
         }
 
@@ -157,7 +163,7 @@ class PersonaAgent:
         callbacks = [handler] if handler else []
 
         chain = self._prompt | self._llm | self._parser
-        raw: PersonaOutput = await chain.ainvoke(
+        raw: _PersonaOutputRaw = await chain.ainvoke(
             {
                 "article_id":          summary.article_id,
                 "headline":            summary.headline,
@@ -180,7 +186,7 @@ class PersonaAgent:
 
 
 class PersonaAgentFactory:
-    """Runs all five persona agents and returns a PersonaSetOutput."""
+    """Runs all four persona agents and returns a PersonaSetOutput."""
 
     def __init__(self) -> None:
         self._agents = {p: PersonaAgent(p) for p in PersonaType}
@@ -190,21 +196,49 @@ class PersonaAgentFactory:
         summary: NewsSummary,
         evidence_sections: str,
         run_id: str | None = None,
+        personas: list[PersonaType] | None = None,
     ) -> PersonaSetOutput:
-        # All five personas run in parallel — each gets its own Langfuse trace
-        # but they all share session_id=run_id so they appear together in the UI
+        """
+        Generate perspectives for the given personas in parallel.
+
+        personas — subset to run (from jev_route_personas). Defaults to all four.
+        Any persona not in the active subset receives a stub output so that
+        PersonaSetOutput (which requires all four fields) can always be constructed.
+        """
+        active = set(personas) if personas else set(PersonaType)
+
+        # Run only the active personas in parallel
         outputs = await asyncio.gather(
             *[
                 self._agents[p].generate(summary, evidence_sections, run_id=run_id)
                 for p in PersonaType
+                if p in active
             ]
         )
         mapping = {o.persona: o for o in outputs}
+
+        # Fill any skipped persona with a stub so the model is always complete
+        for p in PersonaType:
+            if p not in mapping:
+                mapping[p] = _stub_persona(p, summary.article_id)
+
         return PersonaSetOutput(
             article_id=summary.article_id,
             business=mapping[PersonaType.BUSINESS],
-            labor=mapping[PersonaType.LABOR],
             policy=mapping[PersonaType.POLICY],
             genz=mapping[PersonaType.GENZ],
             linkedin=mapping[PersonaType.LINKEDIN],
         )
+
+
+def _stub_persona(persona: PersonaType, article_id: str) -> "PersonaOutput":
+    """
+    Returns an empty PersonaOutput for a persona that was skipped by Jev routing.
+    The publisher agent checks for empty perspective strings and omits them.
+    """
+    return PersonaOutput(
+        persona=persona,
+        article_id=article_id,
+        perspective="",   # publisher treats empty string as skipped
+        evidence=[],
+    )
