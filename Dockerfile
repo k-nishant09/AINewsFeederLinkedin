@@ -6,7 +6,7 @@ FROM image-registry.openshift-image-registry.svc:5000/openshift/python:3.11-ubi9
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
+    PIP_NO_CACHE_DIR=off \
     PYTHONPATH=/app/src
 
 WORKDIR /app
@@ -16,7 +16,9 @@ COPY pyproject.toml README.md ./
 COPY src/ ./src/
 COPY prompts/ ./prompts/
 
-RUN pip install --upgrade pip && \
+# ── Separate pip install step so layer is cached when only src/ changes ──────
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
     pip install \
         fastapi "uvicorn[standard]" pydantic pydantic-settings \
         langchain langchain-core langchain-openai langgraph \

@@ -1,0 +1,47 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+**/__pycache__/
+**/*.py[cod]
+**/*.pyo
+**/*.pyd
+.Python
+
+# Git
+.git/
+.gitignore
+
+# Test artefacts
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+.tox/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local env files (secrets never in image)
+.env
+.env.*
+!.env.example
+
+# Docs (keep README.md — required by Dockerfile COPY step)
+docs/
+RUNBOOK.md
+ARCHITECTURE.md
+CONTRIBUTING.md
+CHANGELOG.md
+
+# Skills file
+skills.md
