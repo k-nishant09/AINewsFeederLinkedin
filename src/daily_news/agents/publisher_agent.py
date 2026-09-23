@@ -323,10 +323,10 @@ class PublisherAgent:
             lines.append("")
 
             persona_map = [
-                ("1/4", "💼  Capitalist Mind",          personas.business),
-                ("2/4", "👷  Working Professional Mind", personas.labor),
-                ("3/4", "🏛️  Government Mind",           personas.policy),
-                ("4/4", "🎓  Young / Fresher Mind",      personas.genz),
+                ("💼  Capitalist Mind",          personas.business),
+                ("👷  Working Professional Mind", personas.labor),
+                ("🏛️  Government Mind",           personas.policy),
+                ("🎓  Young / Fresher Mind",      personas.genz),
             ]
 
             # Budget: total limit minus fixed sections, split across 4 personas
@@ -339,7 +339,7 @@ class PublisherAgent:
             budget_total = POST_LIMIT - fixed_overhead
             per_persona  = max(300, budget_total // 4)
 
-            for num, label, p in persona_map:
+            for label, p in persona_map:
                 perspective = p.perspective.strip()
 
                 # Format evidence as clean bullets (max 2)
@@ -353,7 +353,7 @@ class PublisherAgent:
                     if ev_lines:
                         evidence_bullets = "\n" + "\n".join(ev_lines)
 
-                entry = f"{num}  {label}\n{perspective}{evidence_bullets}"
+                entry = f"{label}\n{perspective}{evidence_bullets}"
                 entry = _clip_at_sentence(entry, per_persona)
 
                 lines.append(entry)
