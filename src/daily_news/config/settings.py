@@ -25,13 +25,26 @@ class Settings(BaseSettings):
     # Default to IBM gateway; override via LLM_API_KEY env var in production.
     llm_api_key: str = Field("", alias="LLM_API_KEY")
     llm_base_url: str = Field(
-        "https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com/v1",
+        "",
         alias="LLM_BASE_URL",
     )
     llm_model: str = Field("qwen2-5-72b-instruct", alias="LLM_MODEL")
-    # Available models on this gateway:
-    #   qwen2-5-72b-instruct   — primary (chat/reasoning)
-    #   granite-embedding-125m — embeddings only
+
+    # ── Jev System One Gateway ────────────────────────────────────────────────
+    # System One model for fast structured decisions: article scoring,
+    # persona routing, and content evaluation.
+    # Ref: https://typesafe.ai/blog/introducing-system-one-models-and-jev
+    #
+    # Endpoint:  POST /v1/systemone
+    # Health:    GET  /health  (no auth required)
+    # Model:     Qwen/Qwen3.5-2B  method: lora_decision_head
+    jev_base_url: str = Field(
+        "",
+        alias="JEV_BASE_URL",
+    )
+    jev_api_key: str = Field("", alias="JEV_API_KEY")
+    # Set JEV_ENABLED=false to fall back to LLM-based evaluation / blind article selection.
+    jev_enabled: bool = Field(True, alias="JEV_ENABLED")
 
     # ── MCP Server URLs ───────────────────────────────────────────────────────
     # Defaults are localhost ports used by docker-compose / local dev.
@@ -74,9 +87,12 @@ class Settings(BaseSettings):
         return bool(self.langfuse_public_key and self.langfuse_secret_key)
 
     # ── Evaluation thresholds ─────────────────────────────────────────────────
-    eval_factuality_threshold: float = 0.90
-    eval_groundedness_threshold: float = 0.90
-    eval_hallucination_threshold: float = 0.05
+    # Calibrated for Jev score-based outputs (scores normalised 0-1 from 0..4).
+    # Jev factuality/groundedness scores ~0.5-0.7 on good content; hallucination
+    # ~0.2-0.4 on clean content.  These match the ConfigMap values in the cluster.
+    eval_factuality_threshold: float = Field(0.50, alias="EVAL_FACTUALITY_THRESHOLD")
+    eval_groundedness_threshold: float = Field(0.50, alias="EVAL_GROUNDEDNESS_THRESHOLD")
+    eval_hallucination_threshold: float = Field(0.85, alias="EVAL_HALLUCINATION_THRESHOLD")
     eval_max_retries: int = 2
 
 

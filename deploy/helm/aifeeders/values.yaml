@@ -84,7 +84,7 @@ linkedinMcp:
 
 # ── LLM Gateway ───────────────────────────────────────────────────────────────
 llm:
-  baseUrl: "https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com/v1"
+  baseUrl: ""  # Set to your OpenAI-compatible LLM endpoint
   model: "qwen2-5-72b-instruct"
 
 # ── Evaluation thresholds ─────────────────────────────────────────────────────

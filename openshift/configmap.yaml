@@ -16,7 +16,7 @@ data:
   LINKEDIN_MCP_URL: "http://linkedin-mcp:8000/mcp"
 
   # LLM Gateway — IBM OpenShift Model Gateway
-  LLM_BASE_URL: "https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com/v1"
+  LLM_BASE_URL: ""  # Set to your OpenAI-compatible LLM endpoint
   LLM_MODEL: "qwen2-5-72b-instruct"
 
   # Observability — disabled (no OTEL collector in this cluster)

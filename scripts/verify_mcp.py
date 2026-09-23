@@ -484,7 +484,7 @@ def main() -> int:
     env = check_env()
 
     llm_ok     = check_llm_gateway(
-                     env.get("LLM_BASE_URL", "https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com/v1"),
+                     env.get("LLM_BASE_URL", ""),  # Set LLM_BASE_URL in env
                      env.get("LLM_API_KEY", ""),
                      env.get("LLM_MODEL", "qwen2-5-72b-instruct"),
                      args.dry_run,

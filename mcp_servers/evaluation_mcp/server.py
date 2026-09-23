@@ -34,7 +34,7 @@ mcp = FastMCP("Evaluation MCP Server")
 
 LLM_BASE_URL = os.environ.get(
     "LLM_BASE_URL",
-    "https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com/v1",
+    "",  # Set LLM_BASE_URL in env — required
 )
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2-5-72b-instruct")

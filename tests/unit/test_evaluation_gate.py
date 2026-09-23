@@ -33,13 +33,16 @@ class TestEvaluationGate:
         assert self._gate(_make_result()) == EvaluationDecision.PASS
 
     def test_regenerate_when_factuality_low(self):
-        assert self._gate(_make_result(factuality=0.85)) == EvaluationDecision.REGENERATE
+        # Jev threshold is 0.50; 0.40 is below it
+        assert self._gate(_make_result(factuality=0.40)) == EvaluationDecision.REGENERATE
 
     def test_regenerate_when_groundedness_low(self):
-        assert self._gate(_make_result(groundedness=0.80)) == EvaluationDecision.REGENERATE
+        # Jev threshold is 0.50; 0.45 is below it
+        assert self._gate(_make_result(groundedness=0.45)) == EvaluationDecision.REGENERATE
 
     def test_regenerate_when_hallucination_high(self):
-        assert self._gate(_make_result(hallucination=0.10)) == EvaluationDecision.REGENERATE
+        # Jev threshold is 0.85; 0.90 is above it
+        assert self._gate(_make_result(hallucination=0.90)) == EvaluationDecision.REGENERATE
 
     def test_human_review_when_policy_fails(self):
         assert self._gate(_make_result(policy_check="FAIL")) == EvaluationDecision.HUMAN_REVIEW
