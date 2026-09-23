@@ -95,15 +95,32 @@ class PersonaAgent:
             http_async_client=httpx.AsyncClient(verify=False),
         )
         self._parser = PydanticOutputParser(pydantic_object=PersonaOutput)
+
+        # Map persona enum values to prompt file names
+        _PROMPT_FILE_MAP = {
+            PersonaType.BUSINESS: "capitalist",
+            PersonaType.LABOR: "labor",
+            PersonaType.POLICY: "policy",
+            PersonaType.GENZ: "genz",
+            PersonaType.LINKEDIN: "linkedin",
+        }
+
+        # Load the humanized persona prompt from the prompts directory
+        prompt_file = _PROMPT_FILE_MAP.get(persona, persona.value)
+        persona_prompt = _load_prompt(prompt_file)
+        if not persona_prompt:
+            # Fallback to BASE_SYSTEM if prompt file not found
+            persona_prompt = BASE_SYSTEM.format(
+                persona_name=self._meta["name"],
+                focus=self._meta["focus"],
+                guardrail=self._meta.get("guardrail", ""),
+            )
+
         self._prompt = ChatPromptTemplate.from_messages(
             [
                 (
                     "system",
-                    BASE_SYSTEM.format(
-                        persona_name=self._meta["name"],
-                        focus=self._meta["focus"],
-                        guardrail=self._meta.get("guardrail", ""),
-                    ),
+                    persona_prompt,
                 ),
                 (
                     "human",
