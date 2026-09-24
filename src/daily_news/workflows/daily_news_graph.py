@@ -5,26 +5,27 @@ LangGraph Daily News Workflow — with Jev System One decision nodes
 State machine:
 
   START
-    └─► discover_news
-          └─► deduplicate
+    └─► discover_news         9 GNews queries (hours=24) → ~27 fresh articles
+          └─► deduplicate     MD5 hash dedup + PublishedStore cross-run filter
                 └─► fetch_articles
                       └─► index_pageindex
-                            └─► jev_prefilter         ← NEW: Jev scores all articles
-                                  └─► summarize             picks best by relevance
-                                        └─► jev_route_personas  ← NEW: Jev picks relevant personas
-                                              └─► generate_personas  (subset only)
-                                                    └─► evaluate      ← UPDATED: Jev scores content
-                                                          ├─► REGENERATE ─► summarize  (max retries)
-                                                          ├─► HUMAN_REVIEW ─► human_approval gate
+                            └─► jev_prefilter         ← Jev Decision #1: scores all, picks top 2
+                                  └─► summarize             LLM → structured summary (≤350 chars)
+                                        └─► jev_router      ← Jev Decision #2: picks relevant personas
+                                              └─► generate_personas  (active subset only, parallel)
+                                                    └─► evaluate     ← Jev Decision #3: quality gating
+                                                          ├─► REGENERATE ─► summarize  (max 2 retries)
+                                                          ├─► BLOCK      ─► hard stop (PII / injection)
+                                                          ├─► HUMAN_REVIEW ─► approval gate
                                                           └─► PASS
-                                                                └─► publish
+                                                                └─► publish  (3 dedup gates)
                                                                       └─► END
 
 Jev integration points
 ──────────────────────
-1. jev_prefilter      replaces blind [:1] article selection
-2. jev_route_personas replaces always-run-all-five persona generation
-3. EvaluationAgent    uses JevClient.evaluate_content() for scoring
+1. jev_prefilter   replaces blind [:2] article selection
+2. jev_router      replaces always-run-all-four persona generation
+3. EvaluationAgent uses JevClient.evaluate_content() → 9 quality questions
 
 All three fall back gracefully when JEV_ENABLED=false or on network error.
 """
@@ -56,13 +57,19 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES = 2
 # Queries issued against the News MCP server (GNews backend).
 # Each tuple: (query_string, NewsCategory)
+# 9 queries across distinct topic buckets — maximises variety in the daily article pool.
+# hours=24 (set in discover_news) ensures only today's articles are returned, not stale GNews cache.
 AI_SEARCH_QUERIES = [
-    ("artificial intelligence LLM agentic AI model",           NewsCategory.AI_TECHNOLOGY),
+    ("artificial intelligence LLM agentic AI model",              NewsCategory.AI_TECHNOLOGY),
     ("artificial intelligence finance investment funding fintech", NewsCategory.AI_BUSINESS),
-    ("AI enterprise automation business productivity",          NewsCategory.AI_BUSINESS),
-    ("AI jobs employment automation workforce reskilling",      NewsCategory.AI_JOBS),
-    ("AI regulation policy governance AI Act",                  NewsCategory.AI_POLICY),
-    ("AI product launch release announcement",                  NewsCategory.AI_PRODUCTS),
+    ("AI enterprise automation business productivity",             NewsCategory.AI_BUSINESS),
+    ("AI jobs employment automation workforce reskilling",         NewsCategory.AI_JOBS),
+    ("AI regulation policy governance AI Act",                     NewsCategory.AI_POLICY),
+    ("AI product launch release announcement",                     NewsCategory.AI_PRODUCTS),
+    # 3 additional queries added to surface fresh articles Jev hasn't seen before
+    ("AI chip semiconductor Nvidia GPU datacenter",                NewsCategory.AI_TECHNOLOGY),
+    ("Anthropic OpenAI Google DeepMind model release",             NewsCategory.AI_TECHNOLOGY),
+    ("AI acquisition merger startup funding round",                NewsCategory.AI_BUSINESS),
 ]
 
 
@@ -125,8 +132,8 @@ async def discover_news(state: NewsWorkflowState) -> NewsWorkflowState:
         try:
             results = await client.search_latest(
                 query=query,
-                hours=48,
-                limit=20,
+                hours=24,   # 24h window — ensures today's articles, not stale GNews cache
+                limit=10,   # GNews free-tier cap is 10 results per query
                 category=category.value,
             )
             found = results.get("articles", [])
@@ -400,7 +407,10 @@ async def publish(state: NewsWorkflowState) -> NewsWorkflowState:
             tags=["publish"],
             metadata={"run_id": run_id},
         )
-        jev_scores = state.get("jev_prefilter_scores") or {}
+        # jev_prefilter_scores is now keyed by article_id (dict[article_id → scores])
+        # so each article gets its own Jev scores, not always article #1's scores.
+        _all_jev = state.get("jev_prefilter_scores") or {}
+        jev_scores = _all_jev.get(summary.article_id) if isinstance(_all_jev, dict) else None
         try:
             result = await agent.publish(
                 summary, personas, run_id,

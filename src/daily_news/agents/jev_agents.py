@@ -113,16 +113,21 @@ async def jev_prefilter_articles(state: dict) -> dict:
             result.persona_fit,
         )
 
-    # jev_prefilter_scores carries the #1 article's scores for the post display.
-    prefilter_scores = {
-        "event_type":           best_result.event_type,
-        "relevance_score":      best_result.relevance_score,
-        "significance":         best_result.significance,
-        "estimated_engagement": best_result.estimated_engagement,
-        "controversy_level":    best_result.controversy_level,
-        "active_personas":      best_result.persona_fit,
-        "persona_scores":       best_result.persona_scores,
-    }
+    # jev_prefilter_scores is keyed by article_id so each article in the publish
+    # loop can look up its OWN scores — not always article #1's scores.
+    # Shape: { "<article_id>": { event_type, relevance_score, ... }, ... }
+    prefilter_scores: dict[str, dict] = {}
+    for _, article, result in top2:
+        aid = article.get("article_id", result.article_id)
+        prefilter_scores[aid] = {
+            "event_type":           result.event_type,
+            "relevance_score":      result.relevance_score,
+            "significance":         result.significance,
+            "estimated_engagement": result.estimated_engagement,
+            "controversy_level":    result.controversy_level,
+            "active_personas":      result.persona_fit,
+            "persona_scores":       result.persona_scores,
+        }
 
     return {
         **state,
