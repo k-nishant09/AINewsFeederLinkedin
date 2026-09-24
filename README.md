@@ -1,6 +1,6 @@
 # AIFeeders — AI Daily News Platform
 
-> **Four personas. Jev System One AI decision engine. Publishes daily to LinkedIn automatically.**  
+> **Four personas. Jev System One AI decision engine. Publishes daily to LinkedIn automatically.**
 > Build #62 · OpenShift `aifeeders` · EKS-portable · LangGraph state machine
 
 ---
@@ -93,7 +93,7 @@ CronJob (10:00 UTC)
                                 │  → jev_persona_hints: persona_fit from best article
                                 └─► summarize             LLM → structured NewsSummary (≤350 chars)
                                       └─► jev_router         [Jev Decision #2]
-                                            │  4 noul questions on the NewsSummary
+                                            │  4 noul questions on the NewsSummary text
                                             │  Merges with jev_persona_hints (union)
                                             │  → jev_active_personas (subset, always ≥ 1)
                                             └─► generate_personas  (active subset only, parallel)
@@ -112,9 +112,10 @@ CronJob (10:00 UTC)
 ```
 
 **Jev System One** makes three decisions per run:
-1. **Which articles matter** — scores all articles, picks top 2 by composite (relevance × 0.6 + engagement × 0.4)
-2. **Which personas should respond** — routes only relevant personas (saves 2–4 LLM calls per run)
-3. **Is the content safe to publish** — factuality ≥ 0.50, groundedness ≥ 0.50, hallucination ≤ 0.85; PII/injection → hard BLOCK
+
+1. **Which articles matter** — scores all articles, picks top 2 by composite (relevance × 0.6 + engagement × 0.4).
+2. **Which personas should respond** — routes only relevant personas, saving 2–4 LLM calls per run.
+3. **Is the content safe to publish** — factuality ≥ 0.50, groundedness ≥ 0.50, hallucination ≤ 0.85; PII or injection triggers a hard BLOCK.
 
 ---
 
@@ -123,12 +124,12 @@ CronJob (10:00 UTC)
 | Decision point | Before Jev | With Jev |
 |---|---|---|
 | Article selection | Blind `[:2]` — first 2 in GNews order, same stale articles repeated | 11-dimension score per article in < 2s; picks genuinely best from fresh pool |
-| Persona routing | Always 4 LLM calls regardless of relevance | 1 Jev call → activates only relevant personas (e.g. 2 of 4 for a regulation story) |
-| Content evaluation | LLM evaluating LLM output — expensive + hallucination risk in the evaluator | Jev returns calibrated floats (no free text) for 10 quality dimensions |
-| Hook category label | Hard-coded `AI NEWS` always | `event_type` from Jev → `AI REGULATION`, `Funding & M&A`, `AI Research`, etc. |
-| Post audience section | Ordered by code, not relevance | Ranked by Jev `persona_scores` (highest-scoring persona listed first) |
+| Persona routing | Always 4 LLM calls regardless of relevance | 1 Jev call activates only relevant personas (e.g. 2 of 4 for a regulation story) |
+| Content evaluation | LLM evaluating LLM output — expensive and hallucination risk in the evaluator | Jev returns calibrated floats (no free text) for 10 quality dimensions |
+| Hook category label | Hard-coded `AI NEWS` always | `event_type` from Jev maps to `AI REGULATION`, `Funding & M&A`, `AI Research`, etc. |
+| Post audience section | Ordered by code, not relevance | Ranked by Jev `persona_scores` — highest-scoring persona listed first |
 
-Jev answers structured multi-question queries (`noul`, `choice`, `score` types) in **one HTTP call** to `POST /v1/systemone`. It returns float scores and named labels — never free text. Every decision is **fast** (< 2s), **cheap**, and **threshold-comparable** (no text interpretation needed downstream).
+Jev answers structured multi-question queries (`noul`, `choice`, `score` types) in **one HTTP call** to `POST /v1/systemone`. It returns float scores and named labels — never free text. Every decision is **fast** (< 2s), **cheap**, and **threshold-comparable** — no text interpretation needed downstream.
 
 ### Jev Integration — Three Decision Points
 
@@ -202,10 +203,10 @@ Article dicts (raw, ≤30)
     HUMAN_REVIEW: borderline (policy_check=REVIEW)
 ```
 
-**Fallback behaviour:** `JEV_ENABLED=false` or gateway timeout/error:
-- `jev_prefilter` → first 2 articles (`[:2]`) — no scoring
-- `jev_router` → all 4 personas
-- evaluator → `EvaluationMCPClient` (LLM-based fallback)
+**Fallback behaviour** when `JEV_ENABLED=false` or a gateway timeout occurs:
+- `jev_prefilter` → first 2 articles (`[:2]`) with no scoring.
+- `jev_router` → all 4 personas activated.
+- `evaluator` → `EvaluationMCPClient` (LLM-based fallback).
 
 ---
 
@@ -220,34 +221,34 @@ Article dicts (raw, ≤30)
 
 Each persona produces: **3 sentences of perspective + 2 evidence bullets** from the article.
 
-**Personas are Jev-routed** — only the relevant ones run. On a regulation story, only `policy` + `genz` may activate. On a product launch, all 4 may run. The post's `Perspectives` section orders them by Jev persona score (highest-scoring audience listed first). Prompt files: [`prompts/`](prompts/). Voice guide: [`skills.md`](skills.md).
+**Personas are Jev-routed** — only the relevant ones run. On a regulation story, only `policy` + `genz` may activate. On a product launch, all 4 may run. The post's `Perspectives` section orders them by Jev persona score — highest-scoring audience listed first. Prompt files: [`prompts/`](prompts/). Voice guide: [`skills.md`](skills.md).
 
 ---
 
 ## Deduplication — How Duplicate Posts Are Prevented
 
-The CronJob can be retried, manually re-triggered, or run twice on the same day. Three independent gates prevent any article from being published more than once:
+The CronJob can be retried, manually re-triggered, or run twice on the same day. Three independent gates prevent any article from being published more than once.
 
 ```
 Gate 1 — deduplicate node (before any LLM work begins)
   ┌─ Pass 1: within-run dedup
-  │    MD5 hash of (title + URL) → removes duplicate articles returned by multiple
-  │    GNews queries in the same run (9 queries → same article can appear 3×)
+  │    MD5 hash of (title + URL) removes duplicate articles returned by multiple
+  │    GNews queries in the same run (9 queries → same article can appear 3×).
   └─ Pass 2: cross-run dedup
        PublishedStore.filter_unpublished(articles)
-       Removes articles already published today — checked BEFORE summarise/generate
-       Saves cost: no LLM calls for known stale articles
+       Removes articles already published today — checked BEFORE summarise/generate.
+       No LLM calls are made for known stale articles; cost is saved upfront.
 
-Gate 2 — publish node (right before LinkedIn API call)
+Gate 2 — publish node (right before the LinkedIn API call)
   PublishedStore.is_published(article_id)
-  Catches race conditions: two simultaneous runs that both passed Gate 1
+  Catches race conditions: two simultaneous runs that both passed Gate 1.
 
 Gate 3 — LinkedIn MCP idempotency key
   publication_key = "{article_id}:{YYYY-MM-DD}:{body_hash[:12]}"
-  Stable across CronJob retries (no run_id in the key)
-  body_hash = sha256 of full composed post body → any content change forces a new post
-  Even if Gates 1 and 2 both fail, LinkedIn MCP server returns the existing URN
-  (or detects the duplicate via its own server-side key lookup)
+  Stable across CronJob retries — no run_id in the key.
+  body_hash = sha256 of full composed post body; any content change forces a new post.
+  Even if Gates 1 and 2 both fail, LinkedIn MCP returns the existing URN
+  (or detects the duplicate via its own server-side key lookup).
 ```
 
 **PublishedStore** — file-backed at `/tmp/aifeeders_published.json`:
@@ -259,23 +260,23 @@ Gate 3 — LinkedIn MCP idempotency key
 | TTL | 7 days — entries older than 7 days are purged automatically on load |
 | Thread safety | `threading.Lock` — safe for a single process |
 | File size | < 2 KB (7 days × 2 articles/day × ~50 bytes/entry) |
-| Failure mode | I/O error → logs warning + does **not** block publishing (availability beats dedup) |
+| Failure mode | I/O error → logs warning and does **not** block publishing (availability beats dedup) |
 | Env override | `AIFEEDERS_STORE_PATH` — change path to a mounted PVC for persistence across pod restarts |
 
 **Full lifecycle per entry:**
 
 ```
-discover_news       article_id = MD5(title + URL) — assigned on first discovery
-deduplicate node    Pass 1: MD5 hash dedup within this run
-                    Pass 2: PublishedStore.filter_unpublished() — Gate 1
-                    → Articles published earlier today are dropped here
-                    → No LLM work done for dropped articles
+discover_news       article_id = MD5(title + URL) — assigned on first discovery.
+deduplicate node    Pass 1: MD5 hash dedup within this run.
+                    Pass 2: PublishedStore.filter_unpublished() — Gate 1.
+                    Articles published earlier today are dropped here.
+                    No LLM work is done for dropped articles.
 [LLM pipeline]      summarize → jev_router → generate_personas → evaluate
-publish node        PublishedStore.is_published(article_id) — Gate 2 (race-condition guard)
-                    LinkedIn MCP called with publication_key — Gate 3 (idempotency key)
+publish node        PublishedStore.is_published(article_id) — Gate 2 (race-condition guard).
+                    LinkedIn MCP called with publication_key — Gate 3 (idempotency key).
                     On success: PublishedStore.mark_published(article_id)
-                                writes {"article_id:YYYY-MM-DD": "2026-09-24T10:31:22Z"} to disk
-7 days later        Entry purged from cache on next load (TTL enforcement)
+                                writes {"article_id:YYYY-MM-DD": "2026-09-24T10:31:22Z"} to disk.
+7 days later        Entry purged from cache on next load (TTL enforcement).
 ```
 
 ---
@@ -300,12 +301,12 @@ POST_LIMIT = 2900 UTF-16 units
 FOOTER_TEXT_COST = _linkedin_len(_FOOTER) + ~141 (verdict + CTA + separators)
 BODY_LIMIT = POST_LIMIT - FOOTER_TEXT_COST
 
-_add(block, lines)  — append block only if _linkedin_len(block) + 1 fits in remaining
-                       called for every section: hook, context, Jev block, key points,
-                       impact snaps, source URL, persona sections
+_add(block, lines)  — appends a block only if _linkedin_len(block) + 1 fits in remaining budget.
+                       Called for every section: hook, context, Jev block, key points,
+                       impact snaps, source URL, and persona sections.
 
-footer_block         — assembled outside the budget loop; always appended unconditionally
-                       _hard_clip(body, max_body) if body exceeds POST_LIMIT - footer
+footer_block         — assembled outside the budget loop; always appended unconditionally.
+                       _hard_clip(body, max_body) if body exceeds POST_LIMIT - footer.
 ```
 
 ---
@@ -356,7 +357,7 @@ src/daily_news/
     daily_news_graph.py    LangGraph 10-node state machine; AI_SEARCH_QUERIES (9, hours=24)
 
 mcp_servers/
-  linkedin_mcp/server.py   LinkedIn OAuth stateful server; _linkedin_len() oversize guard
+  linkedin_mcp/server.py   LinkedIn OAuth stateful server; _linkedin_len() oversize guard;
                            linkedin_delete_post tool; publication_key idempotency
 
 prompts/
@@ -468,9 +469,9 @@ oc new-project aifeeders   # skip if already exists
 ```bash
 oc apply -f openshift/configmap.yaml -n aifeeders
 
-# Never commit real secrets — copy the template and fill in values
+# Never commit real secrets — copy the template and fill in values.
 cp openshift/secrets.yaml.example openshift/secrets.yaml
-# Edit secrets.yaml with real base64-encoded values
+# Edit secrets.yaml with real base64-encoded values.
 oc apply -f openshift/secrets.yaml -n aifeeders
 
 oc apply -f openshift/rbac.yaml -n aifeeders
@@ -483,8 +484,8 @@ ConfigMap name: `daily-news-config`. Secret name: `daily-news-secrets`.
 ```bash
 oc apply -f openshift/buildconfigs/ -n aifeeders
 
-# Self-pruning: keep only 1 successful build per service
-# Old builds are deleted automatically after each new successful build
+# Self-pruning: keep only 1 successful build per service.
+# Old builds are deleted automatically after each new successful build.
 for bc in daily-news evaluation-mcp linkedin-mcp news-mcp pageindex-mcp; do
   oc patch buildconfig/$bc -n aifeeders \
     --type=merge -p '{"spec":{"successfulBuildsHistoryLimit":1,"failedBuildsHistoryLimit":1}}'
@@ -494,7 +495,7 @@ done
 ### Step 4 — Build all images (first time)
 
 ```bash
-# Rsync to a clean tmpdir — .venv/ is ~270 MB and causes build timeouts if included
+# Rsync to a clean tmpdir — .venv/ is ~270 MB and causes build timeouts if included.
 TMPDIR=$(mktemp -d) && rsync -a \
   --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
   --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
@@ -502,19 +503,19 @@ TMPDIR=$(mktemp -d) && rsync -a \
   --exclude='htmlcov/' --exclude='.coverage' --exclude='.tox/' --exclude='.DS_Store' \
   . "$TMPDIR/"
 
-# Build all five services (sequential — one at a time)
+# Build all five services (sequential — one at a time).
 for svc in daily-news evaluation-mcp linkedin-mcp news-mcp pageindex-mcp; do
   oc start-build $svc --from-dir="$TMPDIR" -n aifeeders --follow
 done
 ```
 
-> **Why rsync to a tmpdir?** `.venv/` is ~270 MB. Including it causes upload timeouts.  
+> **Why rsync to a tmpdir?** `.venv/` is ~270 MB. Including it causes upload timeouts.
 > The rsync strip keeps the upload under 1 MB. `pip install` inside the BuildPod uses layer cache and runs in ~15s.
 
 ### Step 5 — Deploy all services
 
 ```bash
-# Apply all manifests
+# Apply all manifests.
 oc apply -f openshift/api/ -n aifeeders
 oc apply -f openshift/news-mcp/ -n aifeeders
 oc apply -f openshift/evaluation-mcp/ -n aifeeders
@@ -525,7 +526,7 @@ oc apply -f openshift/hpa.yaml -n aifeeders
 oc apply -f openshift/pdb.yaml -n aifeeders
 oc apply -f openshift/networkpolicy.yaml -n aifeeders
 
-# Verify all pods Running
+# Verify all pods Running.
 oc get pods -n aifeeders
 ```
 
@@ -534,8 +535,8 @@ oc get pods -n aifeeders
 ```bash
 oc port-forward svc/linkedin-mcp 8080:8000 -n aifeeders &
 # Browser: http://localhost:8080/auth/linkedin
-# Grant permissions: w_member_social, r_liteprofile
-# linkedin-mcp stores the token in-memory; it persists until the pod restarts
+# Grant permissions: w_member_social, r_liteprofile.
+# linkedin-mcp stores the token in-memory; it persists until the pod restarts.
 ```
 
 > LinkedIn tokens expire after **60 days**. Set a calendar reminder and re-authorise before expiry.
@@ -574,7 +575,7 @@ Every code change follows this exact sequence. **Never skip the test step.**
 # ── STEP 1: Run tests locally ─────────────────────────────────────────────────
 source .venv/bin/activate
 python -m pytest tests/unit tests/workflow -q --tb=short
-# All 52 tests must pass before proceeding
+# All 52 tests must pass before proceeding.
 
 # ── STEP 2: Build (clean context — excludes .venv/, uploads < 1 MB) ──────────
 TMPDIR=$(mktemp -d) && rsync -a \
@@ -608,17 +609,17 @@ oc logs job/live-run-<timestamp> -n aifeeders | grep -E "status=|published|ERROR
 ```
 oc start-build daily-news-62
   │
-  ├── New BuildPod created (daily-news-62)
-  ├── S2I build runs: pip install → copy src/ → compile image
-  ├── New image pushed to internal registry as :latest
-  └── Old build (daily-news-61) deleted automatically
-      (successfulBuildsHistoryLimit: 1 — no manual cleanup ever needed)
+  ├── New BuildPod created (daily-news-62).
+  ├── S2I build runs: pip install → copy src/ → compile image.
+  ├── New image pushed to internal registry as :latest.
+  └── Old build (daily-news-61) deleted automatically.
+      (successfulBuildsHistoryLimit: 1 — no manual cleanup ever needed.)
 
 oc rollout restart
   │
-  ├── New Deployment pods scheduled — pull :latest from internal registry
-  ├── Old pods terminated via RollingUpdate (maxUnavailable: 1, maxSurge: 1)
-  └── Zero-downtime: new pods pass liveness/readiness probe before old pods stop
+  ├── New Deployment pods scheduled — pull :latest from internal registry.
+  ├── Old pods terminated via RollingUpdate (maxUnavailable: 1, maxSurge: 1).
+  └── Zero-downtime: new pods pass liveness/readiness probe before old pods stop.
 ```
 
 No manual image cleanup. No dangling BuildPods. No old build artifacts. The namespace stays clean on every upgrade.
@@ -648,7 +649,7 @@ export AWS_ACCOUNT=123456789012
 export AWS_REGION=us-east-1
 export ECR_REGISTRY=$AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
 
-# Create ECR repo (once)
+# Create ECR repo (once per service).
 aws ecr create-repository --repository-name aifeeders/daily-news --region $AWS_REGION
 # Repeat for: aifeeders/linkedin-mcp, aifeeders/news-mcp,
 #             aifeeders/evaluation-mcp, aifeeders/pageindex-mcp
@@ -689,11 +690,11 @@ kubectl create job live-run-$(date +%s) --from=cronjob/daily-ai-news -n aifeeder
 kubectl logs -f job/live-run-<id> -n aifeeders | grep -E "status=|published"
 ```
 
-The only YAML change needed is the `image:` field in each Deployment manifest — swap the OpenShift internal registry URL for the ECR URL. For production EKS, also:
-- **External Secrets Operator** — sync AWS Secrets Manager entries to Kubernetes Secrets
-- **IRSA** — use IAM Roles for Service Accounts (no hard-coded AWS credentials)
-- **CNI with NetworkPolicy** — Calico or Cilium (EKS default VPC CNI does not enforce NetworkPolicy)
-- **Persistent PVC for PublishedStore** — mount `AIFEEDERS_STORE_PATH` to a PVC so dedup state survives pod restarts
+The only YAML change needed is the `image:` field in each Deployment manifest — swap the OpenShift internal registry URL for the ECR URL. For production EKS, also add:
+- **External Secrets Operator** — sync AWS Secrets Manager entries to Kubernetes Secrets.
+- **IRSA** — use IAM Roles for Service Accounts (no hard-coded AWS credentials).
+- **CNI with NetworkPolicy** — Calico or Cilium (EKS default VPC CNI does not enforce NetworkPolicy).
+- **Persistent PVC for PublishedStore** — mount `AIFEEDERS_STORE_PATH` to a PVC so dedup state survives pod restarts.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) §10 for the complete EKS setup guide.
 
@@ -730,16 +731,16 @@ oc exec deployment/daily-news-api -n aifeeders -- cat /tmp/aifeeders_published.j
 |---|---|---|
 | No post, `discovered 0 raw articles` | GNews 100 req/day quota exhausted | Wait until midnight UTC; check `GNEWS_API_KEY_2` is set |
 | No post, `published=0 errors=0` | `PUBLISHING_ENABLED=false` in ConfigMap | `oc patch configmap daily-news-config ... PUBLISHING_ENABLED:true` |
-| Same articles selected every day | PublishedStore blocking — all fresh articles already published | Check store; `clear_today()` or wait until tomorrow |
+| Same articles selected every day | PublishedStore blocking all fresh articles | Check store; `clear_today()` or wait until tomorrow |
 | Post failed `http=401` | LinkedIn token expired (60-day TTL) | Re-authorise via `oc port-forward svc/linkedin-mcp 8080:8000` |
 | `OutputParserException` | LLM output schema mismatch | Usually transient — retry; check LLM endpoint |
-| Build timeout / upload stuck | `.venv/` included in context | Use the rsync command — never `oc start-build . --from-dir=.` directly |
+| Build timeout / upload stuck | `.venv/` included in context | Use the rsync command — never `oc start-build --from-dir=.` directly |
 | `eval decision=REGENERATE` every run | Eval thresholds too strict for current articles | Lower `EVAL_FACTUALITY_THRESHOLD` in ConfigMap |
 | Old build pods accumulating | `successfulBuildsHistoryLimit` not set | Patch BuildConfigs to limit 1 |
 | `jev_prefilter: ReadTimeout` | Jev gateway busy | Gracefully falls back to `[:2]` selection — article still processed |
-| `all articles already published today` | Re-run on same day after first run succeeded | Expected — wait until tomorrow or reset store |
+| `all articles already published today` | Re-run on same day after first run succeeded | Expected — wait until tomorrow or reset the store |
 | Hook label shows `AI NEWS` instead of `AI REGULATION` | Jev returning `event_type=other` for this article | Expected for generic stories; check Jev scores in logs |
-| Post truncated mid-sentence (pre-build #61) | UTF-16/Python `len()` mismatch | Fixed in build #61 — `_linkedin_len()` |
+| Post truncated mid-sentence (pre-build #61) | UTF-16/Python `len()` mismatch | Fixed in build #61 via `_linkedin_len()` |
 | Article #2 shows article #1's Jev scores (pre-build #61) | Shared `jev_prefilter_scores` not keyed by article_id | Fixed in build #61 — per-article dict |
 | Silent publish failure, no LinkedIn post visible | `{"result":{"error":...}}` not detected by MCPHTTPClient | Fixed in build #61 — nested error detection |
 
