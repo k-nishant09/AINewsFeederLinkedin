@@ -1,14 +1,14 @@
 ---
-# Daily AI News CronJob
-# Runs at 10:00 UTC = 15:30 IST every day
+# Daily AI News CronJob — Morning run
+# Runs at 08:00 UTC = 13:30 IST every day
 # concurrencyPolicy: Forbid prevents double-runs if the previous job is still running
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: daily-ai-news
+  name: daily-ai-news-morning
   namespace: aifeeders
 spec:
-  schedule: "0 10 * * *"
+  schedule: "0 8 * * *"
   timeZone: "UTC"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
@@ -17,7 +17,56 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 3
-      activeDeadlineSeconds: 7200  # 2 hours max
+      activeDeadlineSeconds: 3600  # 1 hour max (single article runs faster)
+
+      template:
+        spec:
+          serviceAccountName: daily-news
+          restartPolicy: Never
+
+          # app=daily-news-worker label is required by the NetworkPolicy
+          # (allow-api-to-mcps) so the CronJob pod can reach all MCP servers.
+          labels:
+            app: daily-news-worker
+          containers:
+            - name: workflow-runner
+              image: image-registry.openshift-image-registry.svc:5000/aifeeders/daily-news:latest
+              command:
+                - python
+                - -m
+                - daily_news.workflow_runner
+              envFrom:
+                - configMapRef:
+                    name: daily-news-config
+                - secretRef:
+                    name: daily-news-secrets
+              resources:
+                requests:
+                  cpu: "500m"
+                  memory: "1Gi"
+                limits:
+                  cpu: "2"
+                  memory: "2Gi"
+---
+# Daily AI News CronJob — Afternoon run
+# Runs at 16:00 UTC = 21:30 IST every day
+# concurrencyPolicy: Forbid prevents double-runs if the previous job is still running
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: daily-ai-news-afternoon
+  namespace: aifeeders
+spec:
+  schedule: "0 16 * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 3600  # 1 hour max (single article runs faster)
 
       template:
         spec:
