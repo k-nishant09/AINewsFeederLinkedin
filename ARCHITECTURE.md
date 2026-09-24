@@ -314,6 +314,91 @@ Fallback (JEV_ENABLED=false):
   → switching between Jev and LLM evaluation requires only JEV_ENABLED env change
 ```
 
+### Decision Strategy — How Every Post Field Is Derived from Jev Scores
+
+This section maps every visible field in the published LinkedIn post back to the exact Jev question that produced it. All values come from the single `POST /v1/systemone` call in Decision #1 (`prefilter_article`). Nothing in the post is hardcoded — every percentage, label, ordering, and threshold comparison is a live Jev answer for that specific article.
+
+#### Input to Jev — what it reads per article
+
+```
+TITLE:    <article headline>
+SOURCE:   <publication name>
+URL:      <canonical URL>
+CATEGORY: <NewsCategory value, e.g. ai_technology>
+CONTENT:  <first 2000 chars of article body>
+```
+
+#### Full field-to-question mapping
+
+```
+Post field                              Jev question         Type    How value is used
+──────────────────────────────────────────────────────────────────────────────────────────
+🤖  AI REGULATION  ·  Powered by Jev   event_type           choice  mapped via _EVENT_LABEL dict:
+                                                                       product_launch → "PRODUCT LAUNCH"
+                                                                       funding        → "FUNDING & M&A"
+                                                                       regulation     → "AI REGULATION"
+                                                                       research       → "AI RESEARCH"
+                                                                       acquisition    → "FUNDING & M&A"
+                                                                       other          → "AI NEWS"
+
+🏛️  Primary audience : Policy — 85%    persona_fit_policy   noul    highest-scoring persona across all 4
+                                        persona_fit_business         raw score displayed as %, label
+                                        persona_fit_genz             from _PMETA dict
+                                        persona_fit_linkedin
+
+📋  Story type : Regulation             event_type           choice  same answer as hook label,
+                                                                     title-cased for display
+
+🎯  AI relevance : 90%                  relevance_score      noul    × 100 → percentage
+
+    Market signal: [███░░]              significance         score   0..4 raw → /4 → 0-1
+                                                                     bars = round(sig × 5)
+                                                                     █ per bar, ░ for remainder
+
+⚡  Engagement est. : 43%              estimated_engagement noul    × 100 → percentage
+
+    Controversy: Medium                 controversy_level    choice  low|medium|high → title-cased
+
+👥  Audience impact : 🏛️ 85% › 🎓 77%  persona_fit_* × 4   noul    all 4 scores ranked descending
+                                                                     top 3 shown
+
+🔥  AI market shift : HIGH             significance         score   threshold combination:
+                                        relevance_score      noul    sig ≥ 0.6 AND rel ≥ 0.75 → 🔥 HIGH
+                                                                     sig ≥ 0.4 AND rel ≥ 0.60 → 📡 MODERATE
+                                                                     else                      → 📊 INFORMATIONAL
+
+🧵  Perspectives section order          persona_fit_* × 4   noul    ranked list drives which persona
+                                                                     block appears first in the post
+
+⚙️  Jev audience verdict               persona_fit_* × 4   noul    same ranked list, top 3 as labels:
+                                                                     💼 Business Strategists
+                                                                     🏛️ Policy Makers
+                                                                     🎓 Generalists
+                                                                     🧠 Tech & Workforce
+```
+
+#### How scores change by article type — worked examples
+
+| Article | `event_type` | `relevance` | `significance` | Top persona | `engagement` | `controversy` | Market shift |
+|---|---|---|---|---|---|---|---|
+| EU AI Act enforcement news | `regulation` | 0.94 | 0.80 | 🏛️ Policy 94% | 0.72 | High | 🔥 HIGH |
+| OpenAI $40B funding round | `funding` | 0.95 | 0.85 | 💼 Business 93% | 0.88 | Medium | 🔥 HIGH |
+| AI existential risk debate | `other` | 0.90 | 0.60 | 🏛️ Policy 85% | 0.43 | Medium | 🔥 HIGH |
+| GPT-5 model release | `product_launch` | 0.96 | 0.90 | 🧠 Tech 91% | 0.85 | Medium | 🔥 HIGH |
+| AI chip breakthrough paper | `research` | 0.92 | 0.88 | 🧠 Tech 91% | 0.75 | Low | 🔥 HIGH |
+| AI job displacement study | `research` | 0.88 | 0.70 | 🎓 Generalist 90% | 0.65 | High | 🔥 HIGH |
+| Routine vendor blog post | `product_launch` | 0.60 | 0.20 | 🧠 Tech 65% | 0.18 | Low | 📊 INFORMATIONAL |
+
+Key observations:
+- **Primary audience flips** entirely between articles — Policy-first for regulation/risk, Business-first for funding, Tech-first for research/launches, Generalist-first for workforce stories
+- **Hook label** is the one field that distinguishes the story type at a glance before the reader reads the headline
+- **Engagement estimate** is consistently lower for opinion/risk pieces than for announcements — Jev models LinkedIn audience behaviour
+- **Market shift** depends on the product of both `significance` AND `relevance` — a highly relevant but low-significance article stays INFORMATIONAL; a landmark event on a niche AI subfield may also stay MODERATE
+
+#### Why the same article can produce different scores on re-run
+
+Jev uses a LoRA decision head on Qwen/Qwen3.5-2B. The `lora_decision_head` method returns calibrated probabilities, not greedy argmax outputs. Minor temperature variation across calls means scores can shift by ±0.03–0.05 between runs. This is expected and by design — the system is robust to small score variance because all gates use thresholds (> 0.5, ≥ 0.60, ≥ 0.75) not exact equality.
+
 ---
 
 ## 5. PublishedStore — Cross-Run Deduplication
