@@ -116,7 +116,6 @@ class EvaluationAgent:
             summary.headline,
             summary.summary,
             personas.business.perspective,
-            personas.labor.perspective,
             personas.policy.perspective,
             personas.genz.perspective,
             personas.linkedin.perspective,
