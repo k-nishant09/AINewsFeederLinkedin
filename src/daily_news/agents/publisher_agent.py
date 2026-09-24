@@ -189,7 +189,6 @@ class PublisherAgent:
         if post_urn and post_status in ("published", "mock"):
             persona_map = {
                 "business": personas.business,
-                "labor":    personas.labor,
                 "policy":   personas.policy,
                 "genz":     personas.genz,
                 "linkedin": personas.linkedin,
