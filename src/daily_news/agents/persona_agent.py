@@ -68,8 +68,10 @@ Rules:
 - Do not invent facts. Use only the supplied evidence.
 - Separate factual claims from interpretation.
 - Do not claim your perspective is the objective truth.
-- Write 3 complete sentences. Every sentence must end with a full stop.
-- Do NOT cut off mid-sentence. If space is tight, write fewer sentences rather than an incomplete one.
+- Write exactly 1 complete sentence. The sentence must end with a full stop.
+- The sentence must be under 200 characters and self-contained — a reader who has not seen the article must fully understand it without trailing off.
+- Do NOT cut off mid-sentence. If the idea is too long, simplify it — never truncate.
+- Write it to spark LinkedIn engagement: specific, opinionated, and worth sharing.
 - Be specific and actionable — avoid generic platitudes.
 - Use plain English. No jargon overload.
 
