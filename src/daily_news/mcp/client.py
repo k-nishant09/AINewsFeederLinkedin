@@ -52,7 +52,13 @@ class MCPHTTPClient:
 
         if "error" in data:
             raise RuntimeError(f"MCP tool error [{tool}]: {data['error']}")
-        return data.get("result")
+        result = data.get("result")
+        # LinkedIn MCP wraps errors inside {"result": {"error": "..."}} when the
+        # top-level response is HTTP 200 but the tool itself failed (e.g. oversize
+        # post before Fix C).  Surface those as RuntimeError so callers see them.
+        if isinstance(result, dict) and "error" in result:
+            raise RuntimeError(f"MCP tool inner error [{tool}]: {result['error']}")
+        return result
 
 
 class MCPClientFactory:

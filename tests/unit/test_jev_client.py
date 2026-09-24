@@ -263,6 +263,29 @@ class TestEvaluateContent:
         assert result.policy_check == "FAIL"
 
 
+# ── _linkedin_len in publisher_agent ─────────────────────────────────────────
+
+class TestLinkedinLen:
+    def test_ascii_only(self):
+        from daily_news.agents.publisher_agent import _linkedin_len
+        assert _linkedin_len("hello") == 5
+
+    def test_bmp_emoji_counts_as_two(self):
+        # U+1F4BC BRIEFCASE — outside BMP, should count as 2
+        from daily_news.agents.publisher_agent import _linkedin_len
+        assert _linkedin_len("💼") == 2
+
+    def test_mixed(self):
+        from daily_news.agents.publisher_agent import _linkedin_len
+        # "A💼B" = 1 + 2 + 1 = 4
+        assert _linkedin_len("A💼B") == 4
+
+    def test_in_bmp_char_counts_as_one(self):
+        from daily_news.agents.publisher_agent import _linkedin_len
+        # U+2705 CHECK MARK — in BMP, counts as 1
+        assert _linkedin_len("✅") == 1
+
+
 # ── jev_prefilter_articles node ───────────────────────────────────────────────
 
 class TestJevPrefilterNode:
@@ -330,6 +353,13 @@ class TestJevPrefilterNode:
         # Top 2 returned — highest composite score first
         assert len(result["selected_articles"]) == 2
         assert result["selected_articles"][0]["article_id"] == "high"
+        # jev_prefilter_scores is now a dict keyed by article_id
+        scores = result["jev_prefilter_scores"]
+        assert isinstance(scores, dict)
+        assert "high" in scores
+        assert "low" in scores
+        assert scores["high"]["relevance_score"] == pytest.approx(0.95)
+        assert scores["low"]["relevance_score"] == pytest.approx(0.4)
 
     @pytest.mark.asyncio
     async def test_falls_back_when_jev_raises(self):

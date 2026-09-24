@@ -453,17 +453,25 @@ async def _get_profile_urn() -> str:
 
 async def _do_create_post(author_urn: str, text: str, attempt: int = 1) -> dict[str, Any]:
     """
-    POST /rest/posts — Share on LinkedIn (Posts API).
-    Ref: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/posts-api
+    POST /v2/ugcPosts — Share on LinkedIn (UGC Posts API, v2).
 
-    Required body fields:
-      author, commentary, visibility, distribution, lifecycleState, isReshareDisabledByAuthor
+    Root cause of the switch: LinkedIn's newer /rest/posts endpoint (API version 202609)
+    silently truncates commentary to ~238 UTF-16 units for apps that have not been
+    approved for the Marketing Developer Platform / Community Management API product.
+    The /v2/ugcPosts endpoint does not apply this restriction for apps with w_member_social
+    scope and stores the full commentary text correctly.
+
+    Ref: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/ugc-posts
+
+    Payload structure (ugcPosts):
+      author, lifecycleState, specificContent.com.linkedin.ugc.ShareContent.shareCommentary.text,
+      specificContent.com.linkedin.ugc.ShareContent.shareMediaCategory, visibility
 
     Returns: {"post_urn": str, "id": str, "status": "published"|"mock"}
-    On success LinkedIn returns HTTP 201 (or 200 for some variants); post URN in x-restli-id header.
+    On success LinkedIn returns HTTP 201; URN in x-restli-id header AND response body {"id": "..."}.
     Failures return a structured error dict (see _classify_http_error).
     """
-    endpoint = LINKEDIN_POSTS_ENDPOINT
+    endpoint = f"{LINKEDIN_V2_BASE}/ugcPosts"
 
     if not _is_token_present():
         mock_id  = "mock-post-" + hashlib.md5(text.encode()).hexdigest()[:8]
@@ -473,33 +481,58 @@ async def _do_create_post(author_urn: str, text: str, attempt: int = 1) -> dict[
                status="mock", attempt=attempt)
         return {"post_urn": mock_urn, "id": mock_id, "status": "mock"}
 
+    li_len_payload = sum(2 if ord(c) > 0xFFFF else 1 for c in text)
+    logger.info(
+        "_do_create_post: commentary python_len=%d linkedin_utf16_len=%d first_100=%r",
+        len(text), li_len_payload, text[:100],
+    )
+
+    # ugcPosts payload — different structure from /rest/posts
     payload = {
-        "author":      author_urn,
-        "commentary":  text,
-        "visibility":  "PUBLIC",
-        "distribution": {
-            "feedDistribution":               "MAIN_FEED",
-            "targetEntities":                 [],
-            "thirdPartyDistributionChannels": [],
+        "author": author_urn,
+        "lifecycleState": "PUBLISHED",
+        "specificContent": {
+            "com.linkedin.ugc.ShareContent": {
+                "shareCommentary": {
+                    "text": text,
+                },
+                "shareMediaCategory": "NONE",
+            }
         },
-        "lifecycleState":            "PUBLISHED",
-        "isReshareDisabledByAuthor": False,
+        "visibility": {
+            "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC",
+        },
+    }
+
+    # ugcPosts uses v2 headers (no LinkedIn-Version header, no X-Restli-Protocol-Version required)
+    headers = {
+        "Authorization":             f"Bearer {_get_access_token()}",
+        "Content-Type":              "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
     }
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(endpoint, headers=_rest_headers(), json=payload)
+            resp = await client.post(endpoint, headers=headers, json=payload)
 
         # Accept both 201 (standard) and 200 (some LinkedIn API variants)
         if resp.status_code not in (200, 201):
             resp.raise_for_status()
 
-        # Primary URN source: x-restli-id header (LinkedIn 201 response)
-        raw_id   = resp.headers.get("x-restli-id", "")
+        # URN available in both x-restli-id header and response body {"id": "urn:li:share:..."}
+        raw_id = resp.headers.get("x-restli-id", "")
+        if not raw_id:
+            try:
+                raw_id = resp.json().get("id", "")
+            except Exception:
+                raw_id = ""
         post_urn = raw_id if raw_id.startswith("urn:") else (
             f"urn:li:share:{raw_id}" if raw_id else ""
         )
-        logger.info("LinkedIn post published: %s (HTTP %s)", post_urn, resp.status_code)
+        logger.info(
+            "LinkedIn post published via ugcPosts: %s (HTTP %s) response_body=%r",
+            post_urn, resp.status_code, resp.text[:200],
+        )
         _audit(tool="_do_create_post", actor_urn=author_urn, post_urn=post_urn,
                status="published", http_status=resp.status_code, attempt=attempt)
         return {"post_urn": post_urn, "id": raw_id, "status": "published"}
@@ -726,8 +759,28 @@ async def linkedin_create_post(text: str, publication_key: str) -> dict:
         logger.info("Duplicate post suppressed: %s", publication_key)
         return {**_published_posts[publication_key], "idempotent": True}
 
-    if len(text) > POST_MAX_CHARS:
-        return {"error": f"Post text is {len(text)} chars — exceeds {POST_MAX_CHARS}-char limit."}
+    # Count as LinkedIn does: UTF-16 code units (non-BMP chars like emoji = 2 units each).
+    # Python len() undercounts — a 2900-char string with 30 emoji is ~2930 LinkedIn units.
+    li_len = sum(2 if ord(c) > 0xFFFF else 1 for c in text)
+    logger.info(
+        "linkedin_create_post: key=%s python_len=%d linkedin_utf16_len=%d",
+        publication_key, len(text), li_len,
+    )
+    logger.info("linkedin_create_post TEXT START ---\n%s\n--- TEXT END", text)
+
+    if li_len > POST_MAX_CHARS:
+        logger.warning(
+            "Post text is %d LinkedIn UTF-16 units (limit %d) — truncating",
+            li_len, POST_MAX_CHARS,
+        )
+        # Truncate to POST_MAX_CHARS UTF-16 units, not Python chars
+        units, cut = 0, 0
+        for i, c in enumerate(text):
+            units += 2 if ord(c) > 0xFFFF else 1
+            if units >= POST_MAX_CHARS:
+                cut = i
+                break
+        text = text[:cut]
 
     author_urn = await _get_profile_urn()
     result = await _do_create_post(author_urn, text)
@@ -739,6 +792,51 @@ async def linkedin_create_post(text: str, publication_key: str) -> dict:
         "text_length":     len(text),
     }
     return _published_posts[publication_key]
+
+
+@mcp.tool()
+async def linkedin_delete_post(post_urn: str) -> dict:
+    """
+    Delete a post by its URN.
+    DELETE /rest/posts/{id}
+    Scope required: w_member_social
+
+    Used to remove truncated or malformed posts so a corrected version can be re-published.
+    Returns {"status": "deleted", "post_urn": ...} on success.
+    """
+    if not _is_token_present():
+        logger.info("[MOCK] LinkedIn post delete: %s", post_urn)
+        return {"post_urn": post_urn, "status": "mock_deleted"}
+
+    # LinkedIn Posts API DELETE expects the URL-encoded URN as the path parameter:
+    # DELETE /rest/posts/urn%3Ali%3Ashare%3A{id}
+    # NOT the bare numeric ID — that returns 400 VALIDATION_ERROR.
+    from urllib.parse import quote
+    encoded_urn = quote(post_urn, safe="")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.delete(
+                f"{LINKEDIN_REST_BASE}/posts/{encoded_urn}",
+                headers=_rest_headers(),
+            )
+        if resp.status_code == 204:
+            logger.info("LinkedIn post deleted: %s (HTTP 204)", post_urn)
+            # Also evict from in-memory idempotency cache
+            for k in [k for k, v in _published_posts.items() if v.get("post_urn") == post_urn]:
+                del _published_posts[k]
+                logger.info("Evicted from idempotency cache: key=%s", k)
+            return {"post_urn": post_urn, "status": "deleted"}
+        else:
+            resp.raise_for_status()
+            return {"post_urn": post_urn, "status": "deleted", "http_status": resp.status_code}
+    except httpx.HTTPStatusError as exc:
+        err = _classify_http_error(exc, actor_urn="", endpoint=f"{LINKEDIN_REST_BASE}/posts/{post_id}", attempt=1, tool="linkedin_delete_post")
+        logger.error("LinkedIn delete failed for %s: %s", post_urn, err)
+        return err
+    except (httpx.RequestError, OSError) as exc:
+        err = _classify_network_error(exc, actor_urn="", endpoint=f"{LINKEDIN_REST_BASE}/posts/{post_id}", attempt=1, tool="linkedin_delete_post")
+        return err
 
 
 @mcp.tool()
@@ -983,6 +1081,7 @@ _TOOLS = {
     "linkedin_get_profile_posts":    linkedin_get_profile_posts,
     # Posts
     "linkedin_create_post":          linkedin_create_post,
+    "linkedin_delete_post":          linkedin_delete_post,
     "linkedin_get_post":             linkedin_get_post,
     "linkedin_get_publish_status":   linkedin_get_publish_status,
     # Comments
@@ -998,6 +1097,7 @@ _TOOLS = {
     "linkedin.validate_token":       linkedin_validate_token,
     "linkedin.get_profile":          linkedin_get_profile,
     "linkedin.create_post":          linkedin_create_post,
+    "linkedin.delete_post":          linkedin_delete_post,
     "linkedin.get_post":             linkedin_get_post,
     "linkedin.get_publish_status":   linkedin_get_publish_status,
     "linkedin.create_comment":       linkedin_create_comment,
