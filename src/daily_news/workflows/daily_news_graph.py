@@ -9,7 +9,7 @@ State machine:
           └─► deduplicate     MD5 hash dedup + PublishedStore cross-run filter
                 └─► fetch_articles
                       └─► index_pageindex
-                            └─► jev_prefilter         ← Jev Decision #1: scores all, picks top 2
+                            └─► jev_prefilter         ← Jev Decision #1: scores all, picks top 1
                                   └─► summarize             LLM → structured summary (≤350 chars)
                                         └─► jev_router      ← Jev Decision #2: picks relevant personas
                                               └─► generate_personas  (active subset only, parallel)

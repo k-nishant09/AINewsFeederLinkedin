@@ -4,9 +4,9 @@ Jev-powered graph nodes.
 Three decision points where Jev (System One) replaces LLM-based logic:
 
   1. jev_prefilter_articles(state)
-       Scores all fetched articles in parallel and selects the best one
-       by relevance + estimated engagement.
-       Replaces the blind selected_articles[:2] cut.
+       Scores all fetched articles in parallel and selects the single best
+       article by relevance + estimated engagement.
+       Replaces the blind selected_articles[:1] cut.
 
   2. jev_route_personas(state)
        Given the generated NewsSummary, decides which subset of the five
@@ -47,7 +47,7 @@ async def jev_prefilter_articles(state: dict) -> dict:
     picks the single best article by composite score:
         composite = relevance_score * 0.6 + estimated_engagement * 0.4
 
-    Falls back to [:2] if Jev is disabled or the call fails.
+    Falls back to [:1] if Jev is disabled or the call fails.
     Stores jev_persona_hints in state for jev_route_personas to consume.
     """
     s = get_settings()
@@ -59,8 +59,8 @@ async def jev_prefilter_articles(state: dict) -> dict:
         return {**state, "workflow_status": "JEV_PREFILTERED"}
 
     if not s.jev_enabled:
-        logger.info("[%s] jev_prefilter: JEV_ENABLED=false — keeping [:2]", run_id)
-        return {**state, "selected_articles": articles[:2], "workflow_status": "JEV_PREFILTERED"}
+        logger.info("[%s] jev_prefilter: JEV_ENABLED=false — keeping [:1]", run_id)
+        return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
 
     client = JevClient()
     sem = asyncio.Semaphore(5)
@@ -75,8 +75,8 @@ async def jev_prefilter_articles(state: dict) -> dict:
             return_exceptions=True,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[%s] jev_prefilter failed (%s) — falling back to [:2]", run_id, exc)
-        return {**state, "selected_articles": articles[:2], "workflow_status": "JEV_PREFILTERED"}
+        logger.warning("[%s] jev_prefilter failed (%s) — falling back to [:1]", run_id, exc)
+        return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
 
     # Filter out exceptions, pair with original article
     scored: list[tuple[float, dict, JevPrefilterResult]] = []
@@ -93,16 +93,16 @@ async def jev_prefilter_articles(state: dict) -> dict:
         scored.append((composite, article, result))
 
     if not scored:
-        logger.warning("[%s] jev_prefilter: no AI articles passed — keeping [:2]", run_id)
-        return {**state, "selected_articles": articles[:2], "workflow_status": "JEV_PREFILTERED"}
+        logger.warning("[%s] jev_prefilter: no AI articles passed — keeping [:1]", run_id)
+        return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
 
-    # Pick the top 2 articles by composite score
+    # Pick the single best article by composite score
     scored.sort(key=lambda t: t[0], reverse=True)
-    top2 = scored[:2]
+    top1 = scored[:1]
 
-    best_score, best_article, best_result = top2[0]
+    best_score, best_article, best_result = top1[0]
 
-    for rank, (score, article, result) in enumerate(top2, start=1):
+    for rank, (score, article, result) in enumerate(top1, start=1):
         logger.info(
             "[%s] jev_prefilter: #%d article_id=%s relevance=%.2f engagement=%.2f composite=%.2f personas=%s",
             run_id, rank,
@@ -113,11 +113,11 @@ async def jev_prefilter_articles(state: dict) -> dict:
             result.persona_fit,
         )
 
-    # jev_prefilter_scores is keyed by article_id so each article in the publish
-    # loop can look up its OWN scores — not always article #1's scores.
-    # Shape: { "<article_id>": { event_type, relevance_score, ... }, ... }
+    # jev_prefilter_scores is keyed by article_id so the publish loop can look
+    # up the single article's own Jev scores.
+    # Shape: { "<article_id>": { event_type, relevance_score, ... } }
     prefilter_scores: dict[str, dict] = {}
-    for _, article, result in top2:
+    for _, article, result in top1:
         aid = article.get("article_id", result.article_id)
         prefilter_scores[aid] = {
             "event_type":           result.event_type,
@@ -131,7 +131,7 @@ async def jev_prefilter_articles(state: dict) -> dict:
 
     return {
         **state,
-        "selected_articles":    [article for _, article, _ in top2],
+        "selected_articles":    [article for _, article, _ in top1],
         "jev_persona_hints":    best_result.persona_fit,
         "jev_prefilter_scores": prefilter_scores,
         "workflow_status":      "JEV_PREFILTERED",
