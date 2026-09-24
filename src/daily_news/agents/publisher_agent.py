@@ -302,16 +302,15 @@ class PublisherAgent:
         """
         POST_LIMIT = 3000
 
-        # ── Fixed-cost blocks ──────────────────────────────────────────────────
-        # No dividers used — saving ~170 chars for content.
-        # Tail cost: verdict line(90) + CTA(42) + disclaimer(156) +
-        # hashtags(131) + newlines(10) = ~429. Use 440 as safe ceiling.
-        FOOTER_COST  = 440
-        VERDICT_COST = 0   # already folded into FOOTER_COST
-
-        # Per-field caps that keep variable sections predictable
-        KEY_POINT_CAP    = 90   # each key point bullet
-        IMPACT_LINE_CAP  = 90   # each impact line (business/workforce/tech/policy)
+        # ── Fixed-cost budget constants ────────────────────────────────────────
+        # Footer (reserved upfront): verdict(~90) + CTA(42) + disclaimer(156)
+        #                            + hashtags(131) + newlines(10) = ~429 → 440
+        FOOTER_COST     = 440
+        # Summary cap: LLM can return 300-900 chars; cap at 350 so the Jev block
+        # and all four persona sections always have guaranteed budget.
+        SUMMARY_CAP     = 350
+        KEY_POINT_CAP   = 90   # each key point bullet
+        IMPACT_LINE_CAP = 90   # each impact snap line
 
         # Shared persona metadata used across multiple sections
         _PMETA = {
@@ -336,14 +335,20 @@ class PublisherAgent:
             key=lambda x: x[1], reverse=True,
         ) if has_jev else []
 
-        # Running char budget tracker — deduct as each section is built
-        remaining = POST_LIMIT - FOOTER_COST - VERDICT_COST
+        # Running char budget tracker.  _add() deducts and ENFORCES: if the block
+        # would overflow the remaining budget it is silently skipped.  This
+        # guarantees the assembled post never exceeds POST_LIMIT and the footer
+        # (reserved via FOOTER_COST) is always fully included.
+        remaining = POST_LIMIT - FOOTER_COST
 
         def _add(block: str, lines: list[str]) -> None:
-            """Append block to lines and deduct from remaining."""
+            """Append block only if it fits in the remaining budget."""
             nonlocal remaining
+            cost = len(block) + 1   # +1 for the \n separator added by join
+            if cost > remaining:
+                return              # skip silently — budget exhausted
             lines.append(block)
-            remaining -= len(block) + 1  # +1 for the \n join
+            remaining -= cost
 
         # ── ① Hook ──────────────────────────────────────────────────────────
         lines: list[str] = []
@@ -352,8 +357,8 @@ class PublisherAgent:
         _add(summary.headline, lines)
         _add("", lines)
 
-        # ── ② Context — full summary text, no cap ────────────────────────────
-        _add(summary.summary.strip(), lines)
+        # ── ② Context — summary capped at SUMMARY_CAP chars at sentence boundary
+        _add(_clip_at_sentence(summary.summary.strip(), SUMMARY_CAP), lines)
         _add("", lines)
 
         # ── ③ Jev Decision ────────────────────────────────────────────────────
