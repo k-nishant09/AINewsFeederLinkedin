@@ -1,7 +1,7 @@
 # AIFeeders — Operations Runbook
 
-> Build #62 · OpenShift `aifeeders` · Last updated: 2026-09  
-> For architecture details: [`ARCHITECTURE.md`](ARCHITECTURE.md)  
+> Build #62 · OpenShift `aifeeders` · Last updated: 2026-09
+> For architecture details: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 > For project overview: [`README.md`](README.md)
 
 ---
@@ -27,16 +27,16 @@
 
 Every day at 10:00 UTC, AIFeeders:
 
-1. Queries GNews for AI news (9 queries × 24-hour window = ~27 articles)
-2. Deduplicates: MD5 hash within-run + PublishedStore cross-run (7-day TTL)
-3. Fetches full article content
-4. Indexes articles in PageIndex (in-memory RAG)
-5. **Jev Decision #1** — scores all articles, picks top 2 by relevance + engagement
-6. Summarises each selected article with an LLM
-7. **Jev Decision #2** — routes only relevant personas (saves LLM calls)
-8. Generates 4-persona perspectives (only active personas, in parallel)
-9. **Jev Decision #3** — evaluates content quality (factuality, hallucination, PII, injection)
-10. Publishes LinkedIn post + persona comments (3-gate dedup: PublishedStore × 2 + LinkedIn MCP key)
+1. Queries GNews for AI news (9 queries × 24-hour window = ~27 articles).
+2. Deduplicates: MD5 hash within-run + PublishedStore cross-run (7-day TTL).
+3. Fetches full article content.
+4. Indexes articles in PageIndex (in-memory RAG).
+5. **Jev Decision #1** — scores all articles, picks top 2 by relevance + engagement.
+6. Summarises each selected article with an LLM.
+7. **Jev Decision #2** — routes only relevant personas (saves LLM calls).
+8. Generates 4-persona perspectives (only active personas, in parallel).
+9. **Jev Decision #3** — evaluates content quality (factuality, hallucination, PII, injection).
+10. Publishes LinkedIn post + persona comments (3-gate dedup: PublishedStore × 2 + LinkedIn MCP key).
 
 Expected result: **2 LinkedIn posts per day** (~10:30–10:45 UTC depending on Jev + LLM latency).
 
@@ -47,19 +47,19 @@ Expected result: **2 LinkedIn posts per day** (~10:30–10:45 UTC depending on J
 **No action needed.** The CronJob runs automatically. To verify:
 
 ```bash
-# 1. Check today's run completed
+# 1. Check today's run completed.
 oc get jobs -n aifeeders --sort-by=.metadata.creationTimestamp | tail -3
 
-# 2. Check the logs
+# 2. Check the logs.
 oc logs job/<latest-job-name> -n aifeeders | grep -E "status=|published|ERROR"
 # Expected: "Workflow complete — status=PUBLISHED published=2 errors=0"
 
-# 3. Check the published store (confirms what was published)
+# 3. Check the published store (confirms what was published).
 oc exec deployment/daily-news-api -n aifeeders -- cat /tmp/aifeeders_published.json
 ```
 
-If `published=0` and `errors=0`: check `PUBLISHING_ENABLED` in the ConfigMap.  
-If `published=0` and `errors>0`: check the full logs for the error.
+If `published=0` and `errors=0`: check `PUBLISHING_ENABLED` in the ConfigMap.
+If `published=0` and `errors>0`: check the full logs for the specific error.
 
 ---
 
@@ -89,22 +89,22 @@ oc project aifeeders         # set as current project
 ```bash
 oc apply -f openshift/configmap.yaml -n aifeeders
 
-# Verify — check key values
+# Verify — check key values.
 oc get configmap daily-news-config -n aifeeders -o yaml | grep -A5 data:
 ```
 
 The ConfigMap contains non-sensitive settings:
-- `PUBLISHING_ENABLED: "true"` — set `"false"` for smoke tests
-- `JEV_ENABLED: "true"` — set `"false"` to fall back to heuristics
-- `LLM_BASE_URL`, `JEV_BASE_URL` — service endpoint URLs
-- `EVAL_FACTUALITY_THRESHOLD: "0.50"`, `EVAL_GROUNDEDNESS_THRESHOLD: "0.50"`, `EVAL_HALLUCINATION_THRESHOLD: "0.85"`
+- `PUBLISHING_ENABLED: "true"` — set `"false"` for smoke tests.
+- `JEV_ENABLED: "true"` — set `"false"` to fall back to heuristics.
+- `LLM_BASE_URL`, `JEV_BASE_URL` — service endpoint URLs.
+- `EVAL_FACTUALITY_THRESHOLD: "0.50"`, `EVAL_GROUNDEDNESS_THRESHOLD: "0.50"`, `EVAL_HALLUCINATION_THRESHOLD: "0.85"`.
 
 ### Step 3 — Apply Secrets
 
 ```bash
 # NEVER commit real secret values to git.
 # The secrets.yaml in the repo is a template with placeholder values.
-# You must create a local copy with real values before applying.
+# Create a local copy with real values before applying.
 cp openshift/secrets.yaml openshift/secrets.yaml.real
 # Edit secrets.yaml.real — replace placeholder base64 values with real ones:
 #   echo -n "your-real-value" | base64
@@ -116,12 +116,12 @@ oc get secret daily-news-secrets -n aifeeders
 ```
 
 Required secret keys:
-- `LLM_API_KEY` — LLM bearer token
-- `GNEWS_API_KEY` — GNews primary key
-- `GNEWS_API_KEY_2` — GNews secondary key (auto-rotation on quota exhaustion)
-- `JEV_API_KEY` — Jev gateway bearer token
-- `LINKEDIN_CLIENT_ID` — LinkedIn app client ID
-- `LINKEDIN_CLIENT_SECRET` — LinkedIn app secret
+- `LLM_API_KEY` — LLM bearer token.
+- `GNEWS_API_KEY` — GNews primary key.
+- `GNEWS_API_KEY_2` — GNews secondary key (auto-rotation on quota exhaustion).
+- `JEV_API_KEY` — Jev gateway bearer token.
+- `LINKEDIN_CLIENT_ID` — LinkedIn app client ID.
+- `LINKEDIN_CLIENT_SECRET` — LinkedIn app secret.
 
 ### Step 4 — RBAC
 
@@ -137,8 +137,8 @@ oc get serviceaccount aifeeders-sa -n aifeeders
 ```bash
 oc apply -f openshift/buildconfigs/ -n aifeeders
 
-# Set build history limits — old builds are deleted automatically
-# This is the key setting that keeps the namespace clean
+# Set build history limits — old builds are deleted automatically.
+# This is the key setting that keeps the namespace clean.
 for bc in daily-news evaluation-mcp linkedin-mcp news-mcp pageindex-mcp; do
   oc patch buildconfig/$bc -n aifeeders \
     --type=merge -p '{"spec":{"successfulBuildsHistoryLimit":1,"failedBuildsHistoryLimit":1}}'
@@ -151,7 +151,7 @@ oc get buildconfigs -n aifeeders
 ### Step 6 — Build all images
 
 ```bash
-# Create a clean tmpdir with .venv/ excluded (it's 270 MB — causes upload timeout)
+# Create a clean tmpdir with .venv/ excluded (it's 270 MB — causes upload timeout).
 TMPDIR=$(mktemp -d)
 rsync -a \
   --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
@@ -162,7 +162,7 @@ rsync -a \
 
 echo "Upload size: $(du -sh $TMPDIR | cut -f1)"  # should be < 5 MB
 
-# Build each service (sequential — one at a time)
+# Build each service (sequential — one at a time).
 for svc in daily-news evaluation-mcp linkedin-mcp news-mcp pageindex-mcp; do
   echo "=== Building $svc ==="
   oc start-build $svc --from-dir="$TMPDIR" -n aifeeders --follow
@@ -175,7 +175,7 @@ Each build takes ~2 minutes. `--follow` streams the build log and exits when don
 ### Step 7 — Deploy all services
 
 ```bash
-# Apply all manifests
+# Apply all manifests.
 oc apply -f openshift/api/ -n aifeeders
 oc apply -f openshift/news-mcp/ -n aifeeders
 oc apply -f openshift/evaluation-mcp/ -n aifeeders
@@ -201,12 +201,12 @@ oc get pods -n aifeeders
 # linkedin-mcp-xxx-yyy           1/1  Running   0  2m
 # pageindex-mcp-xxx-yyy          1/1  Running   0  2m
 
-# Check all service /health endpoints
+# Check all service /health endpoints.
 for svc in news-mcp evaluation-mcp linkedin-mcp pageindex-mcp; do
   echo -n "$svc: "
   oc exec deployment/$svc -n aifeeders -- curl -s http://localhost:8000/health | jq -r .status
 done
-# Expected: "healthy" or "ready" for each
+# Expected: "healthy" or "ready" for each.
 ```
 
 ### Step 9 — Authorise LinkedIn (first time)
@@ -214,19 +214,19 @@ done
 LinkedIn requires a browser-based OAuth flow. The token is stored in `linkedin-mcp` memory.
 
 ```bash
-# Open a port-forward tunnel
+# Open a port-forward tunnel.
 oc port-forward svc/linkedin-mcp 8080:8000 -n aifeeders &
 PF_PID=$!
 
 # Open in browser: http://localhost:8080/auth/linkedin
-# Complete the OAuth flow — grant w_member_social + r_liteprofile permissions
-# You'll see a success page or be redirected back
+# Complete the OAuth flow — grant w_member_social + r_liteprofile permissions.
+# You'll see a success page or be redirected back.
 
-# Verify the token was stored
+# Verify the token was stored.
 curl -s http://localhost:8080/health | jq .
-# Should show {"status": "ready", "token_status": "valid"} or similar
+# Should show {"status": "ready", "token_status": "valid"} or similar.
 
-# Stop the port-forward
+# Stop the port-forward.
 kill $PF_PID
 ```
 
@@ -235,23 +235,23 @@ kill $PF_PID
 ### Step 10 — Smoke test (no publishing)
 
 ```bash
-# Disable publishing
+# Disable publishing.
 oc patch configmap daily-news-config -n aifeeders \
   --type=merge -p '{"data":{"PUBLISHING_ENABLED":"false"}}'
 
-# Trigger a run
+# Trigger a run.
 SMOKE_JOB=$(oc create job smoke-$(date +%s) --from=cronjob/daily-ai-news \
   -n aifeeders --output=name | sed 's|job.batch/||')
 echo "Smoke job: $SMOKE_JOB"
 
-# Wait and tail the logs
+# Wait and tail the logs.
 sleep 5
 oc logs -f job/$SMOKE_JOB -n aifeeders | tail -20
 
 # Expected last line:
 # "Workflow complete — status=EVALUATED published=0 errors=0"
 
-# Re-enable publishing
+# Re-enable publishing.
 oc patch configmap daily-news-config -n aifeeders \
   --type=merge -p '{"data":{"PUBLISHING_ENABLED":"true"}}'
 ```
@@ -263,10 +263,10 @@ LIVE_JOB=$(oc create job live-$(date +%s) --from=cronjob/daily-ai-news \
   -n aifeeders --output=name | sed 's|job.batch/||')
 echo "Live job: $LIVE_JOB"
 
-# Wait for it to start
+# Wait for it to start.
 sleep 10
 
-# Follow the logs
+# Follow the logs.
 oc logs -f job/$LIVE_JOB -n aifeeders | grep -E "status=|published|article_id|post_urn|ERROR"
 
 # Expected success output:
@@ -292,7 +292,7 @@ python -m pytest tests/unit tests/workflow -q --tb=short
 ### Build
 
 ```bash
-# Create a clean rsync tmpdir (excludes .venv/ and other junk)
+# Create a clean rsync tmpdir (excludes .venv/ and other junk).
 TMPDIR=$(mktemp -d) && rsync -a \
   --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
   --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
@@ -300,7 +300,7 @@ TMPDIR=$(mktemp -d) && rsync -a \
   --exclude='htmlcov/' --exclude='.coverage' --exclude='.tox/' --exclude='.DS_Store' \
   . "$TMPDIR/"
 
-# Start the build — prints the build name (e.g. build/daily-news-62)
+# Start the build — prints the build name (e.g. build/daily-news-62).
 oc start-build daily-news --from-dir="$TMPDIR" -n aifeeders --output=name
 ```
 
@@ -314,7 +314,7 @@ oc start-build linkedin-mcp --from-dir="$TMPDIR" -n aifeeders --output=name
 ### Monitor build
 
 ```bash
-# Replace 62 with the actual build number from the previous step
+# Replace 62 with the actual build number from the previous step.
 oc logs -f build/daily-news-62 -n aifeeders
 
 # Milestones to watch for:
@@ -327,20 +327,20 @@ oc logs -f build/daily-news-62 -n aifeeders
 oc describe build/daily-news-62 -n aifeeders | grep -A5 "Status:"
 ```
 
-**What happens to the old build:**  
+**What happens to the old build:**
 `successfulBuildsHistoryLimit: 1` — OpenShift automatically deletes `daily-news-61` when `daily-news-62` succeeds. No manual cleanup needed.
 
 ### Roll out
 
 ```bash
-# Restart the deployment — pods pull the new :latest image
+# Restart the deployment — pods pull the new :latest image.
 oc rollout restart deployment/daily-news-api -n aifeeders
 
-# Wait for completion (zero-downtime: new pod passes probes before old pod stops)
+# Wait for completion (zero-downtime: new pod passes probes before old pod stops).
 oc rollout status deployment/daily-news-api -n aifeeders --timeout=90s
 # Expected: "deployment 'daily-news-api' successfully rolled out"
 
-# Verify the new pods are running
+# Verify the new pods are running.
 oc get pods -n aifeeders -l app=daily-news-api
 ```
 
@@ -363,20 +363,20 @@ echo "Job: $LIVE_JOB"
 ### Verify result
 
 ```bash
-# Summary line
+# Summary line.
 oc logs job/$LIVE_JOB -n aifeeders | grep "Workflow complete"
 # Expected: "Workflow complete — status=PUBLISHED published=2 errors=0"
 
-# Jev scores (what was selected and why)
+# Jev scores (what was selected and why).
 oc logs job/$LIVE_JOB -n aifeeders | grep "jev_prefilter:"
 
-# Published store (confirms articles recorded)
+# Published store (confirms articles recorded).
 oc exec deployment/daily-news-api -n aifeeders -- cat /tmp/aifeeders_published.json | jq .
 
-# LinkedIn audit (post URNs)
+# LinkedIn audit (post URNs).
 oc exec deployment/linkedin-mcp -n aifeeders -- curl -s http://localhost:8000/audit | jq .
 
-# Full log (for troubleshooting)
+# Full log (for troubleshooting).
 oc logs job/$LIVE_JOB -n aifeeders
 ```
 
@@ -388,26 +388,26 @@ Before upgrade:
   Pods:    daily-news-api-old-1, daily-news-api-old-2 (running :latest = #61)
 
 oc start-build daily-news-62:
-  BuildPod daily-news-62 created
-  pip install runs in BuildPod
-  New image pushed to registry as :latest (replaces #61's :latest tag)
-  BuildPod daily-news-62 terminates (self-cleaning)
-  Build record daily-news-61 deleted (successfulBuildsHistoryLimit: 1)
-  Builds now: daily-news-62 only
+  BuildPod daily-news-62 created.
+  pip install runs in BuildPod.
+  New image pushed to registry as :latest (replaces #61's :latest tag).
+  BuildPod daily-news-62 terminates (self-cleaning).
+  Build record daily-news-61 deleted (successfulBuildsHistoryLimit: 1).
+  Builds now: daily-news-62 only.
 
 oc rollout restart:
-  New pods scheduled: daily-news-api-new-1 (pulls :latest = #62 image)
-  new-1 starts, passes liveness probe, becomes Ready
-  Old pod old-1 terminated (RollingUpdate maxUnavailable: 1)
-  New pod new-2 scheduled and starts
-  Old pod old-2 terminated
-  Deployment complete: 2 pods running #62
+  New pods scheduled: daily-news-api-new-1 (pulls :latest = #62 image).
+  new-1 starts, passes liveness probe, becomes Ready.
+  Old pod old-1 terminated (RollingUpdate maxUnavailable: 1).
+  New pod new-2 scheduled and starts.
+  Old pod old-2 terminated.
+  Deployment complete: 2 pods running #62.
 
 Result:
-  - Zero downtime (RollingUpdate with at least 1 pod always Ready)
-  - No manual image cleanup ever needed
-  - oc get builds -n aifeeders shows exactly 1 build record
-  - oc get pods -n aifeeders shows only the new pods
+  - Zero downtime (RollingUpdate with at least 1 pod always Ready).
+  - No manual image cleanup ever needed.
+  - oc get builds -n aifeeders shows exactly 1 build record.
+  - oc get pods -n aifeeders shows only the new pods.
 ```
 
 ---
@@ -417,10 +417,10 @@ Result:
 ### Via CLI
 
 ```bash
-# Trigger from the CronJob template (most common)
+# Trigger from the CronJob template (most common).
 oc create job manual-$(date +%s) --from=cronjob/daily-ai-news -n aifeeders
 
-# With a custom run label for easy filtering
+# With a custom run label for easy filtering.
 oc create job test-$(date +%s) --from=cronjob/daily-ai-news -n aifeeders \
   --output=name
 ```
@@ -428,34 +428,34 @@ oc create job test-$(date +%s) --from=cronjob/daily-ai-news -n aifeeders \
 ### Via the REST API
 
 ```bash
-# Port-forward the API
+# Port-forward the API.
 oc port-forward svc/daily-news-api 9090:8000 -n aifeeders &
 
-# Trigger a run
+# Trigger a run.
 curl -X POST http://localhost:9090/run \
   -H "Content-Type: application/json" \
   -d '{"dry_run": false}' | jq .
 
-# Check run status (using the run_id from the response)
+# Check run status (using the run_id from the response).
 curl http://localhost:9090/status/<run_id> | jq .
 
-# Health check
+# Health check.
 curl http://localhost:9090/health | jq .
 ```
 
 ### Dry run (no LinkedIn post)
 
 ```bash
-# Method 1: patch ConfigMap (affects all future runs until reverted)
+# Method 1: patch ConfigMap (affects all future runs until reverted).
 oc patch configmap daily-news-config -n aifeeders \
   --type=merge -p '{"data":{"PUBLISHING_ENABLED":"false"}}'
 oc create job dry-$(date +%s) --from=cronjob/daily-ai-news -n aifeeders
-# Remember to re-enable after the test
+# Remember to re-enable after the test.
 
-# Method 2: API dry_run flag (if implemented)
+# Method 2: API dry_run flag (if implemented).
 curl -X POST http://localhost:9090/run -d '{"dry_run": true}'
 
-# Method 3: local dry run (no cluster needed)
+# Method 3: local dry run (no cluster needed).
 PUBLISHING_ENABLED=false python -m daily_news.workflow_runner
 ```
 
@@ -516,48 +516,48 @@ Workflow complete — status=PUBLISHED published=2 errors=0
 ## 7. Checking Service Health
 
 ```bash
-# All pods at a glance
+# All pods at a glance.
 oc get pods -n aifeeders
 
-# All services — running pod count
+# All services — running pod count.
 oc get deployments -n aifeeders
 
-# Individual health check endpoints (all should return "healthy" or "ready")
+# Individual health check endpoints (all should return "healthy" or "ready").
 for svc in news-mcp evaluation-mcp linkedin-mcp pageindex-mcp daily-news-api; do
   echo -n "$svc: "
   oc exec deployment/$svc -n aifeeders -- curl -s http://localhost:8000/health \
     | jq -r '.status // .health // "no status field"' 2>/dev/null || echo "exec failed"
 done
 
-# CronJob schedule
+# CronJob schedule.
 oc get cronjob daily-ai-news -n aifeeders -o yaml | grep schedule:
 # Expected: "schedule: 0 10 * * *"  (10:00 UTC daily)
 
-# Recent jobs (today's CronJob triggers)
+# Recent jobs (today's CronJob triggers).
 oc get jobs -n aifeeders --sort-by=.metadata.creationTimestamp
 ```
 
 ### Verify Jev is working (5 live checks)
 
 ```bash
-# Jev health endpoint (no authentication required)
+# Jev health endpoint (no authentication required).
 curl -s https://<your-jev-gateway>/health | jq .
 # Expected: {"status": "ready", "model": "Qwen/Qwen3.5-2B", "method": "lora_decision_head"}
 
-# From inside the cluster (test from a pod)
+# From inside the cluster (test from a pod).
 oc exec deployment/daily-news-api -n aifeeders -- \
   curl -s https://<your-jev-gateway>/health | jq .
 ```
 
 If Jev is unreachable, the pipeline automatically falls back:
-- `jev_prefilter` → takes first 2 articles (no Jev scoring)
-- `jev_router` → runs all 4 personas
-- `evaluate` → uses `EvaluationMCPClient` (LLM-based evaluation)
+- `jev_prefilter` → takes first 2 articles (no Jev scoring).
+- `jev_router` → runs all 4 personas.
+- `evaluate` → uses `EvaluationMCPClient` (LLM-based evaluation).
 
 ### Published store inspection
 
 ```bash
-# What was published in the last 7 days
+# What was published in the last 7 days.
 oc exec deployment/daily-news-api -n aifeeders -- \
   cat /tmp/aifeeders_published.json | python3 -m json.tool
 
@@ -568,7 +568,7 @@ oc exec deployment/daily-news-api -n aifeeders -- \
 #   "news-ghi789:2026-09-23": "2026-09-23T10:29:11+00:00"
 # }
 
-# LinkedIn audit (URNs published since pod start)
+# LinkedIn audit (URNs published since pod start).
 oc exec deployment/linkedin-mcp -n aifeeders -- \
   curl -s http://localhost:8000/audit | jq .
 ```
@@ -579,16 +579,16 @@ oc exec deployment/linkedin-mcp -n aifeeders -- \
 
 ### GNews quota exhausted (HTTP 403 from news-mcp)
 
-GNews free tier: 100 requests/day. 9 queries × 1 run/day = 9 requests — well within the limit.  
+GNews free tier: 100 requests/day. 9 queries × 1 run/day = 9 requests — well within the limit.
 If you run multiple tests on the same day, you may exhaust the quota.
 
 ```bash
-# Symptom: "discovered 0 raw articles" in logs
+# Symptom: "discovered 0 raw articles" in logs.
 # Check news-mcp logs for the specific error:
 oc logs deployment/news-mcp -n aifeeders | grep -E "403|quota|exceeded"
 
-# Fix: wait until midnight UTC for quota reset
-# OR: configure GNEWS_API_KEY_2 for auto-rotation
+# Fix: wait until midnight UTC for quota reset.
+# OR: configure GNEWS_API_KEY_2 for auto-rotation.
 
 # To add a second key (auto-rotation on 403):
 oc patch secret daily-news-secrets -n aifeeders \
@@ -600,13 +600,13 @@ oc rollout restart deployment/news-mcp -n aifeeders
 ### LinkedIn token expired (60-day rotation)
 
 ```bash
-# Symptom: "post FAILED http=401" in logs
-# The token is stored in linkedin-mcp memory — it expires after 60 days
+# Symptom: "post FAILED http=401" in logs.
+# The token is stored in linkedin-mcp memory — it expires after 60 days.
 
 # Re-authorise:
 oc port-forward svc/linkedin-mcp 8080:8000 -n aifeeders &
 # Browser: http://localhost:8080/auth/linkedin
-# Complete the OAuth flow
+# Complete the OAuth flow.
 
 # Verify the token was accepted:
 curl -s http://localhost:8080/health | jq .
@@ -617,7 +617,7 @@ Set a calendar reminder 55 days after each authorisation.
 ### Jev API key
 
 ```bash
-# Symptom: "jev_prefilter failed" with 401 in logs
+# Symptom: "jev_prefilter failed" with 401 in logs.
 # Rotate the key:
 oc patch secret daily-news-secrets -n aifeeders \
   --type=merge -p "{\"data\":{\"JEV_API_KEY\":\"$(echo -n 'new-jev-key' | base64)\"}}"
@@ -630,7 +630,7 @@ oc rollout status deployment/daily-news-api -n aifeeders
 ### LLM API key
 
 ```bash
-# Symptom: "summarize failed" or "persona generation failed" with 401/403
+# Symptom: "summarize failed" or "persona generation failed" with 401/403.
 oc patch secret daily-news-secrets -n aifeeders \
   --type=merge -p "{\"data\":{\"LLM_API_KEY\":\"$(echo -n 'new-llm-key' | base64)\"}}"
 oc rollout restart deployment/daily-news-api -n aifeeders
@@ -642,16 +642,16 @@ oc rollout status deployment/daily-news-api -n aifeeders
 If the Jev gateway is having an outage and the pipeline is failing:
 
 ```bash
-# Disable Jev — pipeline falls back to heuristics
+# Disable Jev — pipeline falls back to heuristics.
 oc patch configmap daily-news-config -n aifeeders \
   --type=merge -p '{"data":{"JEV_ENABLED":"false"}}'
 
 # Fallback behaviour:
-# - jev_prefilter: takes first 2 articles (no scoring)
-# - jev_router: runs all 4 personas
-# - evaluate: uses evaluation-mcp (LLM-based)
+# - jev_prefilter: takes first 2 articles (no scoring).
+# - jev_router: runs all 4 personas.
+# - evaluate: uses evaluation-mcp (LLM-based).
 
-# Restart daily-news-api to pick up the ConfigMap change
+# Restart daily-news-api to pick up the ConfigMap change.
 oc rollout restart deployment/daily-news-api -n aifeeders
 
 # Re-enable when Jev is back:
@@ -669,10 +669,10 @@ oc rollout restart deployment/daily-news-api -n aifeeders
 Completed and failed Jobs accumulate over time. Clean them periodically:
 
 ```bash
-# Delete all completed (Succeeded) jobs
+# Delete all completed (Succeeded) jobs.
 oc delete jobs -n aifeeders --field-selector status.successful=1
 
-# Delete all failed jobs
+# Delete all failed jobs.
 oc delete jobs -n aifeeders --field-selector status.failed=1
 
 # Or delete all jobs older than 7 days (requires GNU date):
@@ -684,7 +684,7 @@ oc get jobs -n aifeeders -o json | \
 ### Remove old builds (should be automatic with limit=1)
 
 ```bash
-# Check current builds — should be 1 per service
+# Check current builds — should be 1 per service.
 oc get builds -n aifeeders
 
 # If old builds accumulated (successfulBuildsHistoryLimit was not set):
@@ -701,20 +701,20 @@ done
 ### Remove stale imagestreams
 
 ```bash
-# List current imagestream tags
+# List current imagestream tags.
 oc get imagestreams -n aifeeders
 
-# Prune unused image layers (removes unreferenced layers, not :latest)
+# Prune unused image layers (removes unreferenced layers, not :latest).
 oc adm prune images --confirm
 ```
 
 ### Full namespace audit
 
 ```bash
-# Everything in the namespace
+# Everything in the namespace.
 oc get all -n aifeeders
 
-# Resources by type
+# Resources by type.
 echo "=== Pods ===" && oc get pods -n aifeeders
 echo "=== Deployments ===" && oc get deployments -n aifeeders
 echo "=== Services ===" && oc get services -n aifeeders
@@ -731,7 +731,7 @@ echo "=== Secrets ===" && oc get secrets -n aifeeders
 Use when you want to re-publish articles that were already published today (e.g. after a bugfix deploy):
 
 ```bash
-# Option A: Clear today's entries only (keeps historical data)
+# Option A: Clear today's entries only (keeps historical data).
 oc exec deployment/daily-news-api -n aifeeders -- python3 -c "
 from daily_news.agents.published_store import published_store
 published_store.clear_today()
@@ -739,11 +739,11 @@ print('Cleared today\\'s entries')
 print('Remaining:', list(published_store._cache.keys()))
 "
 
-# Option B: Delete the file entirely (clears all 7 days)
+# Option B: Delete the file entirely (clears all 7 days).
 oc exec deployment/daily-news-api -n aifeeders -- rm /tmp/aifeeders_published.json
 echo "Published store deleted — will be recreated fresh on next run"
 
-# Option C: View then selectively delete one article_id
+# Option C: View then selectively delete one article_id.
 oc exec deployment/daily-news-api -n aifeeders -- python3 -c "
 import json
 from pathlib import Path
@@ -760,7 +760,7 @@ If the pipeline keeps selecting the same articles because the fresh pool is smal
 ```bash
 oc exec deployment/daily-news-api -n aifeeders -- python3 -c "
 from daily_news.agents.published_store import published_store
-# Pre-mark the stale article IDs (article_id is MD5 of title+url)
+# Pre-mark the stale article IDs (article_id is MD5 of title+url).
 stale_ids = ['news-abc123', 'news-def456']
 for aid in stale_ids:
     published_store.mark_published(aid)
@@ -775,10 +775,10 @@ for aid in stale_ids:
 ### What is the same on EKS
 
 Everything except the image build and image registry URL is identical:
-- All Kubernetes YAML manifests (Deployments, Services, CronJob, ConfigMap, HPA, PDB, NetworkPolicy, RBAC)
-- The application code and configuration
-- The PublishedStore, Jev integration, and deduplication logic
-- The build → launch flow (test → build → push → rollout → run)
+- All Kubernetes YAML manifests (Deployments, Services, CronJob, ConfigMap, HPA, PDB, NetworkPolicy, RBAC).
+- The application code and configuration.
+- The PublishedStore, Jev integration, and deduplication logic.
+- The build → launch flow (test → build → push → rollout → run).
 
 ### What changes on EKS
 
@@ -800,10 +800,10 @@ export AWS_REGION=us-east-1
 export ECR_REGISTRY=$AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
 export EKS_CLUSTER=aifeeders-prod
 
-# Configure kubectl
+# Configure kubectl.
 aws eks update-kubeconfig --region $AWS_REGION --name $EKS_CLUSTER
 
-# Create namespace
+# Create namespace.
 kubectl apply -f openshift/namespace.yaml
 
 # ── Create ECR repositories (once) ───────────────────────────────────────────
@@ -840,7 +840,7 @@ aws secretsmanager create-secret \
   }'
 
 # ── Apply ExternalSecret + SecretStore ───────────────────────────────────────
-# (See ARCHITECTURE.md §10 for the full ExternalSecret YAML)
+# (See ARCHITECTURE.md §10 for the full ExternalSecret YAML.)
 kubectl apply -f openshift/eks/external-secrets.yaml -n aifeeders
 
 # ── Apply ConfigMap and RBAC ─────────────────────────────────────────────────
@@ -865,7 +865,7 @@ for svc in daily-news linkedin-mcp news-mcp evaluation-mcp pageindex-mcp; do
 done
 
 # ── Deploy services ───────────────────────────────────────────────────────────
-# Update image: field in each deployment YAML from OpenShift registry to ECR
+# Update image: field in each deployment YAML from OpenShift registry to ECR.
 # (sed example for daily-news-api):
 sed "s|image-registry.openshift-image-registry.svc:5000/aifeeders/daily-news:latest|$ECR_REGISTRY/aifeeders/daily-news:latest|g" \
   openshift/api/deployment.yaml | kubectl apply -f - -n aifeeders
@@ -885,10 +885,10 @@ kubectl port-forward svc/linkedin-mcp 8080:8000 -n aifeeders &
 ```bash
 # ── Per-change build cycle (same test → build → push → rollout → run pattern) ─
 
-# 1. Test
+# 1. Test.
 python -m pytest tests/unit tests/workflow -q --tb=short
 
-# 2. Build (rsync pattern — same as OpenShift, same reason)
+# 2. Build (rsync pattern — same as OpenShift, same reason).
 TMPDIR=$(mktemp -d) && rsync -a \
   --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
   --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
@@ -896,13 +896,13 @@ TMPDIR=$(mktemp -d) && rsync -a \
 
 docker build -t aifeeders/daily-news:latest -f Dockerfile "$TMPDIR"
 
-# 3. Push to ECR
+# 3. Push to ECR.
 aws ecr get-login-password --region $AWS_REGION | \
   docker login --username AWS --password-stdin $ECR_REGISTRY
 docker tag aifeeders/daily-news:latest $ECR_REGISTRY/aifeeders/daily-news:latest
 docker push $ECR_REGISTRY/aifeeders/daily-news:latest
 
-# 4. Update + rollout
+# 4. Update + rollout.
 kubectl set image deployment/daily-news-api \
   daily-news=$ECR_REGISTRY/aifeeders/daily-news:latest -n aifeeders
 kubectl rollout restart deployment/daily-news-api -n aifeeders
@@ -912,13 +912,13 @@ kubectl rollout status deployment/daily-news-api -n aifeeders --timeout=90s
 ### EKS Launch Flow
 
 ```bash
-# Trigger a run
+# Trigger a run.
 kubectl create job live-$(date +%s) --from=cronjob/daily-ai-news -n aifeeders
 
-# Follow the logs
+# Follow the logs.
 kubectl logs -f job/live-<id> -n aifeeders | grep -E "status=|published|ERROR"
 
-# Verify
+# Verify.
 kubectl logs job/live-<id> -n aifeeders | grep "Workflow complete"
 ```
 
@@ -939,23 +939,23 @@ kubectl logs job/live-<id> -n aifeeders | grep "Workflow complete"
 ### No post today
 
 ```
-Symptom: LinkedIn feed shows no new post
+Symptom: LinkedIn feed shows no new post.
          Logs: "Workflow complete — status=EVALUATED published=0 errors=0"
 ```
 
 **Check in order:**
 
-1. `PUBLISHING_ENABLED=false` in ConfigMap → set to `true`
-2. All articles already published today → check `published_store` and wait until tomorrow
-3. Eval threshold too strict → check `EVAL_FACTUALITY_THRESHOLD`, try lowering to `0.40`
-4. GNews quota → check `news-mcp` logs for 403
-5. LinkedIn token expired → re-authorise
+1. `PUBLISHING_ENABLED=false` in ConfigMap → set to `true`.
+2. All articles already published today → check `published_store` and wait until tomorrow.
+3. Eval threshold too strict → check `EVAL_FACTUALITY_THRESHOLD`, try lowering to `0.40`.
+4. GNews quota → check `news-mcp` logs for 403.
+5. LinkedIn token expired → re-authorise.
 
 ### Personas not generating
 
 ```
 Symptom: "Workflow complete — status=PUBLISHED published=2"
-         Post shows only the main article, no Perspectives section
+         Post shows only the main article, no Perspectives section.
          Logs: "persona generation failed for ..."
 ```
 
@@ -964,37 +964,37 @@ Symptom: "Workflow complete — status=PUBLISHED published=2"
 oc logs deployment/daily-news-api -n aifeeders | grep -E "persona|LLM|OutputParser"
 ```
 
-- `OutputParserException` → LLM returned malformed JSON; usually transient; will fix on retry
-- `401` → LLM API key expired; rotate `LLM_API_KEY`
-- `jev_active_personas=[]` → Jev returned no active personas; check Jev logs
+- `OutputParserException` → LLM returned malformed JSON; usually transient; will fix on retry.
+- `401` → LLM API key expired; rotate `LLM_API_KEY`.
+- `jev_active_personas=[]` → Jev returned no active personas; check Jev logs.
 
 ### Jev gateway timeouts
 
 ```
 Symptom: "jev_prefilter failed (ReadTimeout) — falling back to [:2]"
-         Logs show articles selected without scoring
+         Logs show articles selected without scoring.
 ```
 
 **Check:**
 ```bash
-# Jev health
+# Jev health.
 curl -s https://<your-jev-gateway>/health
 # Should be {"status": "ready", ...}
 
-# From inside cluster
+# From inside cluster.
 oc exec deployment/daily-news-api -n aifeeders -- \
   curl -s -m 5 https://<your-jev-gateway>/health
 ```
 
 If Jev is down:
-- The pipeline **still runs** (graceful fallback to `[:2]` + all personas + LLM eval)
-- Disable Jev temporarily: `JEV_ENABLED=false` in ConfigMap
-- Post will publish without Jev scores in the body
+- The pipeline **still runs** (graceful fallback to `[:2]` + all personas + LLM eval).
+- Disable Jev temporarily: `JEV_ENABLED=false` in ConfigMap.
+- Post will publish without Jev scores in the body.
 
 ### Build upload timeout
 
 ```
-Symptom: "oc start-build" hangs for > 5 minutes then times out
+Symptom: "oc start-build" hangs for > 5 minutes then times out.
          Error: "error: build/daily-news-XX failed — error streaming build..."
 ```
 
@@ -1008,7 +1008,7 @@ TMPDIR=$(mktemp -d) && rsync -a \
   --exclude='.git/' --exclude='.pytest_cache/' \
   . "$TMPDIR/"
 echo "Upload size: $(du -sh $TMPDIR | cut -f1)"
-# Must show < 5 MB — if you see > 100 MB, .venv/ is being included
+# Must show < 5 MB — if you see > 100 MB, .venv/ is being included.
 
 # Then start the build from the tmpdir:
 oc start-build daily-news --from-dir="$TMPDIR" -n aifeeders --follow
@@ -1017,9 +1017,9 @@ oc start-build daily-news --from-dir="$TMPDIR" -n aifeeders --follow
 ### Eval thresholds too strict
 
 ```
-Symptom: "eval decision=REGENERATE" every run
+Symptom: "eval decision=REGENERATE" every run.
          "max retries (2) exceeded — publishing PASS items only"
-         Some days: published=0 (no articles pass)
+         Some days: published=0 (no articles pass).
 ```
 
 **Fix (loosen thresholds temporarily):**
@@ -1037,26 +1037,26 @@ oc patch configmap daily-news-config -n aifeeders --type=merge -p '{
 
 ```
 Symptom: LinkedIn post cuts off at "🏛️  Primary audience : Policy"
-         Post appears complete in logs but is truncated on LinkedIn
+         Post appears complete in logs but is truncated on LinkedIn.
 ```
 
 This was caused by LinkedIn counting UTF-16 units while Python counted code points.
 
 **Status:** Fixed in build #61 via `_linkedin_len()`. If you see this on build #62+:
 ```bash
-# Check if the truncation is consistent at the same position
+# Check if the truncation is consistent at the same position.
 oc logs job/<latest-job> -n aifeeders | grep "linkedin_utf16_len"
-# If linkedin_utf16_len > 2900, there's a budget calculation regression
+# If linkedin_utf16_len > 2900, there's a budget calculation regression.
 ```
 
 ### Article #2 shows wrong Jev scores in post (pre-build #61)
 
 ```
-Symptom: Second LinkedIn post of the day shows "💼 Business 93%" in Jev block
-         But the article is clearly about regulation, not business
+Symptom: Second LinkedIn post of the day shows "💼 Business 93%" in Jev block.
+         But the article is clearly about regulation, not business.
 ```
 
-**Status:** Fixed in build #61. `jev_prefilter_scores` is now a `dict[article_id → scores]`.  
+**Status:** Fixed in build #61. `jev_prefilter_scores` is now a `dict[article_id → scores]`.
 If you still see this, check that the build #61+ image is actually running:
 
 ```bash
