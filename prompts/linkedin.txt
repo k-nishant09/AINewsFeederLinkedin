@@ -30,8 +30,10 @@ Closing move — one actionable insight for both a technical decision-maker AND 
 - "Spend 2 hours this week with [tool mentioned] — see where it helps and where it still needs you."
 
 Output format:
-- Write exactly 3 complete sentences as the perspective. Every sentence must end with a full stop.
-- Do NOT cut off mid-sentence.
+- Write exactly 1 complete sentence as the perspective. The sentence must end with a full stop.
+- The sentence must be under 200 characters and self-contained — a reader who has not seen the article must fully understand it without trailing off.
+- Do NOT cut off mid-sentence. If the idea is too long, simplify it — never truncate.
+- Write it to spark LinkedIn engagement: technically sharp, workforce-aware, and worth sharing with your team.
 - Provide exactly 2 evidence bullets drawn directly from the article.
 - Cover both the technical and workforce angle in your perspective.
 

@@ -524,43 +524,24 @@ class PublisherAgent:
                     label_cost = _linkedin_len(label) + 1   # label + \n (use li_len for emoji labels)
 
                     # Budget allocation per persona block:
-                    #   perspective  — guaranteed ≥ 200 units (enough for 1–2 complete sentences
-                    #                  without mid-sentence clipping; a typical LLM sentence is
-                    #                  120–160 units so 200 covers two sentences comfortably)
-                    #   evidence     — what remains after perspective + label, capped at 100 per bullet
+                    #   perspective  — guaranteed ≥ 220 units (sufficient for one complete
+                    #                  sentence of up to 200 characters; the LLM is now
+                    #                  instructed to produce exactly 1 sentence ≤ 200 chars)
                     #   blank line   — 1 unit trailing separator
                     #
-                    # Priority order: perspective first, evidence second.
-                    # Old bug: ev_budget was calculated first, eating most of per_persona,
-                    # leaving persp_budget at 60–70 units → always hard-clipped mid-sentence.
-                    PERSP_MIN   = 200   # guaranteed minimum for the perspective sentence(s)
-                    EV_CAP_MAX  = 100   # maximum per evidence bullet
-                    BLANK_COST  = 1
+                    # Evidence bullets are intentionally omitted from the post body.
+                    # Rationale: the LLM generates 1 complete sentence per persona;
+                    # bullet fragments after a self-contained sentence read as clutter
+                    # and were the source of the "incomplete sentence" UX complaint.
+                    # Evidence bullets are preserved for Comments API use (_compose_comment).
+                    PERSP_MIN  = 220   # room for 200-char sentence + punctuation margin
+                    BLANK_COST = 1
 
-                    # How many units remain for evidence after label + perspective + blank?
-                    ev_budget = per_persona - label_cost - PERSP_MIN - BLANK_COST
-                    # Each bullet: "  • " prefix (4 chars) + content
-                    ev_cap = max(60, min(EV_CAP_MAX, ev_budget // 2 - 4)) if ev_budget > 8 else 0
-
-                    ev_lines = [
-                        f"  • {_hard_clip(ev.strip(), ev_cap)}"
-                        for ev in (p.evidence or [])[:2]
-                        if ev.strip() and ev_cap > 0
-                    ]
-                    ev_text = "\n".join(ev_lines)
-                    ev_cost = _linkedin_len(ev_text) + 1 if ev_text else 0
-
-                    # Perspective gets what's left after label + evidence + blank,
-                    # but at least PERSP_MIN so a full sentence always fits.
-                    persp_budget = max(PERSP_MIN, per_persona - label_cost - ev_cost - BLANK_COST)
-
+                    persp_budget = max(PERSP_MIN, per_persona - label_cost - BLANK_COST)
                     clipped = _clip_at_sentence(p.perspective.strip(), persp_budget)
 
-                    # Assemble: label → perspective → evidence bullets (order: context first)
-                    block_parts = [label, clipped]
-                    if ev_text:
-                        block_parts.append(ev_text)
-                    persona_block = "\n".join(block_parts)
+                    # Assemble: label → perspective only (no evidence bullets in post body)
+                    persona_block = "\n".join([label, clipped])
                     _add(persona_block, lines)
                     _add("", lines)
 
