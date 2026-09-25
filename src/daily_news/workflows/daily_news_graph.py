@@ -6,7 +6,7 @@ State machine:
 
   START
     └─► discover_news         9 GNews queries (hours=24) → ~27 fresh articles
-          └─► deduplicate     MD5 hash dedup + PublishedStore cross-run filter
+          └─► deduplicate     3-pass dedup: URL-hash + PublishedStore + title-similarity
                 └─► fetch_articles
                       └─► index_pageindex
                             └─► jev_prefilter         ← Jev Decision #1: scores all, picks top 1
@@ -18,8 +18,9 @@ State machine:
                                                           ├─► BLOCK      ─► hard stop (PII / injection)
                                                           ├─► HUMAN_REVIEW ─► approval gate
                                                           └─► PASS
-                                                                └─► publish  (3 dedup gates)
-                                                                      └─► END
+                                                                └─► score_reach  ← reach optimiser
+                                                                      └─► publish  (3 dedup gates)
+                                                                            └─► END
 
 Jev integration points
 ──────────────────────
@@ -45,6 +46,7 @@ from daily_news.agents.evaluation_agent import EvaluationAgent
 from daily_news.agents.jev_agents import jev_prefilter_articles, jev_route_personas
 from daily_news.agents.persona_agent import PersonaAgentFactory
 from daily_news.agents.publisher_agent import PublisherAgent
+from daily_news.agents.reach_score_agent import ReachScoreAgent, REACH_THRESHOLD
 from daily_news.agents.summary_agent import SummaryAgent
 from daily_news.mcp.news import NewsMCPClient
 from daily_news.mcp.pageindex import PageIndexMCPClient
@@ -105,6 +107,9 @@ class NewsWorkflowState(TypedDict):
 
     # Publishing
     linkedin_results: list[dict]
+
+    # Reach scoring (pre-publish gate)
+    reach_scores: list[dict]      # one ReachScore.summary_line() dict per article
 
     # Run metadata
     workflow_status: str
@@ -460,6 +465,107 @@ async def evaluate(state: NewsWorkflowState) -> NewsWorkflowState:
     return {**state, "evaluation_results": results, "retry_count": new_retry, "workflow_status": "EVALUATED"}
 
 
+async def score_reach(state: NewsWorkflowState) -> NewsWorkflowState:
+    """
+    Pre-publish reach optimiser node.
+
+    For each PASS article, composes the post text, scores it on 6 LinkedIn
+    reach dimensions (0–100), and applies auto-repair if score < REACH_THRESHOLD.
+
+    Stores scoring metadata in state["reach_scores"] for observability.
+    Does NOT call LinkedIn — purely deterministic text analysis.
+    """
+    from daily_news.models.evaluation import EvaluationResult
+    from daily_news.models.persona import PersonaSetOutput
+    from daily_news.models.summary import NewsSummary
+
+    run_id  = state["run_id"]
+    agent   = ReachScoreAgent()
+    scorer  = PublisherAgent()
+    scores: list[dict] = []
+
+    passed_ids = {
+        r["article_id"]
+        for r in state["evaluation_results"]
+        if r["decision"] == EvaluationDecision.PASS.value
+    }
+
+    # Build updated persona_outputs list (repaired posts replace originals in state)
+    updated_persona_outputs: list[dict] = list(state["persona_outputs"])
+
+    for idx, (summary_dict, persona_dict) in enumerate(
+        zip(state["summaries"], state["persona_outputs"])
+    ):
+        if summary_dict["article_id"] not in passed_ids:
+            continue
+
+        summary  = NewsSummary(**summary_dict)
+        personas = PersonaSetOutput(**persona_dict)
+
+        _all_jev  = state.get("jev_prefilter_scores") or {}
+        jev_scores = _all_jev.get(summary.article_id) if isinstance(_all_jev, dict) else None
+
+        # Compose the full post text (same call PublisherAgent.publish() will make)
+        post_text = scorer._compose_main_post(summary, personas, jev_scores or {})
+        rs        = agent.score(post_text)
+
+        logger.info(
+            "[%s] score_reach article=%s %s",
+            run_id, summary.article_id, rs.summary_line(),
+        )
+
+        if rs.notes:
+            for note in rs.notes:
+                logger.debug("[%s] score_reach note: %s", run_id, note)
+
+        score_record = {
+            "article_id":      summary.article_id,
+            "total":           rs.total,
+            "verdict":         rs.verdict,
+            "hook_strength":   rs.hook_strength,
+            "specificity":     rs.specificity,
+            "question_quality":rs.question_quality,
+            "length_fit":      rs.length_fit,
+            "bait_penalty":    rs.bait_penalty,
+            "topic_coherence": rs.topic_coherence,
+            "word_count":      rs.word_count,
+            "hashtag_count":   rs.hashtag_count,
+            "bait_hits":       rs.bait_hits,
+            "notes":           rs.notes,
+        }
+        scores.append(score_record)
+
+        if rs.verdict == "REVISE":
+            logger.info(
+                "[%s] score_reach: score %.0f below threshold %d — applying auto-repair",
+                run_id, rs.total, REACH_THRESHOLD,
+            )
+            # Auto-repair is purely cosmetic text cleanup — no LLM call
+            # The repaired text is stored back so PublisherAgent uses it directly.
+            # We signal this by patching a marker into persona_outputs so the
+            # publisher skips re-composition and uses the pre-repaired text.
+            # (Implementation: publisher checks for "_repaired_post" key.)
+            repaired = ReachScoreAgent.repair(post_text)
+            rs2      = agent.score(repaired)
+            logger.info(
+                "[%s] score_reach: after repair %s",
+                run_id, rs2.summary_line(),
+            )
+            updated_persona_outputs[idx] = {
+                **persona_dict,
+                "_repaired_post": repaired,
+                "_reach_score_before": rs.total,
+                "_reach_score_after":  rs2.total,
+            }
+
+    return {
+        **state,
+        "reach_scores":      scores,
+        "persona_outputs":   updated_persona_outputs,
+        "workflow_status":   "REACH_SCORED",
+    }
+
+
 async def publish(state: NewsWorkflowState) -> NewsWorkflowState:
     from daily_news.models.evaluation import EvaluationResult
     from daily_news.models.persona import PersonaSetOutput
@@ -561,37 +667,39 @@ def route_evaluation(state: NewsWorkflowState) -> Literal["publish", "summarize"
 def build_daily_news_graph():
     graph = StateGraph(NewsWorkflowState)
 
-    graph.add_node("discover_news",   discover_news)
-    graph.add_node("deduplicate",     deduplicate)
-    graph.add_node("fetch_articles",  fetch_articles)
-    graph.add_node("index_pageindex", index_pageindex)
-    graph.add_node("jev_prefilter",   jev_prefilter)       # NEW — replaces select_stories
-    graph.add_node("summarize",       summarize)
-    graph.add_node("jev_router",      jev_router)           # NEW — persona routing
+    graph.add_node("discover_news",     discover_news)
+    graph.add_node("deduplicate",       deduplicate)
+    graph.add_node("fetch_articles",    fetch_articles)
+    graph.add_node("index_pageindex",   index_pageindex)
+    graph.add_node("jev_prefilter",     jev_prefilter)
+    graph.add_node("summarize",         summarize)
+    graph.add_node("jev_router",        jev_router)
     graph.add_node("generate_personas", generate_personas)
-    graph.add_node("evaluate",        evaluate)
-    graph.add_node("publish",         publish)
+    graph.add_node("evaluate",          evaluate)
+    graph.add_node("score_reach",       score_reach)   # pre-publish reach optimiser
+    graph.add_node("publish",           publish)
 
-    graph.add_edge(START,             "discover_news")
-    graph.add_edge("discover_news",   "deduplicate")
-    graph.add_edge("deduplicate",     "fetch_articles")
-    graph.add_edge("fetch_articles",  "index_pageindex")
-    graph.add_edge("index_pageindex", "jev_prefilter")      # Jev scores + selects best article
-    graph.add_edge("jev_prefilter",   "summarize")
-    graph.add_edge("summarize",       "jev_router")          # Jev decides relevant personas
-    graph.add_edge("jev_router",      "generate_personas")
+    graph.add_edge(START,               "discover_news")
+    graph.add_edge("discover_news",     "deduplicate")
+    graph.add_edge("deduplicate",       "fetch_articles")
+    graph.add_edge("fetch_articles",    "index_pageindex")
+    graph.add_edge("index_pageindex",   "jev_prefilter")
+    graph.add_edge("jev_prefilter",     "summarize")
+    graph.add_edge("summarize",         "jev_router")
+    graph.add_edge("jev_router",        "generate_personas")
     graph.add_edge("generate_personas", "evaluate")
 
     graph.add_conditional_edges(
         "evaluate",
         route_evaluation,
         {
-            "publish":   "publish",
+            "publish":   "score_reach",   # route through reach scorer before publish
             "summarize": "summarize",
             "__end__":   END,
         },
     )
-    graph.add_edge("publish", END)
+    graph.add_edge("score_reach", "publish")
+    graph.add_edge("publish",     END)
 
     return graph.compile()
 
@@ -616,6 +724,7 @@ def make_initial_state(run_id: str | None = None) -> NewsWorkflowState:
         retry_count=0,
         approval_status="PENDING",
         linkedin_results=[],
+        reach_scores=[],
         workflow_status="STARTED",
         errors=[],
     )
