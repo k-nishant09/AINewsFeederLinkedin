@@ -1,323 +1,370 @@
-# AIFeeders — Architecture Reference
+# AIFeeders — Enterprise AI Agentic Architecture & Systems Engineering Manual
 
-> **Build #84 (Enterprise Closed-Loop Media Architecture)** · OpenShift `aifeeders` · LangGraph · Jev System One · Vectorless PageIndex · Epistemological Judgment Layer · EKS/AKS Portable
-
----
-
-## Table of Contents
-
-1. [Architectural Overview & Design Intent](#1-architectural-overview--design-intent)
-2. [Why This Architecture: The 8 Cognitive Separations](#2-why-this-architecture-the-8-cognitive-separations)
-3. [The 13-Stage Closed-Loop Pipeline](#3-the-13-stage-closed-loop-pipeline)
-4. [System Topology & Data Flow](#4-system-topology--data-flow)
-5. [Vectorless Document Tree: PageIndex Protocol](#5-vectorless-document-tree-pageindex-protocol)
-6. [The NewsIntelligence & Epistemological Judgment Contract](#6-the-newsintelligence--epistemological-judgment-contract)
-7. [Jev System One: Audience & Angle Optimization](#7-jev-system-one-audience--angle-optimization)
-8. [Media Storyteller & Dynamic Round-Table Dialogue Engine](#8-media-storyteller--dynamic-round-table-dialogue-engine)
-9. [Story Quality Evals, Reach Scoring & Guardrails](#9-story-quality-evals-reach-scoring--guardrails)
-10. [Dynamic SEO & AEO Entity Hashtag Extraction](#10-dynamic-seo--aeo-entity-hashtag-extraction)
-11. [Closed-Loop Feedback & Story Mutation Engine](#11-closed-loop-feedback--story-mutation-engine)
-12. [Langfuse Observability & Distributed Tracing](#12-langfuse-observability--distributed-tracing)
-13. [Containerization & Multi-Cloud Deployment (OpenShift, EKS, AKS)](#13-containerization--multi-cloud-deployment-openshift-eks-aks)
-14. [Architectural Evaluation: Security, Robustness, Scalability & Utility](#14-architectural-evaluation-security-robustness-scalability--utility)
+> **Production Enterprise Architecture Document & High-Level Design**  
+> **Target Audience:** Principal AI Architects, Enterprise Cloud Architects, SecOps & Platform Engineers  
+> **Platform & Runtime:** Red Hat OpenShift `aifeeders`, Multi-Cloud Portable (AWS EKS, Azure AKS) · LangGraph State Machine · IBM Jev System One · Vectorless PageIndex Protocol · Epistemological Judgment Layer · Langfuse v4 Full-Lifecycle Observability · Zero-Trust Dual Guardrails
 
 ---
 
-## 1. Architectural Overview & Design Intent
+## Executive Summary & System Intent
 
-### The Problem with Naive Summarization
-A naive news processing architecture (`GNews → Vector DB → LLM → LinkedIn`) collapses fact extraction, opinion synthesis, audience calibration, and content formatting into a single prompt. This produces:
-1. **Generic, Dry Bullet Points**: Content reads like a corporate press release rather than an engaging media program.
-2. **Hallucinated Factuality**: The LLM conflates corporate marketing claims with verified technical facts.
-3. **No Perspective Diversity**: The output represents a monolithic point of view rather than capturing the real-world trade-offs between executives, policymakers, engineers, and end-users.
-4. **Zero Continuous Learning**: The system publishes blindly without diagnosing why previous posts underperformed or mutating future story formulations based on audience reception.
-
-### The AIFeeders Architectural Solution
-AIFeeders implements a **multi-agent, closed-loop media intelligence system** that treats news as untrusted data, extracts structured evidence without vector drift, performs epistemological boundary analysis, seeds distinct mental models for simulated roundtable personas, evaluates story quality and reach, and learns from audience feedback.
+AIFeeders is an enterprise-grade, **closed-loop agentic media intelligence and epistemological broadcast platform**. It autonomously discovers unstructured global AI announcements, validates safety against adversarial attacks, deterministically indexes evidence without vector embeddings, isolates objective facts from corporate PR claims, determines practitioner audience relevance via Jev, synthesizes a dynamic 4-persona live roundtable debate, executes deterministic quality evaluation gates, optimizes organic reach, dispatches to LinkedIn, and closes the feedback loop via post-publication learning mutations.
 
 ---
 
-## 2. Why This Architecture: The 8 Cognitive Separations
+## 1. High-Level Design (HLD): End-to-End System Architecture (POC to Production)
 
-To ensure trustworthiness and broadcast quality, the architecture enforces 8 discrete cognitive boundaries:
+```mermaid
+graph TB
+    %% ─────────────────────────────────────────────────────────────
+    %% STAGE 1: TRIGGER & DISCOVERY TIER
+    %% ─────────────────────────────────────────────────────────────
+    subgraph S1["STAGE 1: TRIGGER & MULTI-QUERY DISCOVERY TIER"]
+        CRON["Kubernetes CronJob<br/>(08:00 & 16:00 UTC)"] -->|"Trigger Run"| API_POD["daily-news-api<br/>(FastAPI / Workflow Runner)"]
+        API_POD -->|"1. discover_news"| DISCOVER_AGENT["discover_news Agent"]
+        DISCOVER_AGENT -->|"Parallel Query Fetch"| NEWS_MCP["news-mcp Tool (Port 8000)<br/>GNews REST Client"]
+        NEWS_MCP -->|"Failover Key Rotation"| GNEWS_API[("GNews External API<br/>Primary / Backup Key")]
+        DISCOVER_AGENT -->|"2. deduplicate"| DEDUP_AGENT["deduplicate Agent<br/>(3-Pass Dedup Pipeline)"]
+        DEDUP_AGENT <-->|"Pass 1 & 2 Check"| SQLITE_STORE[("PublishedStore<br/>Local SQLite DB")]
+    end
 
+    %% ─────────────────────────────────────────────────────────────
+    %% STAGE 2: ZERO-TRUST INGESTION & DOCUMENT TREE TIER
+    %% ─────────────────────────────────────────────────────────────
+    subgraph S2["STAGE 2: ZERO-TRUST INGESTION & DETERMINISTIC TREE TIER"]
+        DEDUP_AGENT -->|"3. input_guardrail"| IN_GUARD["Input Guardrail<br/>(Prompt Injection & PII Filter)"]
+        IN_GUARD -->|"Sanitized Articles"| FETCH_AGENT["fetch_articles Agent<br/>(Async Web Scraper)"]
+        FETCH_AGENT -->|"Raw Article Text"| PI_AGENT["index_pageindex Agent"]
+        PI_AGENT -->|"Build Structural Tree"| PI_MCP["pageindex-mcp Tool (Port 8001)<br/>In-Memory Document Hierarchy"]
+    end
+
+    %% ─────────────────────────────────────────────────────────────
+    %% STAGE 3: EDITORIAL INTELLIGENCE & EPISTEMOLOGICAL ISOLATION
+    %% ─────────────────────────────────────────────────────────────
+    subgraph S3["STAGE 3: EDITORIAL INTELLIGENCE & EPISTEMOLOGICAL ISOLATION"]
+        PI_AGENT -->|"4. jev_prefilter"| JEV_PRE_AGENT["jev_prefilter Agent"]
+        JEV_PRE_AGENT -->|"7-Signal Scoring"| JEV_GW[("IBM Jev System One Gateway<br/>(70-500ms Cognitive API)")]
+        JEV_PRE_AGENT -->|"Top-1 Article"| JUDGMENT_AGENT["JudgmentAgent<br/>(Epistemological Boundary Isolation)"]
+        JUDGMENT_AGENT -->|"Facts, Claims, Uncertainties<br/>& What NOT to Conclude"| STORY_AGENT["MediaStorytellerAgent<br/>(Hook, Analogy, Tension & Bridges)"]
+        STORY_AGENT -->|"Narrative Framework"| SUMMARY_AGENT["SummaryAgent<br/>(Pass 2 Structured Intel Summary)"]
+        SUMMARY_AGENT -->|"5. find_angle & jev_router"| JEV_ROUTER_AGENT["jev_router Agent<br/>(Missing Angle & Persona Selector)"]
+    end
+
+    %% ─────────────────────────────────────────────────────────────
+    %% STAGE 4: MULTI-PERSONA ROUNDTABLE & QUALITY GATES
+    %% ─────────────────────────────────────────────────────────────
+    subgraph S4["STAGE 4: PARALLEL ROUNDTABLE DEBATE & QUALITY EVAL GATES"]
+        JEV_ROUTER_AGENT -->|"Spawn Active Voices"| P_FOUNDER["Founder Persona<br/>(Unit Economics, CAC, Moat)"]
+        JEV_ROUTER_AGENT -->|"Spawn Active Voices"| P_POLICY["Policy Persona<br/>(EU AI Act, Liability, Privacy)"]
+        JEV_ROUTER_AGENT -->|"Spawn Active Voices"| P_ENG["Engineer Persona<br/>(Latency, Scale, Observability)"]
+        JEV_ROUTER_AGENT -->|"Spawn Active Voices"| P_GEN["Generalist Persona<br/>(Workforce, UX, Usability)"]
+
+        P_FOUNDER & P_POLICY & P_ENG & P_GEN -->|"6. evaluate"| EVAL_AGENT["evaluate Agent"]
+        EVAL_AGENT -->|"Float Verification"| JEV_EVAL[("Jev Evaluation Engine")]
+        EVAL_AGENT -.->|"Fallback"| EVAL_MCP["evaluation-mcp Tool (Port 8002)"]
+        EVAL_AGENT -->|"Apply Hard Gate"| GATE_CHECK{"Deterministic Gate<br/>Factuality >= 0.75<br/>Hallucination <= 0.15"}
+        
+        GATE_CHECK -- "REGENERATE (Retries < 2)<br/>Inject Failure Feedback" --> JUDGMENT_AGENT
+        GATE_CHECK -- "PASS / Max Retries" --> REACH_AGENT["score_reach Agent<br/>(6-Dimension Organic Reach Scorer)"]
+        REACH_AGENT -->|"Auto-Repair & Polish"| GRAMMAR_AGENT["grammar_agent<br/>(Formatting & Social Linting)"]
+    end
+
+    %% ─────────────────────────────────────────────────────────────
+    %% STAGE 5: SAFE DISTRIBUTION & CLOSED-LOOP FEEDBACK TIER
+    %% ─────────────────────────────────────────────────────────────
+    subgraph S5["STAGE 5: SAFE DISTRIBUTION & CLOSED-LOOP LEARNING TIER"]
+        GRAMMAR_AGENT -->|"7. publish"| OUT_GUARD["Output Guardrail<br/>(Fake Quote & Attribution Check)"]
+        OUT_GUARD -->|"Verified Post Body"| PUB_AGENT["PublisherAgent<br/>(Dynamic SEO/AEO Hashtag Engine)"]
+        PUB_AGENT -->|"Create Post & Comments"| LI_MCP["linkedin-mcp Tool (Port 8003)<br/>OAuth2 Gateway"]
+        LI_MCP -->|"REST API Call"| LINKEDIN_API[("LinkedIn Platform API<br/>Post / Threaded Comments")]
+        PUB_AGENT -->|"8. optimize_content"| OPTIMIZER_AGENT["ContentOptimizerAgent<br/>(Post-Publish Performance Diagnosis)"]
+        OPTIMIZER_AGENT -->|"Generate Story Mutations"| MUTATION_STORE[("Story Mutations Memory<br/>Upstream Learning Feedback")]
+        MUTATION_STORE -.->|"Calibrate Future Angles"| JEV_PRE_AGENT
+    end
+
+    %% ─────────────────────────────────────────────────────────────
+    %% CROSS-CUTTING: OBSERVABILITY & PLATFORM HARDENING
+    %% ─────────────────────────────────────────────────────────────
+    subgraph OBS["CROSS-CUTTING OBSERVABILITY, SECURITY & TRACING (POC TO PROD)"]
+        LANGFUSE[("Langfuse v4 Tracing Engine<br/>Unified run_id · Costs · Latency · Spans · Tokens")]
+        API_POD -.-> LANGFUSE
+        DISCOVER_AGENT -.-> LANGFUSE
+        JUDGMENT_AGENT -.-> LANGFUSE
+        STORY_AGENT -.-> LANGFUSE
+        EVAL_AGENT -.-> LANGFUSE
+        REACH_AGENT -.-> LANGFUSE
+        OPTIMIZER_AGENT -.-> LANGFUSE
+
+        SEC_BOX["Platform Security Boundary:<br/>• Non-root runtime (uid 1001)<br/>• Read-only root filesystem<br/>• Strict Kubernetes NetworkPolicy<br/>• Dedicated ServiceAccount RBAC"]
+    end
+
+    %% Styling
+    style S1 fill:#e8f4fd,stroke:#0066cc,stroke-width:2px;
+    style S2 fill:#f0f8ff,stroke:#2b7bb9,stroke-width:2px;
+    style S3 fill:#f4faea,stroke:#388e3c,stroke-width:2px;
+    style S4 fill:#fff8e1,stroke:#f57c00,stroke-width:2px;
+    style S5 fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
+    style OBS fill:#f5f5f5,stroke:#424242,stroke-dasharray: 5 5;
 ```
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   THE 8 COGNITIVE STAGES                                        │
-├─────────────────────────┬───────────────────────────────────┬───────────────────────────────────┤
-│ Stage                   │ Key Responsibility                │ Primary Failure Prevented         │
-├─────────────────────────┼───────────────────────────────────┼───────────────────────────────────┤
-│ 1. Facts                │ Extract verifiable events & data  │ Fabricating numbers & launches    │
-│ 2. Analysis             │ Derive economic & technical impact│ Confusing events with impact      │
-│ 3. Judgment             │ Epistemological boundary isolation│ Presenting PR claims as truths    │
-│ 4. Audience Context(Jev)│ Target audience & missing angle   │ Generic, unengaging framing       │
-│ 5. Story Construction   │ Tension, human analogy, context   │ Dry corporate bullet points       │
-│ 6. Dialogue Debate      │ Multi-character round-table panel │ Monolithic, single-voice bias     │
-│ 7. Evals & Guardrails   │ Factuality, reach score, safety   │ Hallucinations & fake quotes      │
-│ 8. Publishing & Loop    │ Dynamic SEO/AEO & mutation learn  │ Vanity clickbait without learning │
-└─────────────────────────┴───────────────────────────────────┴───────────────────────────────────┘
-```
 
 ---
 
-## 3. The 13-Stage Closed-Loop Pipeline
+## 2. Evolution from POC to Enterprise Production Architecture
 
 ```text
-  START
-    │
-    ▼
-  1. discover_news       ──► 9 GNews queries across tech, business, policy, chips, models
-    │
-    ▼
-  2. deduplicate         ──► 3-pass dedup (URL hash + PublishedStore + Jaccard token overlap)
-    │
-    ▼
-  3. input_guardrail     ──► Reject prompt injection patterns, strip control chars, detect PII
-    │
-    ▼
-  4. fetch_articles      ──► Full article text extraction & metadata enrichment
-    │
-    ▼
-  5. index_pageindex     ──► Build vectorless in-memory document tree representation
-    │
-    ▼
-  6. jev_prefilter       ──► Score articles (emotion, impact, novelty, trend) & rank top-1
-    │
-    ▼
-  7. judgment_analysis   ──► Partition facts, claims, analysis, uncertainties, & what NOT to say
-    │
-    ▼
-  8. summarize           ──► MediaStorytellerAgent (Pass 1: Story Arc) + SummaryAgent (Pass 2)
-    │
-    ▼
-  9. find_angle & route  ──► Jev determines missing angle, primary audience, routes active personas
-    │
-    ▼
- 10. generate_personas   ──► Founder, Policy Analyst, Engineer, Generalist live debate (Parallel)
-    │
-    ▼
- 11. evaluate            ──► Jev & LLM quality gate (Factuality, Groundedness, Hallucination)
-    │                         ├─► REGENERATE ──► summarize (up to MAX_RETRIES)
-    │                         └─► PASS
-    ▼
- 12. score_reach         ──► 6-dimension reach scoring (0-100) & auto-repair
-    │
-    ▼
- 13. publish & optimize  ──► Output Guardrails ──► LinkedIn API ──► Content Optimizer Feedback Loop
-    │
-   END
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   EVOLUTION: POC TO PRODUCTION                                         │
+├───────────────────┬───────────────────────────────────┬────────────────────────────────────────────────┤
+│ Architectural Area│ Initial POC Implementation        │ Production Enterprise Implementation           │
+├───────────────────┼───────────────────────────────────┼────────────────────────────────────────────────┤
+│ Orchestration     │ Linear procedural Python scripts  │ LangGraph State Machine with conditional loops │
+│ Content Indexing  │ Vector DB (Embeddings / Pinecone) │ Vectorless PageIndex (Deterministic Tree)      │
+│ Article Ranking   │ Naive LLM single-prompt scoring   │ IBM Jev System One (7-dimension fast scoring)  │
+│ Fact Verification │ Basic prompt instruction          │ Epistemological JudgmentAgent & Negative Bounds│
+│ Narrative Style   │ Dry bulleted summary points       │ Broadcast Roundtable Debate (4 archetypes)     │
+│ Quality Control   │ No evaluation gate                │ Hybrid Jev/Code Gate with Regeneration Edges   │
+│ Reach Optimization│ Static hardcoded hashtags         │ 6-Dimension Reach Scorer & Dynamic SEO/AEO     │
+│ Security & Safety │ Direct prompt concatenation       │ Zero-Trust Dual Guardrails & Regex Isolation   │
+│ Observability     │ Local console print statements    │ Langfuse v4 Tracing (Full-lifecycle run_id)    │
+│ Infrastructure    │ Single local process              │ Containerized microservices on OpenShift/K8s   │
+│ Feedback Loop     │ Open-loop (publish and forget)    │ Closed-loop ContentOptimizer Story Mutations   │
+└───────────────────┴───────────────────────────────────┴────────────────────────────────────────────────┤
 ```
 
 ---
 
-## 4. System Topology & Data Flow
+## 3. Master Agent & Tool Directory
+
+| Component / Node | Type | Technology / Tool Backing | Specific Responsibility & Function |
+|---|---|---|---|
+| `discover_news` | Agent | `news-mcp` (Port 8000), GNews API | Fires 9 concurrent queries across tech, business, chips, and models. |
+| `deduplicate` | Agent | `PublishedStore` (SQLite), Jaccard Index | 3-pass dedup: canonical URL hash, historical publish check, token overlap ($\ge 0.85$). |
+| `input_guardrail` | Guardrail | Python Regex, Character Filters | Blocks prompt injection payloads (`ignore previous instructions`), detects PII, sanitizes control chars. |
+| `fetch_articles` | Agent | `httpx` Async Web Scraper | Extracts clean raw article text, author credits, and publication metadata. |
+| `index_pageindex` | Agent | `pageindex-mcp` (Port 8001) | Builds hierarchical in-memory document tree (`Document → Sections → Headings → Paragraphs`). |
+| `jev_prefilter` | Agent | Jev System One Gateway | Scores candidate articles across 7 dimensions (novelty, controversy, emotion, velocity) and picks top-1. |
+| `judgment_agent` | Agent | Low-Temp LLM (`0.2`), Pydantic | Epistemological analysis: partitions `facts`, `reported_claims`, `uncertainties`, `what_not_to_conclude`. |
+| `storyteller` | Agent | `MediaStorytellerAgent`, LangChain | Pass 1: Crafts narrative hook, tension model, human analogy, and panel transition bridges. |
+| `summarize` | Agent | `SummaryAgent`, PageIndex Tool | Pass 2: Generates calibrated structured `NewsSummary` integrating judgment boundaries. |
+| `find_angle` | Agent | Jev System One Gateway | Identifies "The Common Narrative" vs "The Missing Angle" and target audience segment. |
+| `jev_router` | Agent | Jev Routing Engine | Dynamically selects 2–4 active roundtable personas based on story domain. |
+| `generate_personas`| Multi-Agent | `PersonaAgentFactory` (Parallel) | Generates simulated debate between Founder, Policy Analyst, Engineer, and Generalist. |
+| `evaluate` | Agent | Jev Gateway / `evaluation-mcp` (8002) | Evaluates factuality, groundedness, and hallucination scores against source evidence. |
+| `route_evaluation`| Gate | Deterministic Python Logic | Enforces hard gate: `PASS` proceeds to reach scoring; `REGENERATE` loops back to `summarize` (max 2 retries). |
+| `score_reach` | Agent | `ReachScoreAgent` | Evaluates 6 organic reach dimensions (0–100) and executes deterministic text auto-repair. |
+| `grammar_agent` | Agent | Language Model Linter | Sanitizes spacing, punctuation, and structural formatting for social platforms. |
+| `output_guardrail`| Guardrail | Quotation & Attribution Validator | Prevents fabricated direct quotes from living figures; validates simulated persona disclaimers. |
+| `publish` | Agent | `PublisherAgent`, `linkedin-mcp` (8003)| Extracts dynamic SEO/AEO hashtags; dispatches post/comments to LinkedIn REST API. |
+| `optimize_content`| Agent | `ContentOptimizerAgent` | Analyzes live post performance, diagnoses weak components, and writes `StoryMutations`. |
+| `tracing` | Cross-Cut | Langfuse v4 SDK, OpenTelemetry | Unified distributed tracing linking `run_id`, token costs, latency, spans, and eval metrics. |
+
+---
+
+## 4. End-to-End Architectural Lifecycle & Cognitive Separations
 
 ```text
-┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                    LANGFUSE OBSERVABILITY                                       │
-│          (Traces · Prompts · Models · Token Latency · Guardrails · Evals · Feedback)             │
-└────────────────────────────────────────────────┬────────────────────────────────────────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │       1. GNews Discovery      │
-                                 └───────────────┬───────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │   2. Ingestion & Dedup        │
-                                 │  (3-pass URL/Store/Jaccard)   │
-                                 └───────────────┬───────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │   3. Input Guardrails         │
-                                 │  (PII · Injections · Escapes) │
-                                 └───────────────┬───────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │   4. PageIndex Evidence Tree  │
-                                 │  (Vectorless section parsing) │
-                                 └───────────────┬───────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │   5. News Intelligence        │
-                                 │  (Sentiment · Emotion · Impact│
-                                 │   Novelty · Trend Velocity)   │
-                                 └───────────────┬───────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │   6. Judgment Analysis        │
-                                 │  (Facts vs Claims vs Unknowns │
-                                 │   Boundaries: What NOT to say)│
-                                 └───────────────┬───────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │   7. Jev Audience & Angle     │
-                                 │  (Missing angle · Audience fit│
-                                 │   Persona Routing)            │
-                                 └───────────────┬───────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │   8. Media Storyteller        │
-                                 │  (Hook · Analogy · Dilemma    │
-                                 │   Transitions · Synthesis)    │
-                                 └───────────────┬───────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │   9. Dialogue Engine          │
-                                 │  (Policy · Founder · Engineer │
-                                 │   Generalist live exchange)   │
-                                 └───────────────┬───────────────┘
-                                                 │
-                                 ┌───────────────┴───────────────┐
-                                 │  10. Story Quality Evals      │
-                                 │  (Factuality · Groundedness   │
-                                 │   Hallucination · Reach score)│
-                                 └───────┬───────────────┬───────┘
-                                         │ FAIL          │ PASS
-                                         ▼               ▼
-                                 [ Regenerate ]  ┌───────────────┴───────────────┐
-                                                 │  11. Output Guardrails        │
-                                                 │  (Fake quotes · Attribution)  │
-                                                 └───────────────┬───────────────┘
-                                                                 │
-                                                 ┌───────────────┴───────────────┐
-                                                 │  12. Publisher & Distribution │
-                                                 │  (Dynamic SEO/AEO · LinkedIn) │
-                                                 └───────────────┬───────────────┘
-                                                                 │
-                                                 ┌───────────────┴───────────────┐
-                                                 │  13. Feedback & Optimization  │
-                                                 │  (Structural diagnosis · Loop)│
-                                                 └───────────────────────────────┘
+  [ TRIGGER ] CronJob / API Dispatch
+       │
+  1. DISCOVERY & FILTERING
+       ├─► discover_news (9 GNews queries)
+       ├─► deduplicate (Pass 1: URL Hash | Pass 2: PublishedStore | Pass 3: Jaccard Sim >= 0.85)
+       └─► input_guardrail (Prompt Injection Scan + PII Redaction)
+       │
+  2. DETERMINISTIC TREE INGESTION
+       ├─► fetch_articles (Scrape full HTML/Text)
+       └─► index_pageindex (Build in-memory hierarchical Document Tree)
+       │
+  3. EDITORIAL INTELLIGENCE & EPISTEMOLOGICAL ISOLATION
+       ├─► jev_prefilter (7-Dimension Scoring -> Select Top-1 Story)
+       ├─► judgment_agent (Extract Facts, Claims, Uncertainties & "What NOT to Conclude")
+       ├─► storyteller (Extract Narrative Hook, Human Analogy, Panel Bridges)
+       ├─► summarize (Pass 2: Structured NewsSummary anchored by Evidence Tree)
+       ├─► find_angle (Jev: Common Narrative vs Missing Angle & Target Audience)
+       └─► jev_router (Active Persona Selection: e.g. ['business', 'engineer'])
+       │
+  4. PARALLEL ROUNDTABLE DEBATE
+       ├─► Founder Persona (Unit Economics, CAC, Moat Durability)
+       ├─► Policy Analyst Persona (EU AI Act, Copyright, Liability)
+       ├─► Engineer Persona (Latency, Architecture, Observability)
+       └─► Generalist Persona (Workplace Deskilling, UX, Ergonomics)
+       │
+  5. QUALITY EVALUATION & CONDITIONAL BACK-EDGE
+       ├─► evaluate (Jev Float Evaluation: Factuality, Groundedness, Hallucination)
+       ├─► route_evaluation (Deterministic Code Gate: Factuality >= 0.75, Hallucination <= 0.15)
+       │       ├─► REGENERATE ──(Retry < 2)──► summarize (Loop back with failure feedback)
+       │       └─► PASS ──► score_reach
+       │
+  6. REACH OPTIMIZATION & PUBLISHING
+       ├─► score_reach (6-Dimension Reach Scorer + Auto-Repair)
+       ├─► grammar_agent (Punctuation & Linting)
+       ├─► output_guardrail (Verify Zero Fake Quotes & Enforce Simulated Disclaimers)
+       ├─► publish (Dynamic SEO/AEO Tag Extraction + LinkedIn Post Dispatch)
+       └─► optimize_content (Performance Diagnosis -> Story Mutations Learning Loop)
+       │
+  [ COMPLETE ] Status: OPTIMIZED
 ```
 
 ---
 
-## 5. Vectorless Document Tree: PageIndex Protocol
+## 5. Deep-Dive Component Rationales: Why Each Technology Exists
 
-Vector databases incur embedding latency, token expenses, and semantic drift. When reasoning over a single fresh article, similarity search often pulls irrelevant paragraphs that happen to share cosine distance.
+### 5.1 Why Jev (System One AI Editorial Intelligence)?
+- **Architectural Problem**: General-purpose LLMs are slow, expensive, and suffer from "polite compliance"—they summarize whatever text is passed to them without assessing whether the news is truly significant, overhyped, or boring.
+- **Why Jev Solves It**: Jev is a high-speed cognitive gateway (70–500ms) trained on content psychology and audience tension. It delivers 4 critical architectural capabilities:
+  1. *Multi-Signal Article Ranking*: Evaluates 7 core vectors (curiosity, excitement, concern, urgency, novelty, trend velocity, audience relevance) to deterministically pick the most impactful story.
+  2. *The Missing Angle*: Detects the consensus narrative echoing across mainstream media and extracts the non-obvious operational or economic bottleneck.
+  3. *Dynamic Persona Routing*: Prevents unnatural or forced roundtables by selecting only the archetypes relevant to the domain.
+  4. *Deterministic Fast Evaluation*: Provides calibrated floats for factual consistency without hallucination.
 
-**PageIndex** eliminates vector embeddings entirely:
-- Parses the document into an in-memory structural tree (`Document → Sections → Headings → Paragraphs → Evidence Items`).
-- When an agent requests evidence via `get_relevant_sections(document_id, query_intent)`, PageIndex navigates the structural hierarchy deterministically.
-- Guarantees 100% reproducible retrieval: identical document text always returns the exact same evidence nodes.
+### 5.2 Why Epistemological Judgment Analysis (`JudgmentAgent`)?
+- **Architectural Problem**: Foundation models suffer from epistemic collapse. When an AI startup claims "Our architecture is 100x more efficient," naive summarizers present that statement as objective fact.
+- **Why JudgmentAgent Solves It**: Operates at `temperature=0.2` to partition content into strict epistemological categories:
+  - `facts`: Concrete, independently verified milestones and data.
+  - `reported_claims`: Subjective statements made by company representatives.
+  - `analysis_implications`: Grounded technical and economic consequences.
+  - `uncertainties`: What remains unproven or pending real-world benchmarks.
+  - `what_not_to_conclude`: Hard negative constraints passed to downstream agents, preventing hallucinated certainty.
+
+### 5.3 Why Vectorless PageIndex (Deterministic Document Tree)?
+- **Architectural Problem**: Vector databases (RAG) split text into arbitrary chunks, embed them via dense vectors, and perform approximate nearest-neighbor search (cosine similarity). This introduces semantic drift, missing context, chunk boundary truncation, and operational database overhead.
+- **Why PageIndex Solves It**: Ingests articles into an in-memory structural tree:
+  ```text
+  Document ──► Sections (H1/H2) ──► Paragraphs ──► Evidence Items
+  ```
+- Retrieval queries like `get_relevant_sections(doc_id, "benchmark numbers")` traverse the document hierarchy deterministically. Identical source text guarantees identical evidence extraction with zero database latency.
+
+### 5.4 Why Dual Guardrails (Zero-Trust Input & Output)?
+- **Input Guardrail**: Raw news articles are external, untrusted user data. Scans for adversarial prompt injections (`ignore previous instructions`, `<system>`, `jailbreak`), redacts accidentally scraped PII, and strips invisible control characters.
+- **Output Guardrail**: Validates generated posts prior to dispatch. Scans for fake direct quotes attributed to real individuals not present in the PageIndex evidence tree and ensures simulated persona disclaimers are present.
+
+### 5.5 Why Multi-Persona Live Roundtable Debate?
+- **Architectural Problem**: Monolithic summaries sound like corporate press releases and fail to engage diverse professional audiences on networks like LinkedIn.
+- **Why Roundtable Solves It**: Simulates a televised panel debate between 4 distinct archetypes:
+  - **💼 Founder**: Evaluates CAC, margin compression, unit economics, and platform lock-in.
+  - **🏛️ Policy Analyst**: Evaluates EU AI Act compliance, copyright liability, and cross-border data governance.
+  - **🧠 Engineer**: Evaluates latency, GPU memory footprint, architecture, and integration debt.
+  - **🎓 Generalist**: Evaluates workforce transitions, everyday usability, and organizational ergonomics.
+  - **Host Framing**: Opens with a high-curiosity hook and real-world analogy, closing with a practitioner dilemma.
+
+### 5.6 Why Deterministic Story Quality Evaluations & Back-Edge Routing?
+- **Architectural Problem**: LLMs cannot be trusted to self-police their own factual accuracy without deterministic constraints.
+- **How Evaluation Works**: Jev or `evaluation-mcp` calculates numerical floats, and Python code enforces hard threshold gates:
+  - `PASS`: Factuality $\ge 0.75$, Groundedness $\ge 0.70$, Hallucination $\le 0.15$.
+  - `REGENERATE`: LangGraph triggers a conditional back-edge (`evaluate ──► summarize`), passing failure reasons to retry generation up to `MAX_RETRIES=2`.
+  - `BLOCK`: Halts publication if unrecoverable policy violations occur.
+
+### 5.7 Why 6-Dimension Reach Scoring & Auto-Repair?
+- **Architectural Problem**: High-quality content can still underperform if it violates platform readability ergonomics or triggers algorithmic penalties.
+- **The 6 Dimensions (0–100 Score)**: Hook Strength, Specificity Score, Question Quality, Length Fit (1,200–2,800 chars), Clickbait Penalty, Topic Coherence. If the score is under 70, `ReachScoreAgent` executes automated surgical repairs before dispatch.
+
+### 5.8 Why Dynamic SEO & AEO Entity Hashtag Extraction?
+- **Architectural Problem**: Static hashtag lists (`#AI #Tech`) are ignored by modern social graph and Answer Engine Optimization (AEO) indexing algorithms.
+- **How Dynamic Extraction Works**: Runtime extraction directly from named entities (`#Anthropic`, `#NVIDIA`), verified source publications (`#TechCrunch`, `#Reuters`), and domain-specific topic models.
+
+### 5.9 Why Langfuse v4 Tracing & Observability?
+- **Architectural Problem**: Debugging multi-agent workflows across asynchronous tool boundaries without distributed tracing is impossible.
+- **How Langfuse Integrates**: Every run is bound to a deterministic `run_id`. Captures token counts, financial cost, latency profiles, evaluation scores, and guardrail flags across every node.
+
+### 5.10 Why Closed-Loop Content Optimization & Story Mutations?
+- **Architectural Problem**: Traditional AI bots operate open-loop—they publish and forget, never improving over time.
+- **How the Closed Loop Works**: Post-publication, `ContentOptimizerAgent` fetches real LinkedIn engagement signals, executes a component-level diagnosis, and writes **Story Mutations** that dynamically calibrate future Jev editorial prompts.
 
 ---
 
-## 6. The NewsIntelligence & Epistemological Judgment Contract
+## 6. Enterprise Non-Functional Architecture
 
-The `JudgmentAgent` runs before narrative storytelling to establish strict epistemic boundaries:
+```text
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 ENTERPRISE NON-FUNCTIONAL ARCHITECTURE                                 │
+├───────────────────┬─────────────────────────────────────────────────┬──────────────────────────────────┤
+│ Dimension         │ Architectural Implementation                    │ Enterprise Guarantee             │
+├───────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────┤
+│ Security          │ Zero-trust input sanitization, non-root (1001), │ Zero prompt injection bleed,     │
+│                   │ drop all Linux capabilities, read-only rootfs   │ zero unauthorized privilege      │
+├───────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────┤
+│ Networking        │ Strict Kubernetes NetworkPolicy, ClusterIP only,│ MCP tools inaccessible from      │
+│                   │ egress whitelisting for LLM/GNews/LinkedIn      │ external public ingress          │
+├───────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────┤
+│ RBAC & IAM        │ Dedicated ServiceAccount, least-privilege role, │ Pods cannot inspect cluster or   │
+│                   │ secrets mounted via env/files                   │ read unauthorized namespaces     │
+├───────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────┤
+│ Scalability       │ Stateless MCP microservices, horizontal pod     │ Linear scaling with zero vector  │
+│                   │ autoscaling (HPA), in-memory PageIndex trees    │ database locking bottlenecks     │
+├───────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────┤
+│ Observability     │ Langfuse v4 SDK, OpenTelemetry distributed      │ End-to-end token, latency, and   │
+│                   │ tracing, structured JSON logging per run_id     │ decision auditability            │
+├───────────────────┼─────────────────────────────────────────────────┼──────────────────────────────────┤
+│ Resiliency        │ GNews API key failover, Jev graceful fallback,  │ Zero single-point-of-failure     │
+│                   │ idempotent publication keys, retry back-edges   │ pipeline outages                 │
+└───────────────────┴─────────────────────────────────────────────────┴──────────────────────────────────┘
+```
+
+### 6.1 Security & Zero-Trust Hardening
+- **Least Privilege Runtime**: All Docker containers execute as non-root user `uid: 1001` with `readOnlyRootFilesystem: true` and all Linux capabilities dropped (`capabilities.drop: ["ALL"]`).
+- **Adversarial Input Sanitization**: Raw news is treated strictly as passive data and never concatenated directly into system instruction blocks.
+
+### 6.2 Network Isolation & NetworkPolicy Model
+- **Zero Public MCP Exposure**: Microservices (`news-mcp`, `pageindex-mcp`, `evaluation-mcp`, `linkedin-mcp`) listen on internal `ClusterIP` services with no public ingress routes.
+- **Egress Boundary**: The API gateway is restricted to outbound HTTPS (`443`) communication with verified external providers (OpenAI/Watsonx, GNews, LinkedIn, Langfuse).
+
+### 6.3 RBAC & Namespace Isolation
+- Standard Kubernetes `ServiceAccount` bound to a restrictive `Role` granting only configmap reads within the `aifeeders` namespace. No cluster-wide privileges or node introspection rights.
+
+### 6.4 High Availability & Resiliency Patterns
+- **API Key Failover**: Automated rotation between primary and secondary GNews keys upon encountering HTTP 403.
+- **Graceful Jev Degradation**: If the Jev gateway is unreachable or disabled, the pipeline falls back to deterministic heuristic ranking and Evaluation MCP without crashing.
+- **LinkedIn Comments Fallback**: If LinkedIn Community Management permissions are missing, personas are seamlessly embedded into the post body with zero data loss.
+- **Idempotency**: Posts generate an idempotent publication key (`hash(article_id + date + post_body)`), preventing accidental duplicate posts.
+
+---
+
+## 7. Microservices & Network Topology
+
+```text
+                                    ┌───────────────────────────────┐
+                                    │      Kubernetes CronJob       │
+                                    │    (08:00 UTC & 16:00 UTC)    │
+                                    └───────────────┬───────────────┘
+                                                    │
+                                    ┌───────────────▼───────────────┐
+                                    │        daily-news-api         │
+                                    │   (FastAPI + LangGraph Core)  │
+                                    │        Port: 8080 (HTTP)      │
+                                    └───────┬───────────────┬───────┘
+                                            │               │
+                     ┌──────────────────────┼───────────────┼──────────────────────┐
+                     ▼                      ▼               ▼                      ▼
+         ┌──────────────────────┐ ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐
+         │       news-mcp       │ │  pageindex-mcp   │ │  evaluation-mcp  │ │   linkedin-mcp   │
+         │   (GNews Provider)   │ │ (Document Tree)  │ │ (LLM Eval Engine)│ │  (REST API Client│
+         │   Port: 8000 (HTTP)  │ │ Port: 8001 (HTTP)│ │ Port: 8002 (HTTP)│ │ Port: 8003 (HTTP)│
+         └──────────────────────┘ └──────────────────┘ └──────────────────┘ └──────────────────┘
+```
+
+---
+
+## 8. Enterprise Data Contracts & State Schemas
 
 ```python
-class JudgmentAnalysis(BaseModel):
-    facts: list[str]                  # Officially confirmed data, launches, numbers
-    reported_claims: list[str]        # Corporate statements, PR promises, executive claims
-    analysis_implications: list[str]  # Grounded deductions on architecture/economics
-    uncertainties: list[str]          # Unproven metrics, pending real-world benchmarks
-    what_not_to_conclude: list[str]   # Explicit guardrails: What personas must NOT assert
+class NewsWorkflowState(TypedDict):
+    """Immutable state machine schema passed across all LangGraph nodes."""
+    run_id: str                              # Unique run identifier (e.g. RUN-0C3B37F29E22)
+    query: str                               # Active news search query
+    articles: list[dict]                     # Raw discovered articles from news-mcp
+    selected_articles: list[dict]            # Deduplicated, filtered, and sanitized articles
+    summaries: list[dict]                    # Pass 1 + Pass 2 NewsSummary dictionaries
+    personas: list[dict]                     # Generated roundtable persona responses
+    evaluation_results: list[dict]           # Factuality & groundedness evaluations
+    retry_count: int                         # Number of regeneration retries executed
+    workflow_status: str                     # Pipeline lifecycle state (e.g. OPTIMIZED)
+    errors: list[str]                        # Non-fatal error logs collected across nodes
+    jev_prefilter_scores: dict[str, dict]    # Multi-dimensional Stage 3 Jev signals
+    jev_persona_hints: list[str]             # Active personas selected by Jev routing
+    reach_scores: dict[str, dict]            # 6-dimension organic reach metrics
+    published_post_urn: str                  # Published LinkedIn post URN
+    optimization_diagnosis: list[dict]       # Component performance diagnosis
+    story_mutations: list[str]               # Learned prompt/editorial calibrations
 ```
 
-By providing `what_not_to_conclude` directly to the `PersonaAgentFactory`, personas are strictly prevented from fabricating certainty or attributing hypothetical outcomes as confirmed facts.
-
 ---
-
-## 7. Jev System One: Audience & Angle Optimization
-
-Jev acts as the audience and editorial judgment layer:
-1. **Pre-filter & Ranking**: Scores candidate articles across multi-dimensional criteria (novelty, controversy, market impact, trend velocity).
-2. **Missing Angle Discovery**: Discovers the underreported tension or non-obvious operational bottleneck that generic coverage overlooked.
-3. **Dynamic Persona Routing**: Rather than running all personas unconditionally, Jev selects the relevant voices (e.g., routing `['business', 'linkedin']` for an infrastructure funding story).
-
----
-
-## 8. Media Storyteller & Dynamic Round-Table Dialogue Engine
-
-### The Live Media Roundtable
-The post is formatted not as bullet points, but as a broadcast roundtable program:
-- **Media Host Opening**: Hooks the audience with immediate curiosity and situation framing.
-- **Human Analogy**: Translates abstract technical mechanics into an intuitive real-world mental model.
-- **Dynamic Bridge Transitions**: Contextual transitions introducing each panelist based on the flow of arguments.
-- **Distinct Persona Lenses**:
-  - **💼 Founder**: Customer acquisition, unit economics, platform lock-in, infrastructure vs application risk.
-  - **🏛️ Policy Analyst**: Regulatory compliance, EU AI Act risk tiers, liability, cross-border governance.
-  - **🧠 Engineer**: Architectural trade-offs, security perimeters, observability, integration friction.
-  - **🎓 Generalist**: End-user experience, everyday usability, workplace transitions, digital literacy.
-- **Media Host Synthesis & Audience Dilemma**: Summarizes second-order consequences and poses a balanced dilemma to the audience.
-
----
-
-## 9. Story Quality Evals, Reach Scoring & Guardrails
-
-### Dual Guardrail Protection
-- **Input Guardrail**: Inspects untrusted news inputs for prompt injection signatures (`ignore previous instructions`, `system: you are`), PII, and malformed control characters.
-- **Output Guardrail**: Validates generated posts prior to publication. Detects hallucinated quotes attributed to real living individuals not verified in the PageIndex evidence tree.
-
-### Quality Evals & Reach Optimization
-- **EvaluationAgent**: Measures `factuality`, `groundedness`, `hallucination`, and policy compliance. Triggers `REGENERATE` if thresholds are unmet.
-- **ReachScoreAgent**: Deterministically analyzes the post across 6 dimensions (Hook Strength, Specificity, Question Quality, Length Fit, Clickbait Penalty, Topic Coherence) to ensure maximum organic engagement.
-
----
-
-## 10. Dynamic SEO & AEO Entity Hashtag Extraction
-
-Static hashtag dictionaries are completely eliminated. The dynamic SEO/AEO engine extracts hashtags directly from:
-1. **Named Entities**: PascalCase extraction of proper nouns, model names, and products from the headline and evidence tree (e.g., `#Okta`, `#DexAI`, `#VentureCapital`).
-2. **Source Publications**: Verified source hashtagging (e.g., `#SiliconANGLE`, `#TechCrunch`, `#Reuters`).
-3. **Domain Subjects**: High-relevance search topic tags derived from the underlying story.
-
----
-
-## 11. Closed-Loop Feedback & Story Mutation Engine
-
-After publication, the `ContentOptimizerAgent` fetches engagement analytics (`reactions`, `comments`, `reposts`, `impressions`) and executes an automated structural diagnosis:
-- Evaluates individual component performance (Hook, Storytelling, Perspective Balance, Dialogue Authenticity, Audience CTA).
-- Identifies the weakest component and generates actionable recommendations.
-- Produces **Story Mutations** stored for calibration in subsequent Jev angle recommendations and prompt optimizations.
-
----
-
-## 12. Langfuse Observability & Distributed Tracing
-
-Every stage of the LangGraph state graph is traced in Langfuse:
-- Unified `run_id` session linking across all microservices and agents.
-- Token consumption, cost accounting, and latency breakdown per LLM call.
-- Direct logging of evaluation decisions, reach scores, guardrail violations, and optimization diagnoses.
-
----
-
-## 13. Containerization & Multi-Cloud Deployment (OpenShift, EKS, AKS)
-
-### Docker Build
-```bash
-docker build -t aifeeders/daily-news:latest .
-```
-
-### OpenShift Deployment
-```bash
-oc project aifeeders
-oc apply -f openshift/secrets.yaml
-oc apply -f openshift/configmap.yaml
-oc apply -f openshift/news-mcp.yaml
-oc apply -f openshift/pageindex-mcp.yaml
-oc apply -f openshift/evaluation-mcp.yaml
-oc apply -f openshift/linkedin-mcp.yaml
-oc apply -f openshift/daily-news-api.yaml
-oc start-build daily-news --from-dir=. --follow
-oc rollout status deployment/daily-news-api
-```
-
-### AWS EKS & Azure AKS Portability
-Standard Kubernetes manifests located in `openshift/` deploy across AWS EKS and Azure AKS by pushing images to Amazon ECR or Azure ACR and applying `kubectl apply -f openshift/`.
-
----
-
-## 14. Architectural Evaluation: Security, Robustness, Scalability & Utility
-
-| Dimension | Architectural Implementation | Practical Guarantee |
-|---|---|---|
-| **Security** | Untrusted data isolation, dual guardrails, non-root containers (`uid 1001`), strict `NetworkPolicy` | Zero prompt injection bleed, zero PII leakage, zero unauthorized container privileges |
-| **Robustness** | Epistemological judgment boundaries, graceful Jev fallbacks, idempotent publication keys | Zero fake quote attribution, zero duplicate posts, resilient to external API outages |
-| **Scalability** | Stateless MCP microservices, horizontal pod autoscaling (HPA), vectorless in-memory tree parsing | Scales horizontally without vector DB indexing locks or shared cache bottlenecks |
-| **End-User Utility**| Multi-perspective debate format, dynamic SEO tags, closed-loop structural optimization | Delivers authentic, high-signal editorial intelligence that sparks practitioner discussion |
-
----
-*AIFeeders — Enterprise AI Media Intelligence Architecture.*
+*AIFeeders Enterprise Systems Architecture Manual.*

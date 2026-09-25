@@ -1,82 +1,154 @@
-# AIFeeders Runbook
+# AIFeeders Operational Runbook & Step-by-Step Production Guide
 
-> **Build #84** — Closed-Loop Enterprise Intelligence · Epistemological Judgment · Dynamic Live Roundtable · Multi-Cloud (OpenShift, EKS, AKS)  
+> **Enterprise Production Runbook** — Closed-Loop Enterprise Intelligence · Epistemological Judgment · Dynamic Live Roundtable · Multi-Cloud (OpenShift, EKS, AKS)  
 > **Last verified:** Live Run `RUN-0C3B37F29E22` on OpenShift · 223 tests passing · Published `urn:li:share:7509289467577315328`
 
 ---
 
 ## Table of Contents
 
-1. [What This System Does in Plain English](#1-what-this-system-does-in-plain-english)
-2. [Normal Day — What to Check](#2-normal-day--what-to-check)
-3. [First-Time Setup on a New Cluster (OpenShift / EKS / AKS)](#3-first-time-setup-on-a-new-cluster-openshift--eks--aks)
-4. [Docker Build & Multi-Cloud Deployment Guide](#4-docker-build--multi-cloud-deployment-guide)
-5. [Triggering a Run Manually & Live Testing](#5-triggering-a-run-manually--live-testing)
-6. [How to Read the Logs Across the 13 Stages](#6-how-to-read-the-logs-across-the-13-stages)
-7. [Checking Service Health & Microservices](#7-checking-service-health--microservices)
-8. [Production Issues — Exact Symptoms, Root Causes, Fixes](#8-production-issues--exact-symptoms-root-causes-fixes)
-9. [API Quota, Guardrails & Key Rotation](#9-api-quota-guardrails--key-rotation)
-10. [Networking & NetworkPolicy Security Model](#10-networking--networkpolicy-security-model)
-11. [Scaling & Resource Management](#11-scaling--resource-management)
-12. [Observability & Feedback Loop Operations](#12-observability--feedback-loop-operations)
-13. [Glossary](#13-glossary)
+1. [System Overview & Execution Model](#1-system-overview--execution-model)
+2. [Why Each Architectural Component is Used (FAQ & Deep-Dive Rationale)](#2-why-each-architectural-component-is-used-faq--deep-dive-rationale)
+   - [Why Jev (System One AI Editorial Gateway)?](#why-jev-system-one-ai-editorial-gateway)
+   - [Why Epistemological Judgment Analysis (JudgmentAgent)?](#why-epistemological-judgment-analysis-judgmentagent)
+   - [Why Vectorless PageIndex Document Trees?](#why-vectorless-pageindex-document-trees)
+   - [Why Dual Guardrails (Input & Output)?](#why-dual-guardrails-input--output)
+   - [Why Multi-Persona Live Roundtable Debate?](#why-multi-persona-live-roundtable-debate)
+   - [Why Deterministic Evaluation Gates & Back-Edge Retries?](#why-deterministic-evaluation-gates--back-edge-retries)
+   - [Why ReachScoreAgent & Auto-Repair?](#why-reachscoreagent--auto-repair)
+   - [Why Langfuse v4 Tracing & Observability?](#why-langfuse-v4-tracing--observability)
+   - [Why ContentOptimizerAgent & Story Mutation Loops?](#why-contentoptimizeragent--story-mutation-loops)
+3. [End-to-End Execution Flow (Step-by-Step Operator Guide)](#3-end-to-end-execution-flow-step-by-step-operator-guide)
+4. [First-Time Cluster Setup (OpenShift, AWS EKS, Azure AKS)](#4-first-time-cluster-setup-openshift-aws-eks-azure-aks)
+5. [Docker Container Build & Deployment Automation](#5-docker-container-build--deployment-automation)
+6. [Daily Operations: Health Checks & Validation Checklist](#6-daily-operations-health-checks--validation-checklist)
+7. [How to Trigger Manual Runs & Local Testing](#7-how-to-trigger-manual-runs--local-testing)
+8. [Log Interpretation & Stage Trace Reference](#8-log-interpretation--stage-trace-reference)
+9. [Production Incident Triage & Troubleshooting](#9-production-incident-triage--troubleshooting)
+10. [Secret Management, API Key Rotation & Quotas](#10-secret-management-api-key-rotation--quotas)
+11. [Enterprise Security & Network Isolation](#11-enterprise-security--network-isolation)
 
 ---
 
-## 1. What This System Does in Plain English
+## 1. System Overview & Execution Model
 
-AIFeeders is a **fully automated AI news intelligence and media round-table platform**. Every day, on schedule, the system wakes up, discovers fresh AI news, inspects it for safety and prompt injection, builds a vectorless evidence tree, separates verified facts from corporate PR claims, determines why practitioners care via Jev, writes a live broadcast dialogue across four human personas, evaluates quality and reach, and publishes to LinkedIn with 100% dynamic SEO/AEO hashtags.
+AIFeeders is an autonomous, closed-loop media intelligence system engineered to transform raw, noisy AI technology announcements into high-signal, broadcast-quality editorial debate programs published to LinkedIn.
 
-Post-publication, the system diagnoses structural engagement signals and logs learning mutations for future iterations.
-
-### The Schedule
-A Kubernetes CronJob fires at **08:00 UTC** and **16:00 UTC** every day.
+### Scheduled Execution
+The pipeline runs automatically via Kubernetes CronJob at:
+- **08:00 UTC** (Morning Asia/Europe edition)
+- **16:00 UTC** (Morning US / Evening Europe edition)
 
 ---
 
-## 2. Normal Day — What to Check
+## 2. Why Each Architectural Component is Used (FAQ & Deep-Dive Rationale)
 
-If you are checking whether today's run succeeded, execute these checks in order:
+### Why Jev (System One AI Editorial Gateway)?
+- **Problem**: Standard LLMs are slow, costly, and lack calibrated journalistic instinct. When asked to evaluate 20 raw news stories, an LLM defaults to polite, obvious summaries of corporate press releases.
+- **Why Jev**: Jev operates as an ultra-fast (70–500ms) System One editorial gateway. It evaluates multi-dimensional signals (novelty, trend velocity, emotional polarity, enterprise vs developer impact) to select the single highest-value story, determines the "Missing Angle" that mainstream media missed, and dynamically routes only the most relevant personas.
+- **Fallback**: If Jev is disabled (`JEV_ENABLED=false`) or unreachable, the system gracefully falls back to deterministic heuristic ranking and Evaluation MCP without pipeline disruption.
 
-### Step 1 — Are the pods running?
+### Why Epistemological Judgment Analysis (JudgmentAgent)?
+- **Problem**: Large Language Models suffer from epistemic collapse—they treat unproven marketing hype ("Our chip is 10x faster") identically to verified empirical data.
+- **Why JudgmentAgent**: Before storytelling begins, `JudgmentAgent` runs at low temperature (`0.2`) to partition the article into strict categories:
+  1. `facts`: Verified launches, benchmark figures, confirmed dates.
+  2. `reported_claims`: Statements and promises made by corporate actors.
+  3. `analysis_implications`: Grounded technical/economic deductions.
+  4. `uncertainties`: Pending benchmarks, unknown pricing, regulatory risks.
+  5. `what_not_to_conclude`: Hard boundaries explicitly barring downstream models from fabricating certainty or attributing unproven claims as established facts.
+
+### Why Vectorless PageIndex Document Trees?
+- **Problem**: Traditional vector databases (RAG) suffer from semantic drift, token chunk truncation, cosine distance hallucinations, and external database infrastructure costs when handling fresh articles.
+- **Why PageIndex**: Parses documents into an in-memory hierarchical structure (`Document → Sections → Headings → Evidence Items`). Section retrieval queries traverse the tree deterministically, guaranteeing 100% reproducible evidence extraction with zero vector database operational overhead.
+
+### Why Dual Guardrails (Input & Output)?
+- **Problem**: Public news feeds can contain adversarial prompt injection strings, and LLMs can hallucinate fake quotations attributed to real living individuals.
+- **Why InputGuardrail**: Inspects raw incoming articles for prompt injections (`ignore previous instructions`, `<system>`, `bypass all filters`), scans for accidental PII (SSNs, credit card numbers), and cleans malformed control characters.
+- **Why OutputGuardrail**: Inspects generated content before LinkedIn dispatch, flagging fake direct quotes not verified in the PageIndex evidence tree and enforcing persona disclaimers.
+
+### Why Multi-Persona Live Roundtable Debate?
+- **Problem**: Monolithic bullet-point summaries are boring and drive poor engagement on professional platforms.
+- **Why Roundtable**: Models the story as a broadcast panel discussion featuring distinct industry archetypes:
+  - **💼 Founder**: Evaluates unit economics, customer acquisition, and platform lock-in.
+  - **🏛️ Policy Analyst**: Evaluates EU AI Act compliance, liability, and copyright.
+  - **🧠 Engineer**: Evaluates architectural trade-offs, latency, observability, and integration debt.
+  - **🎓 Generalist**: Evaluates workplace impact, usability, and workforce transitions.
+  - **Host Opening & Synthesis**: Delivers an engaging human analogy and poses an open dilemma that sparks practitioner debate.
+
+### Why Deterministic Evaluation Gates & Back-Edge Retries?
+- **Problem**: LLMs cannot reliably self-govern their own factuality when given free rein.
+- **Why Deterministic Gates**: While Jev or MCP supplies the numerical evaluation floats, deterministic Python code enforces hard threshold gates:
+  - `PASS`: Factuality $\ge 0.75$, Groundedness $\ge 0.70$, Hallucination $\le 0.15$.
+  - `REGENERATE`: Triggers a LangGraph back-edge (`evaluate ──► summarize`), passing failure reasons to retry generation up to `MAX_RETRIES=2`.
+  - `BLOCK`: Unrecoverable policy or safety violation halts publication.
+
+### Why ReachScoreAgent & Auto-Repair?
+- **Problem**: Factually accurate posts may still fail to reach an audience if they suffer from poor structure, weak hooks, excessive length, or clickbait penalties.
+- **Why Reach Scoring**: Evaluates the post across 6 dimensions (Hook Strength, Specificity Score, Question Quality, Length Fit, Clickbait Penalty, Topic Coherence). If the composite score is under 70, `ReachScoreAgent` executes surgical prompt auto-repairs prior to publication.
+
+### Why Langfuse v4 Tracing & Observability?
+- **Problem**: Multi-agent pipelines with dynamic routing and retries are impossible to monitor via standard terminal logs.
+- **Why Langfuse**: Instruments every LLM call, tool execution, eval gate, and guardrail check with a unified `run_id`. Provides real-time visibility into token costs, latency bottlenecks, and error traces.
+
+### Why ContentOptimizerAgent & Story Mutation Loops?
+- **Problem**: Traditional bots publish blindly without learning from real-world performance.
+- **Why ContentOptimizer**: Post-publication, it pulls real LinkedIn engagement metrics (reactions, reposts, comments), runs a structural diagnosis, and outputs **Story Mutations** that calibrate future Jev prompt recommendations.
+
+---
+
+## 3. End-to-End Execution Flow (Step-by-Step Operator Guide)
+
+When a run is triggered, the LangGraph orchestrator executes the following 13 steps sequentially:
+
+1. **`discover_news`**: Executes 9 targeted GNews search queries across AI domains (chips, LLMs, enterprise tools, policy, funding).
+2. **`deduplicate`**: Performs 3-pass deduplication:
+   - Pass 1: Canonical URL hash lookup against SQLite `PublishedStore`.
+   - Pass 2: Exact normalized title matching.
+   - Pass 3: Jaccard token overlap similarity ($\ge 0.85$).
+3. **`input_guardrail`**: Scans surviving articles for prompt injection signatures and PII.
+4. **`fetch_articles`**: Scrapes full article body text and metadata.
+5. **`index_pageindex`**: Ingests articles into in-memory hierarchical PageIndex document trees.
+6. **`jev_prefilter`**: Scores candidate articles on 7 multi-dimensional signals and selects the top-1 story.
+7. **`summarize`**:
+   - Step A: `JudgmentAgent` extracts facts, claims, uncertainties, and what NOT to conclude.
+   - Step B: `MediaStorytellerAgent` designs the narrative hook, human analogy, and panel bridges.
+   - Step C: `SummaryAgent` builds the structured `NewsSummary`.
+8. **`find_angle`**: Jev identifies the "Missing Angle" and target audience.
+9. **`jev_router`**: Jev selects the active panelist personas for this specific topic.
+10. **`generate_personas`**: Executes selected personas in parallel to generate authentic roundtable commentary.
+11. **`evaluate`**: Evaluates factuality and groundedness. If thresholds fail, LangGraph loops back to step 7.
+12. **`score_reach`**: Measures organic reach potential (0–100) and executes auto-repairs if needed.
+13. **`publish` & `optimize_content`**: Output guardrails inspect text $\rightarrow$ PublisherAgent extracts dynamic SEO/AEO hashtags $\rightarrow$ LinkedIn API creates post $\rightarrow$ ContentOptimizer logs structural mutations.
+
+---
+
+## 4. First-Time Cluster Setup (OpenShift, AWS EKS, Azure AKS)
+
+### Step 1: Create Namespace / Project
 ```bash
 # OpenShift
-oc get pods -n aifeeders
+oc new-project aifeeders
 
-# EKS / AKS
-kubectl get pods -n aifeeders
+# AWS EKS / Azure AKS
+kubectl create namespace aifeeders
+kubectl config set-context --current --namespace=aifeeders
 ```
 
-Expected status: all pods `Running` with 0 restarts.
-
-### Step 2 — Check the latest run logs
-```bash
-oc logs -n aifeeders deployment/daily-news-api --tail=100
-```
-Look for `Workflow complete — status=OPTIMIZED published=1 errors=0`.
-
----
-
-## 3. First-Time Setup on a New Cluster (OpenShift / EKS / AKS)
-
-### Step 1 — Create the namespace / project
-```bash
-oc new-project aifeeders || kubectl create namespace aifeeders
-```
-
-### Step 2 — Create Secrets
+### Step 2: Configure Secrets
 ```bash
 kubectl create secret generic daily-news-secrets \
-  --from-literal=LLM_API_KEY=<your-key> \
-  --from-literal=GNEWS_API_KEY=<your-gnews-key-1> \
-  --from-literal=GNEWS_API_KEY_2=<your-gnews-key-2> \
-  --from-literal=JEV_API_KEY=<your-jev-key> \
-  --from-literal=LINKEDIN_CLIENT_ID=<your-id> \
-  --from-literal=LINKEDIN_CLIENT_SECRET=<your-secret> \
+  --from-literal=LLM_API_KEY="your-llm-api-key" \
+  --from-literal=GNEWS_API_KEY="your-primary-gnews-key" \
+  --from-literal=GNEWS_API_KEY_2="your-backup-gnews-key" \
+  --from-literal=JEV_API_KEY="your-jev-api-key" \
+  --from-literal=LINKEDIN_CLIENT_ID="your-linkedin-client-id" \
+  --from-literal=LINKEDIN_CLIENT_SECRET="your-linkedin-client-secret" \
+  --from-literal=LANGFUSE_PUBLIC_KEY="pk-lf-..." \
+  --from-literal=LANGFUSE_SECRET_KEY="sk-lf-..." \
   -n aifeeders
 ```
 
-### Step 3 — Apply ConfigMaps & Microservices
+### Step 3: Deploy Microservices & API
 ```bash
 kubectl apply -f openshift/configmap.yaml -n aifeeders
 kubectl apply -f openshift/news-mcp.yaml -n aifeeders
@@ -84,15 +156,15 @@ kubectl apply -f openshift/pageindex-mcp.yaml -n aifeeders
 kubectl apply -f openshift/evaluation-mcp.yaml -n aifeeders
 kubectl apply -f openshift/linkedin-mcp.yaml -n aifeeders
 kubectl apply -f openshift/daily-news-api.yaml -n aifeeders
+kubectl apply -f openshift/cronjob.yaml -n aifeeders
 ```
 
 ---
 
-## 4. Docker Build & Multi-Cloud Deployment Guide
+## 5. Docker Container Build & Deployment Automation
 
-### 4.1 Local Docker Container Build
+### 5.1 Local Clean Docker Build
 ```bash
-# Clean build context to avoid uploading unnecessary virtual environments
 TMPDIR=$(mktemp -d) && rsync -a \
   --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
   --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
@@ -102,14 +174,15 @@ TMPDIR=$(mktemp -d) && rsync -a \
 docker build -t aifeeders/daily-news:latest "$TMPDIR"
 ```
 
-### 4.2 Push to OpenShift
+### 5.2 Push & Deploy to Red Hat OpenShift
 ```bash
 oc project aifeeders
 oc start-build daily-news --from-dir=. --follow
 oc rollout restart deployment/daily-news-api -n aifeeders
+oc rollout status deployment/daily-news-api -n aifeeders
 ```
 
-### 4.3 Push to AWS EKS (ECR)
+### 5.3 Push & Deploy to AWS EKS (ECR)
 ```bash
 aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com
 docker tag aifeeders/daily-news:latest <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/aifeeders:latest
@@ -117,7 +190,7 @@ docker push <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/aifeeders:latest
 kubectl rollout restart deployment/daily-news-api -n aifeeders
 ```
 
-### 4.4 Push to Azure AKS (ACR)
+### 5.4 Push & Deploy to Azure AKS (ACR)
 ```bash
 az acr login --name aifeedersregistry
 docker tag aifeeders/daily-news:latest aifeedersregistry.azurecr.io/daily-news:latest
@@ -127,70 +200,118 @@ kubectl rollout restart deployment/daily-news-api -n aifeeders
 
 ---
 
-## 5. Triggering a Run Manually & Live Testing
+## 6. Daily Operations: Health Checks & Validation Checklist
 
-### Run workflow inside the running pod:
+Execute these verification checks to confirm cluster health:
+
 ```bash
-oc rsh deployment/daily-news-api python -m daily_news.workflow_runner
+# 1. Verify Pod Status (All pods should be 'Running' with 0 restarts)
+kubectl get pods -n aifeeders -o wide
+
+# 2. Check Service Endpoints
+kubectl get svc -n aifeeders
+
+# 3. Test API Health & MCP connectivity
+kubectl exec deployment/daily-news-api -n aifeeders -- curl -s http://localhost:8080/health
+
+# 4. Inspect latest CronJob execution
+kubectl get cronjob -n aifeeders
+kubectl get jobs -n aifeeders --sort-by='.metadata.creationTimestamp' | tail -n 5
 ```
 
 ---
 
-## 6. How to Read the Logs Across the 13 Stages
+## 7. How to Trigger Manual Runs & Local Testing
 
-Each run outputs traceable logs prefixed with `[RUN-XXXXXXXX]`:
-1. `discover_news started` → Raw GNews articles fetched.
-2. `deduplicated` → 3-pass deduplication filtering duplicate URLs and headlines.
-3. `input guardrail` → Prompt injection & PII inspection passing status.
-4. `jev_prefilter` → Composite scoring and article ranking.
-5. `judgment analysis` → Number of verified facts, claims, and uncertainties.
-6. `story extracted` → Narrative style, hook, and tension model.
-7. `jev_find_angle` & `jev_route_personas` → Audience calibration and active persona routing.
-8. `generate_personas` → Live round-table debate generation.
-9. `eval` → Factuality, groundedness, and hallucination scores.
-10. `score_reach` → Organic reach score (0–100) and auto-repair status.
-11. `grammar_agent` → Punctuation and spelling corrections.
-12. `post published` → LinkedIn post URN generated.
-13. `ContentOptimizer` → Structural performance diagnosis and mutation recording.
-
----
-
-## 7. Checking Service Health & Microservices
-
+### Option A: Trigger Workflow via REST API Inside Cluster
 ```bash
-# Check all services
-oc get svc -n aifeeders
+kubectl exec deployment/daily-news-api -n aifeeders -- curl -s -X POST http://localhost:8080/workflow/run
+```
 
-# Test API health endpoint
-oc exec deployment/daily-news-api -- curl -s http://localhost:8080/health
+### Option B: Trigger Workflow via CLI Runner
+```bash
+kubectl exec -it deployment/daily-news-api -n aifeeders -- python -m daily_news.workflow_runner
+```
+
+### Option C: Run Full Local Test Suite
+```bash
+uv run pytest tests/ -v
 ```
 
 ---
 
-## 8. Production Issues — Exact Symptoms, Root Causes, Fixes
+## 8. Log Interpretation & Stage Trace Reference
 
-### Issue 1: Comments API `PERMISSION_ERROR`
+Each production run logs with a unique trace ID `[RUN-XXXXXXXX]`. Follow these log patterns:
+
+```text
+[RUN-0C3B37F29E22] discover_news: fetched 18 raw articles across 9 queries
+[RUN-0C3B37F29E22] deduplicate: 18 -> 12 articles (3 filtered by store, 3 by Jaccard)
+[RUN-0C3B37F29E22] input_guardrail: all 12 articles passed prompt injection/PII scan
+[RUN-0C3B37F29E22] index_pageindex: 12 articles indexed into in-memory trees
+[RUN-0C3B37F29E22] jev_prefilter: top article selected (composite_score=0.89, novelty=0.92)
+[RUN-0C3B37F29E22] judgment_analysis: facts=4, claims=3, uncertainties=2, what_not_to_conclude=3
+[RUN-0C3B37F29E22] story extracted: style=INVESTIGATIVE, hook_len=142
+[RUN-0C3B37F29E22] jev_find_angle: missing_angle identified, target_audience=ENGINEERING_LEADS
+[RUN-0C3B37F29E22] jev_router: routed active personas -> ['business', 'developer', 'policy']
+[RUN-0C3B37F29E22] generate_personas: 3 personas generated in parallel (duration=1.4s)
+[RUN-0C3B37F29E22] evaluate: decision=PASS (factuality=0.88, groundedness=0.84, hallucination=0.04)
+[RUN-0C3B37F29E22] score_reach: reach_score=86 (specificity=0.92, hook=0.88, clickbait=0.0)
+[RUN-0C3B37F29E22] publish: post published -> urn:li:share:7509289467577315328
+[RUN-0C3B37F29E22] optimize_content: diagnosis recorded, 2 story mutations stored
+[RUN-0C3B37F29E22] Workflow complete — status=OPTIMIZED published=1 errors=0
+```
+
+---
+
+## 9. Production Incident Triage & Troubleshooting
+
+### Incident 1: Comments API `PERMISSION_ERROR`
 - **Symptom**: `Comments API not available (PERMISSION_ERROR) — personas embedded in post body`.
-- **Root Cause**: LinkedIn account requires "Community Management API" approval for programmatic comments.
-- **Resolution**: Normal and expected. The `PublisherAgent` automatically embeds all round-table personas directly into the main post body with zero data loss.
+- **Root Cause**: The LinkedIn OAuth application has standard "Share on LinkedIn" permissions but lacks "Community Management API" access for threaded comments.
+- **Resolution**: **No action required**. The `PublisherAgent` automatically embeds the entire multi-persona roundtable debate directly into the main post body with zero data loss.
 
-### Issue 2: GNews API 403 Rate Limit
-- **Symptom**: `news.search_latest failed: HTTP 403`.
-- **Root Cause**: Daily request limit reached on key 1.
-- **Resolution**: Automatic. The adapter switches automatically to `GNEWS_API_KEY_2`.
+### Incident 2: GNews API HTTP 403 Rate Limit
+- **Symptom**: `news.search_latest failed: HTTP 403 Forbidden`.
+- **Root Cause**: Primary GNews key reached its 100 req/day quota.
+- **Resolution**: Automatic failover. `news-mcp` automatically rotates requests to `GNEWS_API_KEY_2`.
 
-### Issue 3: Evaluation Decision `REGENERATE`
-- **Symptom**: `eval decision=REGENERATE factuality=0.42`.
-- **Root Cause**: Persona output contained ungrounded claims.
-- **Resolution**: Automatic. LangGraph executes a back-edge to `summarize` with feedback up to `MAX_RETRIES=2`.
+### Incident 3: Evaluation Decision `REGENERATE`
+- **Symptom**: `eval decision=REGENERATE factuality=0.62`.
+- **Root Cause**: Persona output contained claims not supported by the PageIndex evidence tree.
+- **Resolution**: LangGraph automatically retries narrative generation up to `MAX_RETRIES=2`. If retries are exhausted, it publishes only strictly verified PASS elements.
+
+### Incident 4: Langfuse Tracing Timeout
+- **Symptom**: `Langfuse init/auth failed (LLM tracing disabled)`.
+- **Root Cause**: Invalid Langfuse credentials or egress network policy blocking `cloud.langfuse.com`.
+- **Resolution**: The system logs a warning and proceeds with local execution without failing the publication pipeline.
+
+---
+
+## 10. Secret Management, API Key Rotation & Quotas
+
+To rotate API keys without downtime:
+```bash
+kubectl create secret generic daily-news-secrets \
+  --from-literal=LLM_API_KEY="new-llm-key" \
+  --from-literal=GNEWS_API_KEY="new-gnews-key-1" \
+  --from-literal=GNEWS_API_KEY_2="new-gnews-key-2" \
+  --from-literal=JEV_API_KEY="new-jev-key" \
+  --from-literal=LINKEDIN_CLIENT_ID="your-id" \
+  --from-literal=LINKEDIN_CLIENT_SECRET="your-secret" \
+  --dry-run=client -o yaml | kubectl apply -f - -n aifeeders
+
+# Trigger rolling restart
+kubectl rollout restart deployment/daily-news-api -n aifeeders
+```
 
 ---
 
-## 9. Security & NetworkPolicy
+## 11. Enterprise Security & Network Isolation
 
-- **Non-Root Execution**: Runs as user `1001`.
-- **Untrusted Input Isolation**: Raw news content is treated as data, never system instructions.
-- **Fake Quotation Guardrails**: Prevents attributing unverified statements to real people.
+- **Non-Root Execution**: All containers run with `securityContext.runAsUser: 1001` and `allowPrivilegeEscalation: false`.
+- **Network Isolation**: MCP servers (`news-mcp`, `pageindex-mcp`, `evaluation-mcp`, `linkedin-mcp`) listen on internal ClusterIP services and are not exposed to public ingress.
+- **Data Invariant**: Raw news articles are treated as untrusted data inputs, strictly segregated from system prompts and reasoning templates.
 
 ---
-*AIFeeders Operational Runbook.*
+*AIFeeders Enterprise Operational Runbook.*

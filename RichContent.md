@@ -1,6 +1,6 @@
 # RichContent.md — AIFeeders Content Strategy & Quality Guide
 
-> **Build #84 · Dynamic Live Roundtable Delivery · Last updated: 2026**
+> **Enterprise Dynamic Live Roundtable Delivery · Last updated: 2026**
 
 ---
 
