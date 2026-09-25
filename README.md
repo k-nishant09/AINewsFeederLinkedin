@@ -1,6 +1,6 @@
 # AIFeeders — AI Content Intelligence & Media Roundtable Platform
 
-> **Build #84 (Closed-Loop Enterprise Architecture)** · Cluster `aifeeders` OpenShift / EKS / AKS · LLM `qwen2-5-72b-instruct` · 223 tests passing · Vectorless PageIndex Document Reasoning · Zero Hardcoded Dictionaries · 100% Dynamic Dialogue & SEO/AEO Generation
+> **Closed-Loop Enterprise Architecture** · Cluster `aifeeders` OpenShift / EKS / AKS · LLM `qwen2-5-72b-instruct` · 223 tests passing · Vectorless PageIndex Document Reasoning · Zero Hardcoded Dictionaries · 100% Dynamic Dialogue & SEO/AEO Generation
 
 ---
 
