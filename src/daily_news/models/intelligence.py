@@ -51,6 +51,52 @@ class ContentOpportunity(BaseModel):
     discussion_question:   str = ""   # the one question that sparks real conversation
 
 
+class EngagementMetrics(BaseModel):
+    """Observable LinkedIn engagement metrics."""
+    post_urn:         str = ""
+    article_id:       str = ""
+    impressions:      int = Field(default=0, ge=0)
+    reactions:        int = Field(default=0, ge=0)
+    comments:         int = Field(default=0, ge=0)
+    reposts:          int = Field(default=0, ge=0)
+    engagement_rate:  float = Field(default=0.0, ge=0.0)
+
+
+class PerformanceDiagnosis(BaseModel):
+    """Diagnostic breakdown evaluating which structural component underperformed."""
+    hook_score:               float = Field(default=0.0, ge=0.0, le=1.0)
+    storytelling_score:       float = Field(default=0.0, ge=0.0, le=1.0)
+    audience_relevance_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    perspective_score:        float = Field(default=0.0, ge=0.0, le=1.0)
+    dialogue_score:           float = Field(default=0.0, ge=0.0, le=1.0)
+    question_score:           float = Field(default=0.0, ge=0.0, le=1.0)
+    weakest_component:        str = ""
+    hypotheses:               list[str] = Field(default_factory=list)
+    actionable_recommendation: str = ""
+
+
+class StoryMutation(BaseModel):
+    """A mutated narrative angle/style candidate for closed-loop refinement."""
+    style_variant:            str = ""
+    proposed_hook:            str = ""
+    proposed_perspective:     str = ""
+    proposed_analogy:         str = ""
+    proposed_future_question: str = ""
+    rationale:                str = ""
+
+
+class JudgmentAnalysis(BaseModel):
+    """
+    Separation of Facts, Claims, Analysis, Unknowns and Guard boundaries
+    produced before storytelling to prevent fictional certainty.
+    """
+    facts:                 list[str] = Field(default_factory=list)  # verified/announced facts
+    reported_claims:       list[str] = Field(default_factory=list)  # claims by companies/actors
+    analysis_implications: list[str] = Field(default_factory=list)  # logical technical/business implications
+    uncertainties:         list[str] = Field(default_factory=list)  # what is unknown/unproven
+    what_not_to_conclude:  list[str] = Field(default_factory=list)  # boundaries models must not overclaim
+
+
 class NewsStory(BaseModel):
     """
     The storytelling layer — produced by the MediaStorytellerAgent before content generation.
@@ -78,6 +124,14 @@ class NewsStory(BaseModel):
     perspective:              str = ""  # the non-obvious take: what everyone is missing
     second_order_effect:      str = ""  # what happens next — downstream consequence
     future_question:          str = ""  # the open question that deserves a conversation
+
+    # ── Dynamic Dialogue Delivery (Generated per news case) ───────────────────
+    media_host_opening:       str = ""  # Live dynamic opening hook framing the news
+    media_host_setup:         str = ""  # Conversational setup & grounding
+    media_transitions:        dict[str, str] = Field(default_factory=dict)  # Dynamic transitions between personas
+    media_host_synthesis:     str = ""  # Factual + judgment conclusion from the host
+    media_host_audience_cta:  str = ""  # Concluding open-ended audience dilemma
+    dynamic_seo_hashtags:     list[str] = Field(default_factory=list)  # SEO/AEO targeted hashtags (companies, entities, domains)
 
     # ── The Analysis ──────────────────────────────────────────────────────────
     business_consequence:     str = ""  # revenue / cost / competitive impact
@@ -163,6 +217,9 @@ class NewsIntelligence(BaseModel):
 
     # ── Stage 4b: Story (MediaStorytellerAgent) ───────────────────────────────
     story: Optional["NewsStory"] = None
+
+    # ── Judgment Analysis ─────────────────────────────────────────────────────
+    judgment: Optional[JudgmentAnalysis] = None
 
     # ── Stage 5: Content angle (Jev router) ───────────────────────────────────
     content_opportunity: ContentOpportunity = Field(default_factory=ContentOpportunity)

@@ -54,16 +54,21 @@ from daily_news.agents.published_store import published_store
 
 from langgraph.graph import END, START, StateGraph
 
+from daily_news.agents.content_optimizer import ContentOptimizerAgent
 from daily_news.agents.evaluation_agent import EvaluationAgent
+from daily_news.agents.guardrails import InputGuardrail, OutputGuardrail
 from daily_news.agents.jev_agents import jev_find_angle, jev_prefilter_articles, jev_route_personas
+from daily_news.agents.judgment_agent import JudgmentAgent
 from daily_news.agents.persona_agent import PersonaAgentFactory
 from daily_news.agents.publisher_agent import PublisherAgent
 from daily_news.agents.reach_score_agent import ReachScoreAgent, REACH_THRESHOLD
 from daily_news.agents.sentiment_resolver import resolve_sentiment
 from daily_news.agents.summary_agent import SummaryAgent, MediaStorytellerAgent
+from daily_news.mcp.linkedin import LinkedInMCPClient
 from daily_news.mcp.news import NewsMCPClient
 from daily_news.mcp.pageindex import PageIndexMCPClient
 from daily_news.models.evaluation import EvaluationDecision
+from daily_news.models.intelligence import EngagementMetrics
 from daily_news.models.news import NewsCategory
 from daily_news.models.persona import PersonaType
 from daily_news.observability.tracing import langfuse_trace, flush_langfuse
@@ -120,6 +125,10 @@ class NewsWorkflowState(TypedDict):
 
     # Publishing
     linkedin_results: list[dict]
+
+    # Closed-loop Feedback & Optimization
+    optimization_diagnosis: list[dict]
+    story_mutations: list[dict]
 
     # Reach scoring (pre-publish gate)
     reach_scores: list[dict]      # one ReachScore.summary_line() dict per article
@@ -292,7 +301,27 @@ async def deduplicate(state: NewsWorkflowState) -> NewsWorkflowState:
             run_id,
         )
 
-    return {**state, "deduplicated_articles": unique, "workflow_status": "DEDUPLICATED"}
+    # ── Input Guardrail validation pass ───────────────────────────────────────
+    guarded_articles: list[dict] = []
+    for art in unique:
+        check = InputGuardrail.inspect_article(art)
+        if not check.is_safe:
+            logger.warning(
+                "[%s] InputGuardrail BLOCKED article url=%s violations=%s",
+                run_id, art.get("url"), check.violations,
+            )
+            state["errors"].append(f"InputGuardrail dropped '{art.get('title', '')[:40]}': {check.violations}")
+            continue
+        if check.sanitized_text:
+            art["content"] = check.sanitized_text
+        guarded_articles.append(art)
+
+    logger.info(
+        "[%s] input guardrail: %d passed / %d inspected",
+        run_id, len(guarded_articles), len(unique),
+    )
+
+    return {**state, "deduplicated_articles": guarded_articles, "workflow_status": "DEDUPLICATED"}
 
 
 async def fetch_articles(state: NewsWorkflowState) -> NewsWorkflowState:
@@ -363,6 +392,7 @@ async def jev_router(state: NewsWorkflowState) -> NewsWorkflowState:
 async def summarize(state: NewsWorkflowState) -> NewsWorkflowState:
     run_id = state["run_id"]
     storyteller = MediaStorytellerAgent()
+    judgment_agent = JudgmentAgent()
     agent = SummaryAgent()
     pi_client = PageIndexMCPClient()
     summaries: list[dict] = []
@@ -388,6 +418,20 @@ async def summarize(state: NewsWorkflowState) -> NewsWorkflowState:
             )
             sections_text = sections_resp.get("sections_text", "")
 
+            # ── Stage: Judgment Analysis (Epistemological boundary separation) ─
+            judgment = await judgment_agent.analyze(
+                article_id=aid,
+                title=article.get("title", ""),
+                source=article.get("source", ""),
+                content=article.get("content", ""),
+                pageindex_sections=sections_text,
+                run_id=run_id,
+            )
+            logger.info(
+                "[%s] judgment analysis article=%s facts=%d claims=%d uncertainties=%d",
+                run_id, aid, len(judgment.facts), len(judgment.reported_claims), len(judgment.uncertainties),
+            )
+
             # ── Pass 1: Media Storyteller — extract the story before writing ──
             story = await storyteller.extract_story(
                 article_id=aid,
@@ -397,6 +441,7 @@ async def summarize(state: NewsWorkflowState) -> NewsWorkflowState:
                 content=article.get("content", ""),
                 pageindex_sections=sections_text,
                 jev_scores=jev_scores,
+                judgment=judgment,
                 run_id=run_id,
             )
             logger.info(
@@ -418,10 +463,12 @@ async def summarize(state: NewsWorkflowState) -> NewsWorkflowState:
                 sentiment=r_sentiment,
                 sentiment_stats=r_stats,
                 ai_tag=r_tag,
-                jev_scores=jev_scores,
+                jev_scores={**(jev_scores or {}), "judgment": judgment.model_dump()},
                 story=story,
             )
-            summaries.append(summary.model_dump())
+            summary_dump = summary.model_dump()
+            # Attach enriched intelligence model including judgment
+            summaries.append(summary_dump)
         except Exception as exc:  # noqa: BLE001
             logger.error("summarize failed for %s: %s", article.get("article_id"), exc)
             state["errors"].append(f"summarize failed: {exc}")
@@ -699,6 +746,64 @@ async def publish(state: NewsWorkflowState) -> NewsWorkflowState:
     return {**state, "linkedin_results": linkedin_results, "workflow_status": "PUBLISHED"}
 
 
+async def optimize_content(state: NewsWorkflowState) -> NewsWorkflowState:
+    """
+    Closed-loop Content Optimization Node.
+
+    Runs after publishing. Observes baseline/initial engagement or historical engagement,
+    diagnoses the structural component strengths/weaknesses (hook, storytelling, audience,
+    perspective, dialogue, question), and generates Story Mutations for learning and
+    calibrating future Jev angle recommendations.
+    """
+    from daily_news.models.summary import NewsSummary
+
+    run_id = state["run_id"]
+    optimizer = ContentOptimizerAgent()
+    li_client = LinkedInMCPClient()
+
+    diagnoses: list[dict] = []
+    all_mutations: list[dict] = []
+
+    for pub_res, summary_dict in zip(state.get("linkedin_results", []), state.get("summaries", [])):
+        post_urn = pub_res.get("post_urn", "")
+        article_id = summary_dict.get("article_id", "")
+        summary = NewsSummary(**summary_dict)
+
+        # 1. Fetch available engagement analytics via LinkedIn client
+        analytics_raw = await li_client.get_post_analytics(post_urn) if post_urn else {}
+        metrics = EngagementMetrics(
+            post_urn=post_urn,
+            article_id=article_id,
+            impressions=analytics_raw.get("impressions", 0),
+            reactions=analytics_raw.get("reactions", 0),
+            comments=analytics_raw.get("comments", 0),
+            reposts=analytics_raw.get("reposts", 0),
+            engagement_rate=analytics_raw.get("engagement_rate", 0.0),
+        )
+
+        # 2. Diagnose performance & structural weaknesses
+        post_text = summary_dict.get("summary", "")
+        diagnosis = await optimizer.diagnose_performance(metrics, post_text, run_id=run_id)
+        diagnoses.append(diagnosis.model_dump())
+
+        logger.info(
+            "[%s] ContentOptimizer: article=%s weakest=%s recommendation=%s",
+            run_id, article_id, diagnosis.weakest_component, diagnosis.actionable_recommendation,
+        )
+
+        # 3. Generate story mutations based on diagnosis for learning loop
+        evidence_text = "\n".join(summary.key_points)
+        mutations = await optimizer.mutate_story(summary, diagnosis, evidence=evidence_text, run_id=run_id)
+        all_mutations.extend([m.model_dump() for m in mutations])
+
+    return {
+        **state,
+        "optimization_diagnosis": diagnoses,
+        "story_mutations": all_mutations,
+        "workflow_status": "OPTIMIZED",
+    }
+
+
 # ── Routing ───────────────────────────────────────────────────────────────────
 
 def route_evaluation(state: NewsWorkflowState) -> Literal["publish", "summarize", "__end__"]:
@@ -740,6 +845,7 @@ def build_daily_news_graph():
     graph.add_node("evaluate",          evaluate)
     graph.add_node("score_reach",       score_reach)    # pre-publish reach optimiser
     graph.add_node("publish",           publish)
+    graph.add_node("optimize_content",  optimize_content) # Closed-loop feedback optimizer
 
     graph.add_edge(START,               "discover_news")
     graph.add_edge("discover_news",     "deduplicate")
@@ -762,7 +868,8 @@ def build_daily_news_graph():
         },
     )
     graph.add_edge("score_reach", "publish")
-    graph.add_edge("publish",     END)
+    graph.add_edge("publish",     "optimize_content")
+    graph.add_edge("optimize_content", END)
 
     return graph.compile()
 
@@ -788,6 +895,8 @@ def make_initial_state(run_id: str | None = None) -> NewsWorkflowState:
         approval_status="PENDING",
         linkedin_results=[],
         reach_scores=[],
+        optimization_diagnosis=[],
+        story_mutations=[],
         workflow_status="STARTED",
         errors=[],
     )

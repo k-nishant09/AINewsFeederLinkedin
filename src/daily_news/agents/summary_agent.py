@@ -61,6 +61,12 @@ class _NewsStoryRaw(BaseModel):
     perspective:              str = ""
     second_order_effect:      str = ""
     future_question:          str = ""
+    media_host_opening:       str = ""
+    media_host_setup:         str = ""
+    media_transitions:        dict[str, str] = {}
+    media_host_synthesis:     str = ""
+    media_host_audience_cta:  str = ""
+    dynamic_seo_hashtags:     list[str] = []
     business_consequence:     str = ""
     technology_consequence:   str = ""
     human_consequence:        str = ""
@@ -83,6 +89,7 @@ def _build_intelligence(
     ai_tag: str | None,
     summary_result: NewsSummary,
     story: NewsStory | None,
+    judgment: Any | None = None,
 ) -> NewsIntelligence:
     js = jev_scores or {}
     emotion_raw = js.get("emotion", {})
@@ -149,6 +156,9 @@ def _build_intelligence(
         # The storytelling layer — produced by MediaStorytellerAgent
         story=story,
 
+        # The judgment layer — facts vs interpretation vs unknowns
+        judgment=judgment,
+
         ai_tag=ai_tag,
     )
 
@@ -192,6 +202,11 @@ class MediaStorytellerAgent:
                 "  controversy: {controversy}  |  significance: {significance:.2f}\n"
                 "  content_angle (Jev): {missing_angle}\n"
                 "  recommended_audience: {recommended_audience}\n\n"
+                "Judgment Boundaries (Do NOT assert claims as facts beyond these boundaries):\n"
+                "  verified_facts: {verified_facts}\n"
+                "  reported_claims: {reported_claims}\n"
+                "  uncertainties: {uncertainties}\n"
+                "  what_not_to_conclude: {what_not_to_conclude}\n\n"
                 "{format_instructions}",
             ),
         ])
@@ -205,6 +220,7 @@ class MediaStorytellerAgent:
         content: str,
         pageindex_sections: str,
         jev_scores: dict | None = None,
+        judgment: Any | None = None,
         run_id: str | None = None,
     ) -> NewsStory:
         handler, _ = get_langfuse_callback(
@@ -240,6 +256,10 @@ class MediaStorytellerAgent:
                     "significance":       float(js.get("significance", 0.0)),
                     "missing_angle":      (js.get("content_opportunity") or {}).get("missing_angle", ""),
                     "recommended_audience": (js.get("content_opportunity") or {}).get("recommended_audience", ""),
+                    "verified_facts":     getattr(judgment, "facts", []) if judgment else [],
+                    "reported_claims":    getattr(judgment, "reported_claims", []) if judgment else [],
+                    "uncertainties":      getattr(judgment, "uncertainties", []) if judgment else [],
+                    "what_not_to_conclude": getattr(judgment, "what_not_to_conclude", []) if judgment else [],
                     "format_instructions": self._parser.get_format_instructions(),
                 },
                 config={"callbacks": callbacks} if callbacks else {},
@@ -269,6 +289,12 @@ class MediaStorytellerAgent:
             opportunities=raw.opportunities,
             narrative_style=raw.narrative_style or "problem_solution",
             tone=raw.tone or "curious_analytical",
+            media_host_opening=raw.media_host_opening or raw.hook,
+            media_host_setup=raw.media_host_setup,
+            media_transitions=raw.media_transitions or {},
+            media_host_synthesis=raw.media_host_synthesis or raw.perspective,
+            media_host_audience_cta=raw.media_host_audience_cta or raw.future_question,
+            dynamic_seo_hashtags=raw.dynamic_seo_hashtags or [],
         )
 
 

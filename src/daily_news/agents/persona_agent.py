@@ -62,18 +62,15 @@ PERSONA_FOCUS: dict[PersonaType, dict] = {
     },
 }
 
-BASE_SYSTEM = """You are generating a clearly labeled perspective on a news story for a LinkedIn audience.
+BASE_SYSTEM = """You are speaking live in a conversational round-table news discussion.
+Your role is to respond directly to the host and challenge other viewpoints with your distinct real-world lens.
 
 Rules:
-- Do not invent facts. Use only the supplied evidence.
-- Separate factual claims from interpretation.
-- Do not claim your perspective is the objective truth.
-- Write exactly 1 complete sentence. The sentence must end with a full stop.
-- The sentence must be under 200 characters and self-contained — a reader who has not seen the article must fully understand it without trailing off.
-- Do NOT cut off mid-sentence. If the idea is too long, simplify it — never truncate.
-- Write it to spark LinkedIn engagement: specific, opinionated, and worth sharing.
-- Be specific and actionable — avoid generic platitudes.
-- Use plain English. No jargon overload.
+- Speak naturally like a real human in a podcast or roundtable debate, NOT like an essay or corporate summary.
+- Ground your point in the verified facts & evidence provided.
+- Do not invent facts or attribute fake quotes.
+- Be punchy, direct, and conversational (2-4 crisp sentences).
+- Avoid essay transitions or stilted phrasing. Speak with conviction and lived experience.
 
 Persona: {persona_name}
 Focus areas: {focus}
@@ -165,6 +162,13 @@ class PersonaAgent:
                     "  business: {impact_business:.2f}  policy: {impact_policy:.2f}\n"
                     "  content angle — {missing_angle}\n"
                     "  recommended audience — {recommended_audience}\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "JUDGMENT & BOUNDARIES\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "  verified_facts: {verified_facts}\n"
+                    "  reported_claims: {reported_claims}\n"
+                    "  uncertainties: {uncertainties}\n"
+                    "  what_not_to_conclude: {what_not_to_conclude}\n\n"
                     "{format_instructions}",
                 ),
             ]
@@ -263,6 +267,10 @@ class PersonaAgent:
                 "impact_policy":           float(impact.get("policy",      0.0)),
                 "missing_angle":           co.get("missing_angle",        "not available"),
                 "recommended_audience":    co.get("recommended_audience", "not available"),
+                "verified_facts":          getattr(getattr(summary, "intelligence", None), "judgment", None).facts if getattr(summary, "intelligence", None) and getattr(summary.intelligence, "judgment", None) else [],
+                "reported_claims":         getattr(getattr(summary, "intelligence", None), "judgment", None).reported_claims if getattr(summary, "intelligence", None) and getattr(summary.intelligence, "judgment", None) else [],
+                "uncertainties":           getattr(getattr(summary, "intelligence", None), "judgment", None).uncertainties if getattr(summary, "intelligence", None) and getattr(summary.intelligence, "judgment", None) else [],
+                "what_not_to_conclude":    getattr(getattr(summary, "intelligence", None), "judgment", None).what_not_to_conclude if getattr(summary, "intelligence", None) and getattr(summary.intelligence, "judgment", None) else [],
                 "format_instructions":     self._parser.get_format_instructions(),
             },
             config={"callbacks": callbacks} if callbacks else {},
