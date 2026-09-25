@@ -20,14 +20,12 @@ spec:
       activeDeadlineSeconds: 3600  # 1 hour max (single article runs faster)
 
       template:
+        metadata:
+          labels:
+            app: daily-news-worker  # required by NetworkPolicy allow-api-to-mcps
         spec:
           serviceAccountName: daily-news
           restartPolicy: Never
-
-          # app=daily-news-worker label is required by the NetworkPolicy
-          # (allow-api-to-mcps) so the CronJob pod can reach all MCP servers.
-          labels:
-            app: daily-news-worker
           containers:
             - name: workflow-runner
               image: image-registry.openshift-image-registry.svc:5000/aifeeders/daily-news:latest
@@ -69,14 +67,12 @@ spec:
       activeDeadlineSeconds: 3600  # 1 hour max (single article runs faster)
 
       template:
+        metadata:
+          labels:
+            app: daily-news-worker  # required by NetworkPolicy allow-api-to-mcps
         spec:
           serviceAccountName: daily-news
           restartPolicy: Never
-
-          # app=daily-news-worker label is required by the NetworkPolicy
-          # (allow-api-to-mcps) so the CronJob pod can reach all MCP servers.
-          labels:
-            app: daily-news-worker
           containers:
             - name: workflow-runner
               image: image-registry.openshift-image-registry.svc:5000/aifeeders/daily-news:latest
