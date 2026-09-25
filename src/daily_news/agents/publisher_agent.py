@@ -518,8 +518,8 @@ class PublisherAgent:
         """
         POST_LIMIT   = 2900
         SUMMARY_CAP  = 240   # opening hook — tight and punchy
-        KP_CAP       = 95    # per key-point bullet
-        IMPACT_CAP   = 115   # per impact line
+        KP_CAP       = 160   # per key-point bullet — raised so full sentences always fit
+        IMPACT_CAP   = 160   # per impact line — raised so full sentences always fit
         PERSP_MIN    = 220   # min budget for one complete ≤200-char persona sentence
         BLANK_COST   = 1
 
@@ -606,17 +606,20 @@ class PublisherAgent:
             _add("", lines)
 
         # ── ⑤ 3 sharp facts ───────────────────────────────────────────────────
+        # _clip_at_sentence used so any text that exceeds the cap is trimmed
+        # at the last full stop — never mid-word or mid-sentence.
         _add("📌  3 things to know", lines)
         for pt in summary.key_points[:3]:
-            _add(f"  • {_hard_clip(pt.strip(), KP_CAP)}", lines)
+            _add(f"  • {_clip_at_sentence(pt.strip(), KP_CAP)}", lines)
         _add("", lines)
 
         # ── ⑥ Impact quad ─────────────────────────────────────────────────────
-        _add(f"📈  Business   —  {_hard_clip(summary.business_impact.strip(),   IMPACT_CAP)}", lines)
-        _add(f"👷  Workforce  —  {_hard_clip(summary.job_impact.strip(),        IMPACT_CAP)}", lines)
-        _add(f"🔬  Tech       —  {_hard_clip(summary.technology_impact.strip(), IMPACT_CAP)}", lines)
+        # _clip_at_sentence ensures each impact line ends at a sentence boundary.
+        _add(f"📈  Business   —  {_clip_at_sentence(summary.business_impact.strip(),   IMPACT_CAP)}", lines)
+        _add(f"👷  Workforce  —  {_clip_at_sentence(summary.job_impact.strip(),        IMPACT_CAP)}", lines)
+        _add(f"🔬  Tech       —  {_clip_at_sentence(summary.technology_impact.strip(), IMPACT_CAP)}", lines)
         if summary.policy_impact and summary.policy_impact.strip():
-            _add(f"🏛️  Policy     —  {_hard_clip(summary.policy_impact.strip(), IMPACT_CAP)}", lines)
+            _add(f"🏛️  Policy     —  {_clip_at_sentence(summary.policy_impact.strip(), IMPACT_CAP)}", lines)
         _add("", lines)
 
         # ── ⑦ Source ──────────────────────────────────────────────────────────
@@ -697,11 +700,13 @@ class PublisherAgent:
         separator = "\n\n"
         max_body  = POST_LIMIT - _linkedin_len(separator) - _linkedin_len(footer_block)
         if _linkedin_len(body) > max_body:
-            body = _hard_clip(body, max_body)
+            # Clip at the last sentence boundary so the body never ends mid-sentence.
+            body = _clip_at_sentence(body, max_body)
 
         full_post = body + separator + footer_block
         if _linkedin_len(full_post) > POST_LIMIT:
-            full_post = _hard_clip(full_post, POST_LIMIT)
+            # Final safety guard — clip the entire post at the last sentence boundary.
+            full_post = _clip_at_sentence(full_post, POST_LIMIT)
         return full_post
 
     # ── Comment composition ───────────────────────────────────────────────────
