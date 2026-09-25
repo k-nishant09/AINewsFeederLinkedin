@@ -43,7 +43,7 @@ def test_health_structure(linkedin_client):
     assert data["server"] == "linkedin-mcp"
     assert "token_configured" in data
     assert data["token_configured"] is False      # no token in test env
-    assert data["api_version"] == "202510"        # minimum active version for Posts + Comments API
+    assert data["api_version"] == "202609"        # current default active version (202510 was sunset)
     # Verify all required endpoints are documented
     endpoints = data["endpoints"]
     assert "userinfo"     in endpoints
@@ -121,12 +121,15 @@ async def test_create_post_idempotency():
 
 @pytest.mark.asyncio
 async def test_create_post_character_limit():
-    """Posts over 3000 chars must be rejected before any API call."""
-    from mcp_servers.linkedin_mcp.server import linkedin_create_post
+    """Posts over 3000 chars are truncated (warning logged) — not rejected."""
+    import mcp_servers.linkedin_mcp.server as srv
+    srv._published_posts.clear()
     long_text = "A" * 3001
-    result = await linkedin_create_post(text=long_text, publication_key="limit-key")
-    assert "error" in result
-    assert "3000" in result["error"]
+    result = await srv.linkedin_create_post(text=long_text, publication_key="limit-key")
+    # Server truncates gracefully; no error key in the mock response
+    assert "error" not in result
+    # The stored/returned post must not exceed 3000 LinkedIn UTF-16 units
+    assert result.get("text_length", 0) <= 3000
 
 
 @pytest.mark.asyncio

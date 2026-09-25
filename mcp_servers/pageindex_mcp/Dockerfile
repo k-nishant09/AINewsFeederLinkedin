@@ -1,5 +1,6 @@
-# pageindex_mcp MCP Server — UBI9 Python 3.11
-FROM image-registry.openshift-image-registry.svc:5000/openshift/python:3.11-ubi9
+# pageindex_mcp MCP Server — python:3.11-slim (local Podman / CI)
+# OpenShift deployment uses: image-registry.openshift-image-registry.svc:5000/openshift/python:3.11-ubi9
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PYTHONPATH=/app
 

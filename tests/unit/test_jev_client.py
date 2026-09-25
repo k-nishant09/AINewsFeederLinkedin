@@ -69,6 +69,26 @@ class TestStateSerialisation:
         assert "AI Takes Over" in state
         assert "BBC" in state
 
+    def test_article_to_state_includes_sentiment_when_present(self):
+        """Sentiment fields should appear in the state string when present."""
+        article = {
+            "title": "Model Launch",
+            "content": "Body",
+            "source": "TechCrunch",
+            "sentiment": "positive",
+            "ai_tag": "large language model",
+        }
+        state = _article_to_state(article)
+        assert "SENTIMENT: positive" in state
+        assert "AI_TAG: large language model" in state
+
+    def test_article_to_state_omits_sentiment_when_absent(self):
+        """No SENTIMENT or AI_TAG lines when fields are None / missing."""
+        article = {"title": "Test", "content": "Body", "source": "GNews"}
+        state = _article_to_state(article)
+        assert "SENTIMENT:" not in state
+        assert "AI_TAG:" not in state
+
     def test_summary_to_state_contains_headline(self):
         summary = {
             "headline": "Model beats GPT-5",

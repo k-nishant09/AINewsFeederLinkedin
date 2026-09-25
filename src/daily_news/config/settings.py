@@ -58,9 +58,13 @@ class Settings(BaseSettings):
     mcp_auth_token: str = Field("", alias="MCP_AUTH_TOKEN")
 
     # ── External APIs ─────────────────────────────────────────────────────────
+    # GNews — sole news provider
+    # Docs: https://docs.gnews.io
+    # Key: 32-char hex from https://gnews.io/dashboard
     gnews_api_key: str = Field("", alias="GNEWS_API_KEY")
     gnews_max_per_request: int = Field(10, alias="GNEWS_MAX_PER_REQUEST")
     gnews_request_delay_ms: int = Field(1100, alias="GNEWS_REQUEST_DELAY_MS")
+
     linkedin_access_token: str = Field("", alias="LINKEDIN_ACCESS_TOKEN")
     linkedin_client_id: str = Field("", alias="LINKEDIN_CLIENT_ID")
     linkedin_client_secret: str = Field("", alias="LINKEDIN_CLIENT_SECRET")

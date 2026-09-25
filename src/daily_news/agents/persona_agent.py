@@ -138,6 +138,33 @@ class PersonaAgent:
                     "Key Points:\n{key_points}\n\n"
                     "Business Impact: {business_impact}\n\n"
                     "Relevant Evidence:\n{evidence_sections}\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "STORY CONTEXT (use this as your analytical foundation)\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "  hook: {story_hook}\n"
+                    "  what_actually_happened: {story_what_happened}\n"
+                    "  what_changed: {story_what_changed}\n"
+                    "  why_now: {story_why_now}\n"
+                    "  perspective: {story_perspective}\n"
+                    "  second_order_effect: {story_second_order}\n"
+                    "  human_analogy: {story_analogy}\n"
+                    "  why_reader_should_care: {story_why_care}\n"
+                    "  future_question: {story_future_question}\n"
+                    "  business_consequence: {story_business}\n"
+                    "  technology_consequence: {story_technology}\n"
+                    "  human_consequence: {story_human}\n"
+                    "  narrative_style: {story_narrative_style}\n\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "INTELLIGENCE SIGNALS\n"
+                    "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    "  sentiment: {sentiment}  |  ai_tag: {ai_tag}\n"
+                    "  novelty: {novelty:.2f}  |  trend_velocity: {trend_velocity:.2f}\n"
+                    "  emotion — curiosity: {emotion_curiosity:.2f}  excitement: {emotion_excitement:.2f}"
+                    "  concern: {emotion_concern:.2f}  urgency: {emotion_urgency:.2f}\n"
+                    "  impact  — enterprise: {impact_enterprise:.2f}  developers: {impact_developers:.2f}"
+                    "  business: {impact_business:.2f}  policy: {impact_policy:.2f}\n"
+                    "  content angle — {missing_angle}\n"
+                    "  recommended audience — {recommended_audience}\n\n"
                     "{format_instructions}",
                 ),
             ]
@@ -149,9 +176,6 @@ class PersonaAgent:
         evidence_sections: str,
         run_id: str | None = None,
     ) -> PersonaOutput:
-        # Langfuse v4 CallbackHandler — each persona gets its own trace
-        # linked to the workflow run via the shared trace_id seed (run_id).
-        # Ref: https://langfuse.com/docs/integrations/langchain/tracing
         handler, _trace_id = get_langfuse_callback(
             run_id=f"{run_id}:{self._persona.value}" if run_id else None,
             tags=[self._persona.value, "persona", self._settings.app_env],
@@ -164,16 +188,82 @@ class PersonaAgent:
         )
         callbacks = [handler] if handler else []
 
+        # Pull intelligence signals from the backbone object when available
+        intel = summary.intelligence
+        emotion = {}
+        impact  = {}
+        co      = {}
+        novelty        = 0.0
+        trend_velocity = 0.0
+        if intel:
+            _get = (lambda k, d=0.0: intel.get(k, d)) if isinstance(intel, dict) else (lambda k, d=0.0: getattr(intel, k, d))
+            _sub = (lambda k, sk, d=0.0: (intel.get(k) or {}).get(sk, d)) if isinstance(intel, dict) \
+                   else (lambda k, sk, d=0.0: getattr(getattr(intel, k, None) or type("_", (), {})(), sk, d))
+            novelty        = float(_get("novelty"))
+            trend_velocity = float(_get("trend_velocity"))
+            emotion = {
+                "curiosity":  float(_sub("emotion", "curiosity")),
+                "excitement": float(_sub("emotion", "excitement")),
+                "concern":    float(_sub("emotion", "concern")),
+                "urgency":    float(_sub("emotion", "urgency")),
+            }
+            impact = {
+                "enterprise": float(_sub("impact", "enterprise")),
+                "developers": float(_sub("impact", "developers")),
+                "business":   float(_sub("impact", "business")),
+                "policy":     float(_sub("impact", "policy")),
+            }
+            co = {
+                "missing_angle":        _sub("content_opportunity", "missing_angle", "not available"),
+                "recommended_audience": _sub("content_opportunity", "recommended_audience", "not available"),
+            }
+
+        # Pull story fields — dict-safe (LangGraph serialises objects to dicts)
+        st = summary.story or {}
+        def _sg(k: str) -> str:
+            if isinstance(st, dict):
+                return str(st.get(k) or "not available")
+            return str(getattr(st, k, None) or "not available")
+
         chain = self._prompt | self._llm | self._parser
         raw: _PersonaOutputRaw = await chain.ainvoke(
             {
-                "article_id":          summary.article_id,
-                "headline":            summary.headline,
-                "summary":             summary.summary,
-                "key_points":          "\n".join(f"- {p}" for p in summary.key_points),
-                "business_impact":     summary.business_impact,
-                "evidence_sections":   evidence_sections,
-                "format_instructions": self._parser.get_format_instructions(),
+                "article_id":              summary.article_id,
+                "headline":                summary.headline,
+                "summary":                 summary.summary,
+                "key_points":              "\n".join(f"- {p}" for p in summary.key_points),
+                "business_impact":         summary.business_impact,
+                "evidence_sections":       evidence_sections,
+                # Story context — the analytical foundation for persona perspectives
+                "story_hook":              _sg("hook"),
+                "story_what_happened":     _sg("what_actually_happened"),
+                "story_what_changed":      _sg("what_changed"),
+                "story_why_now":           _sg("why_now"),
+                "story_perspective":       _sg("perspective"),
+                "story_second_order":      _sg("second_order_effect"),
+                "story_analogy":           _sg("human_analogy"),
+                "story_why_care":          _sg("why_reader_should_care"),
+                "story_future_question":   _sg("future_question"),
+                "story_business":          _sg("business_consequence"),
+                "story_technology":        _sg("technology_consequence"),
+                "story_human":             _sg("human_consequence"),
+                "story_narrative_style":   _sg("narrative_style"),
+                # Intelligence signals
+                "sentiment":               summary.sentiment or "not available",
+                "ai_tag":                  summary.ai_tag or "not available",
+                "novelty":                 novelty,
+                "trend_velocity":          trend_velocity,
+                "emotion_curiosity":       float(emotion.get("curiosity",  0.0)),
+                "emotion_excitement":      float(emotion.get("excitement", 0.0)),
+                "emotion_concern":         float(emotion.get("concern",    0.0)),
+                "emotion_urgency":         float(emotion.get("urgency",    0.0)),
+                "impact_enterprise":       float(impact.get("enterprise",  0.0)),
+                "impact_developers":       float(impact.get("developers",  0.0)),
+                "impact_business":         float(impact.get("business",    0.0)),
+                "impact_policy":           float(impact.get("policy",      0.0)),
+                "missing_angle":           co.get("missing_angle",        "not available"),
+                "recommended_audience":    co.get("recommended_audience", "not available"),
+                "format_instructions":     self._parser.get_format_instructions(),
             },
             config={"callbacks": callbacks} if callbacks else {},
         )

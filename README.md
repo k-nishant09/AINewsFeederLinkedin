@@ -1,984 +1,1071 @@
-# AIFeeders — AI Daily News LinkedIn Platform
+# AIFeeders — Vectorless AI News Intelligence Pipeline
 
-> **Fully automated AI news pipeline. Jev System One AI scoring. Publishes to LinkedIn twice daily.**
-> Build #81 · OpenShift `aifeeders` · EKS-portable · LangGraph state machine
+> **Build #83** · Cluster `aifeeders` · LLM `qwen2-5-72b-instruct` · 210 tests passing · Latest live post `urn:li:share:7509262700972101632`
 
 ---
 
 ## Table of Contents
 
-1. [What It Does](#1-what-it-does)
-2. [How the Pipeline Works](#2-how-the-pipeline-works)
-3. [Services — What Runs Where](#3-services--what-runs-where)
-4. [Project Structure](#4-project-structure)
-5. [Prerequisites](#5-prerequisites)
-6. [Local Development](#6-local-development)
-7. [OpenShift Deployment — End-to-End](#7-openshift-deployment--end-to-end)
-8. [Build Flow → Launch Flow](#8-build-flow--launch-flow)
-9. [Production Issues We Have Actually Hit](#9-production-issues-we-have-actually-hit)
-10. [Networking — How Pods Talk to Each Other](#10-networking--how-pods-talk-to-each-other)
-11. [Scaling](#11-scaling)
-12. [Monitoring and Observability](#12-monitoring-and-observability)
-13. [Security](#13-security)
-14. [EKS Deployment](#14-eks-deployment)
-15. [Health Checks](#15-health-checks)
-16. [Build History](#16-build-history)
+1. [What It Does — The Story](#1-what-it-does--the-story)
+2. [Build #83 — What Changed](#2-build-83--what-changed)
+3. [7-Stage Pipeline](#3-7-stage-pipeline)
+4. [Services — What Runs Where](#4-services--what-runs-where)
+5. [Project Structure](#5-project-structure)
+6. [Prerequisites](#6-prerequisites)
+7. [Local Development — POC to Working Code](#7-local-development--poc-to-working-code)
+8. [Docker — Understanding the Container Build](#8-docker--understanding-the-container-build)
+9. [OpenShift Deployment — End-to-End](#9-openshift-deployment--end-to-end)
+10. [EKS Deployment — Docker + ECR](#10-eks-deployment--docker--ecr)
+11. [AKS Deployment — Docker + ACR](#11-aks-deployment--docker--acr)
+12. [Build Flow → Launch Flow](#12-build-flow--launch-flow)
+13. [Production Issues We Have Actually Hit](#13-production-issues-we-have-actually-hit)
+14. [Networking — How Pods Talk](#14-networking--how-pods-talk)
+15. [Scaling](#15-scaling)
+16. [Monitoring and Observability](#16-monitoring-and-observability)
+17. [Security](#17-security)
+18. [Health Checks](#18-health-checks)
+19. [Build History](#19-build-history)
 
 ---
 
-## 1. What It Does
+## 1. What It Does — The Story
 
-AIFeeders runs twice a day — **08:00 UTC** (morning) and **16:00 UTC** (afternoon). Each run:
+Most AI news pipelines today work like this: scrape headlines, embed them into a vector store, run a similarity search, hand the top result to an LLM, publish. It works, but it is fragile — vectors drift, embeddings are expensive, and the model usually outputs a dry summary nobody shares.
 
-1. Searches GNews for AI news across 9 query categories (24-hour window).
-2. Scores every article with **Jev System One** — picks the single best one by relevance + engagement.
-3. Summarises the article with an LLM.
-4. Generates four audience-specific perspectives (Capitalist / Policy / Generalist / Tech).
-5. Evaluates content for factuality, hallucination, PII, and injection safety.
-6. Publishes a structured LinkedIn post — **automatically, no human button-press needed**.
+AIFeeders does something different. It has **no vector database**. Instead it builds a lightweight in-memory document tree (PageIndex) that reasons over structure and meaning without ever calling an embedding endpoint. Then it runs a proper editorial workflow: a journalist agent extracts the real story, four distinct character voices (Founder, Policy Analyst, Engineer, Generalist) each write a short story passage from their perspective, and the whole thing is assembled into a dialogue-delivery post format that reads like a conversation rather than a press release.
 
-**A published post looks like this (engagement-first layout, build 77+):**
+The result is published to LinkedIn twice a day — 08:00 UTC and 16:00 UTC — with human approval gating the final publish step.
 
-```
-Every major AI lab is racing to ship agents. But deploying them in production
-is a completely different problem.
-
-Palo Alto CEO Rejects AI Slowdown, Cites Low Extinction Risk
-
-Security leaders are watching this closely — enterprise AI decisions hinge on
-whether safety-first or innovation-first philosophy wins this debate.
-
-This story is getting traction in boardrooms — Nikesh Arora's position signals
-where enterprise AI investment is heading.
-
-Here's what you need to know:
-
-▸ Nikesh Arora, CEO of Palo Alto Networks, opposes calls to slow AI development.
-▸ Arora's stance aligns with Nvidia CEO Jensen Huang, contrasting with Anthropic and OpenAI.
-▸ Arora considers the risk of AI-induced human extinction to be 'extremely small.'
-
-For businesses: Arora's stance could influence corporate AI strategies and investment pace.
-For practitioners: Rapid AI development may accelerate automation and workforce reskilling needs.
-For builders: The debate underscores balancing technological advancement with safety measures.
-
-────────────────────
-Different perspectives on this:
-
-💼 Business view
-Arora's position is a capital-allocation signal: companies betting on aggressive
-AI timelines will attract more investment than those hedging on safety delays.
-
-🏛️ Policy view
-Palo Alto CEO Nikesh Arora's stance highlights a divide in the tech industry
-between safety-first and innovation-first philosophies.
-
-🎓 Generalist view
-Arora thinks slowing down AI is unrealistic and the risk of human extinction
-from AI is extremely small — which could speed up consumer AI adoption.
-
-🧠 Tech & careers
-Minimal AI risk claims ease near-term fears, but the real challenge is job
-displacement and skill obsolescence at the pace Arora is describing.
-
-Full story → https://www.cnbc.com/2026/09/24/palo-alto-networks-nikesh-arora-ai-slowdown.html
-
-If you were evaluating this for your team today, what would you test first?
-
-1️⃣ Accuracy on real tasks
-2️⃣ Cost at scale
-3️⃣ Security & data privacy
-4️⃣ Integration with existing tools
-
-Drop your priority below. 👇
-
-⚠️ Perspectives are AI-simulated — not professional advice.
-🤖 AIFeeders  ·  Daily AI Intelligence  ·  Powered by Jev
-
-#AI #AINews #AIStrategy #PaloAltoNetworks #AIGovernance
-```
+**One-line pitch:** Discover → Reason → Analyse → Storytell → Four Voices → Proofread → Publish. No vector DB required.
 
 ---
 
-## 2. How the Pipeline Works
+## 2. Build #83 — What Changed
 
-```
-CronJob (08:00 UTC + 16:00 UTC)
-  └─► discover_news        9 GNews queries (hours=24) → ~20-30 articles
-        └─► deduplicate    3-pass dedup: URL-hash + PublishedStore + title-similarity
-              └─► fetch_articles       Full HTML fetch per article
-                    └─► index_pageindex    RAG index for evidence retrieval
-                          └─► jev_prefilter       [Jev Decision #1]
-                                │  Scores all articles, picks top 1
-                                │  11 questions per article:
-                                │  is_ai_topic, relevance_score, event_type,
-                                │  significance, controversy_level,
-                                │  persona_fit × 4, estimated_engagement
-                                │  Composite = relevance × 0.6 + engagement × 0.4
-                                └─► summarize             LLM → structured NewsSummary
-                                      └─► jev_router         [Jev Decision #2]
-                                            │  Routes only relevant personas
-                                            └─► generate_personas  (parallel)
-                                                  └─► evaluate     [Jev Decision #3]
-                                                        │  10 quality checks
-                                                        ├─► REGENERATE → retry (max 2)
-                                                        ├─► BLOCK      → hard stop
-                                                        └─► PASS → publish
-                                                                    └─► LinkedIn post
-```
+Build #83 is the dialogue-delivery build. Three things changed:
+
+### 2.1 Dialogue-delivery post format
+
+Previous builds wrote a monolithic post. Build #83 restructures the output as a hosted dialogue — a Media Person (host) introduces the story, asks four people a question, each gives a 3–5 sentence story passage, and the host closes with a second-order observation. The separator `────────────────────` is a visual cue for LinkedIn's mobile renderer.
+
+This format was chosen because LinkedIn's algorithm rewards posts that people read all the way through. A character-voice dialogue is skimmable but also pulls readers forward. The monolithic format was not getting that engagement.
+
+### 2.2 GrammarAgent (new)
+
+After the four persona passages are composed, a new `GrammarAgent` makes a single LLM call at `temperature=0` to fix spelling, grammar, punctuation, and capitalisation. It does **not** rewrite — the instruction in `prompts/grammar.txt` is explicit: fix errors, preserve voice. If the grammar pass fails for any reason (timeout, LLM error), the pipeline continues and publishes the uncorrected post. It is best-effort and never blocks publish.
+
+### 2.3 Persona prompts rewritten
+
+The persona prompts in `prompts/capitalist.txt`, `prompts/policy.txt`, `prompts/genz.txt`, and `prompts/linkedin.txt` were rewritten to produce multi-sentence story passages rather than bullet points. Each persona now receives the full `NewsStory` object and writes as if narrating a scene, not summarising a fact.
 
 ---
 
-## 3. Services — What Runs Where
+## 3. 7-Stage Pipeline
 
-| Service | What it does | Pods | State |
-|---|---|---|---|
-| `daily-news-api` | FastAPI — runs the LangGraph workflow | 2 (HPA 2–4) | Stateless |
-| `news-mcp` | GNews adapter — 2-key auto-rotation on quota | 2 | Stateless |
-| `evaluation-mcp` | LLM content quality fallback (when Jev disabled) | 2 | Stateless |
-| `linkedin-mcp` | LinkedIn OAuth + post publishing | **1** | **Stateful** (token in memory) |
-| `pageindex-mcp` | Article RAG / evidence retrieval | **1** | **Stateful** (index in memory) |
-| Jev gateway | IBM Jev System One — AI scoring engine | External | — |
-| CronJob | `daily-ai-news-morning` (08:00) + `daily-ai-news-afternoon` (16:00) | 0–1 | Job (transient pod) |
+| # | Stage | Component | What it does | Why it exists |
+|---|-------|-----------|--------------|---------------|
+| 1 | **DISCOVER** | GNews adapter (`news-mcp`) | Runs 9 queries over a 24-hour window, rotates between `GNEWS_API_KEY` and `GNEWS_API_KEY_2` if quota is exhausted | GNews has a daily request cap per key. Two-key rotation doubles capacity without paying for a higher tier. |
+| 2 | **UNDERSTAND** | PageIndex (`pageindex-mcp`) | Builds an in-memory document tree from raw article text — no embeddings, no vector DB | Embedding every article is slow and costs money. PageIndex uses structural reasoning (headings, paragraphs, named entities) to represent documents. Each run gets its own in-memory tree; nothing persists between runs. |
+| 3 | **ANALYZE** | Jev System One (`evaluation-mcp`) | Scores every article across 11 questions (novelty, significance, actionability, …), selects the single best article | We cannot publish all discovered articles. Jev provides a principled scoring rubric so the selection is reproducible and explainable, not just "highest cosine similarity". |
+| 4 | **EXPLAIN** | `MediaStorytellerAgent` → `SummaryAgent` | Two-pass: first pass extracts a `NewsStory` (full narrative arc), second pass condenses to `NewsSummary` (key facts only) | The personas need the full story; the host needs the summary. One pass cannot serve both. |
+| 5 | **ANGLE** | `jev.find_angle()` | Returns the missing narrative angle and the recommended audience for today's story | Without this step, all four personas write about the same aspect of the story. `find_angle` seeds each persona with a different lens. |
+| 6 | **CREATE** | `PersonaAgentFactory` (4 parallel) → `GrammarAgent` → `PublisherAgent` | Four agents run in parallel (Founder, Policy Analyst, Engineer, Generalist), grammar pass runs after, `PublisherAgent._compose_main_post()` assembles the dialogue | Parallel execution saves ~12 seconds per run. Grammar runs last because rewriting voices mid-composition would lose the character divergence. |
+| 7 | **PUBLISH** | `linkedin-mcp` | Posts to LinkedIn via the Posts API, gated by `PUBLISHING_ENABLED=true` and human approval | The `PUBLISHING_ENABLED` flag lets you run the full pipeline in dry-run mode locally or in staging without accidentally posting to your real LinkedIn profile. |
 
-> **Why are `linkedin-mcp` and `pageindex-mcp` single-replica?**
-> `linkedin-mcp` holds the LinkedIn OAuth token in memory — two pods would each need their own token and there's no shared session store. `pageindex-mcp` holds the RAG index in memory — it is rebuilt per-run anyway, so there's no benefit to two replicas.
+### LangGraph state machine
 
----
-
-## 4. Project Structure
-
-```
-src/daily_news/
-  agents/
-    jev_agents.py          Jev decisions #1 (prefilter) and #2 (persona routing)
-    evaluation_agent.py    Jev decision #3; quality gate; PASS/BLOCK/REGENERATE
-    persona_agent.py       4-persona LLM factory
-    published_store.py     File-backed dedup store (7-day TTL, thread-safe)
-    publisher_agent.py     Post composition + LinkedIn publish (no LLM calls here)
-    summary_agent.py       LLM summarisation → NewsSummary model
-  config/
-    settings.py            Pydantic settings; all env var names
-  mcp/
-    client.py              MCPHTTPClient base (timeout, error detection, retry)
-    jev_client.py          JevClient: prefilter, route_personas, evaluate_content
-    linkedin.py            LinkedInMCPClient
-    news.py                NewsMCPClient
-    pageindex.py           PageIndexMCPClient
-    evaluation.py          EvaluationMCPClient (LLM fallback)
-  models/
-    persona.py             PersonaType (4 values), PersonaOutput, PersonaSetOutput
-    summary.py             NewsSummary
-    evaluation.py          EvaluationResult, EvaluationDecision
-  workflows/
-    daily_news_graph.py    LangGraph 10-node state machine
-
-mcp_servers/
-  linkedin_mcp/server.py   LinkedIn OAuth + post/comment tools
-  news_mcp/server.py       GNews adapter; 2-key rotation on 403
-  evaluation_mcp/server.py LLM evaluation fallback
-  pageindex_mcp/server.py  In-memory RAG index
-
-prompts/
-  capitalist.txt  policy.txt  genz.txt  linkedin.txt
-
-openshift/
-  api/             deployment.yaml  service.yaml  route.yaml
-  news-mcp/        deployment.yaml  service.yaml
-  evaluation-mcp/  deployment.yaml  service.yaml
-  linkedin-mcp/    deployment.yaml  service.yaml
-  pageindex-mcp/   deployment.yaml  service.yaml
-  configmap.yaml   cronjob.yaml  hpa.yaml  pdb.yaml
-  rbac.yaml  networkpolicy.yaml  namespace.yaml  secrets.yaml
-
-tests/
-  unit/    test_jev_client.py  test_published_store.py  test_evaluation_gate.py
-           test_deduplication.py
-  workflow/ test_langgraph_routing.py
-
-ARCHITECTURE.md   Full technical reference
-RUNBOOK.md        Operations guide — every production scenario
-skills.md         Persona voice guide
-```
+The pipeline is a 12-node LangGraph graph defined in `src/daily_news/workflows/daily_news_graph.py`. Nodes are: `discover` → `deduplicate` → `prefilter` → `understand` → `analyze` → `score_reach` → `explain` → `angle` → `create_personas` → `grammar` → `compose` → `publish`. Each node writes into a shared state dict; later nodes can inspect what earlier nodes produced.
 
 ---
 
-## 5. Prerequisites
+## 4. Services — What Runs Where
 
-### Accounts needed
+| Service | Purpose | Replicas | Notes |
+|---------|---------|----------|-------|
+| `daily-news-api` | Main FastAPI app + LangGraph orchestrator | min 2, max 4 (HPA) | CPU-based autoscaling. Two replicas minimum so a rolling restart never takes the API down. |
+| `news-mcp` | GNews adapter — wraps the GNews HTTP API and enforces 2-key rotation | 2 | Stateless. Both replicas share the same API keys via Secret. |
+| `evaluation-mcp` | LLM evaluation fallback — runs Jev scoring locally if the upstream gateway is slow | 2 | Stateless. If Jev gateway times out, `daily-news-api` calls this instead. |
+| `linkedin-mcp` | LinkedIn OAuth 2.0 + Posts API | **1** | **Stateful singleton.** The OAuth token is stored in memory. If this pod restarts, the token is gone and you must re-authorise. Do not scale this to 2 — you will get split-brain OAuth state. |
+| `pageindex-mcp` | Vectorless document tree — builds the PageIndex per run | **1** | Per-run in-memory state. All tree data is discarded between runs. 1 replica is intentional — concurrent runs would stomp on each other's trees if scaled. |
 
-| Account | Where to get it | Free tier limits |
-|---|---|---|
-| GNews API key (×2) | https://gnews.io | 100 req/day per key |
-| OpenAI-compatible LLM | IBM watsonx / Azure OpenAI / OpenAI | Varies |
-| Jev System One | IBM internal gateway | Bearer token required |
-| LinkedIn Developer App | https://developer.linkedin.com | Scopes: `w_member_social`, `r_liteprofile` |
-| Langfuse (optional) | https://us.cloud.langfuse.com | Free tier available |
+### Why MCP servers?
 
-### Tools required
+Each MCP server exposes a well-defined tool interface over HTTP. The main `daily-news-api` calls them via the MCP protocol rather than importing the code directly. This means each service can be deployed, scaled, and restarted independently. It also means you can test `daily-news-api` locally by pointing it at real or mock MCP servers without changing any application code.
+
+---
+
+## 5. Project Structure
+
+```
+AINewsfeederLinkedin/
+├── src/
+│   └── daily_news/
+│       ├── agents/
+│       │   ├── publisher_agent.py      # _compose_main_post() — dialogue format (build #83)
+│       │   ├── grammar_agent.py        # NEW in build #83 — proofread pass, temperature=0
+│       │   ├── summary_agent.py        # MediaStorytellerAgent + SummaryAgent
+│       │   └── persona_agent.py        # PersonaAgentFactory (4 parallel agents)
+│       ├── workflows/
+│       │   └── daily_news_graph.py     # LangGraph 12-node state machine
+│       └── models/
+│           └── intelligence.py         # NewsStory, NewsIntelligence Pydantic models
+├── prompts/
+│   ├── storyteller.txt                 # MediaStorytellerAgent system prompt
+│   ├── capitalist.txt                  # Founder persona
+│   ├── policy.txt                      # Policy Analyst persona
+│   ├── genz.txt                        # Engineer persona (dual-lens: technical + workforce)
+│   ├── linkedin.txt                    # Generalist persona (zero jargon)
+│   ├── labor.txt                       # Working Professional (5th voice — not yet embedded)
+│   └── grammar.txt                     # GrammarAgent instruction (fix, do not rewrite)
+├── openshift/                          # All Kubernetes manifests
+│   ├── deployments/
+│   ├── services/
+│   ├── configmaps/
+│   ├── cronjobs/
+│   ├── networkpolicy/
+│   └── buildconfigs/
+├── tests/                              # 210 passing tests
+│   └── evaluation/                     # Excluded from default test run (slow, LLM-dependent)
+├── Dockerfile
+├── pyproject.toml
+└── .env.example
+```
+
+**Why `labor.txt` exists but is not in the post:**
+
+The 5th voice — a Working Professional's perspective on what the story means for people's jobs — is fully written and wired through `PersonaAgentFactory`. It is not embedded in the post body because LinkedIn does not allow programmatic comment posting without the **Community Management API** product approval on your LinkedIn app. Once that permission is granted, the plan is to post the Founder/Analyst/Engineer/Generalist dialogue in the main post and add the Working Professional as the first comment, extending the conversation rather than crowding the post.
+
+---
+
+## 6. Prerequisites
+
+### Accounts and credentials
+
+| What | Where to get it | Required for |
+|------|----------------|--------------|
+| GNews API key(s) | [gnews.io](https://gnews.io) — free tier gives 100 requests/day | Article discovery |
+| LinkedIn app (Client ID + Secret) | [LinkedIn Developer Portal](https://www.linkedin.com/developers/) — needs `w_member_social` scope | Publishing |
+| LLM API key | Your LLM gateway — this project uses `qwen2-5-72b-instruct` on an internal IBM Fusion cluster | All LLM calls |
+| Jev API key | Jev System One API — set `JEV_ENABLED=false` to run without it | Article scoring |
+| OpenShift login | Web console → Copy login command | OpenShift deploys only |
+| AWS account + ECR | AWS console | EKS deploys only |
+| Azure subscription + ACR | Azure portal | AKS deploys only |
+
+### Tools
 
 ```bash
-python3 --version   # 3.11+ required
-oc version          # OpenShift CLI (for OpenShift deployment)
-kubectl version     # for EKS deployment
-docker --version    # only for EKS builds
+# Required everywhere
+python --version          # 3.11+
+curl --version            # for smoke tests
+
+# Python package manager (this project uses uv, not pip)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+# uv installs to ~/.local/bin/uv
+
+# OpenShift
+oc version               # install from https://mirror.openshift.com/pub/openshift-v4/clients/ocp/
+
+# EKS
+aws --version            # AWS CLI v2
+kubectl version          # kubectl 1.27+
+docker --version
+
+# AKS
+az --version             # Azure CLI
+kubectl version
+docker --version
 ```
 
 ---
 
-## 6. Local Development
+## 7. Local Development — POC to Working Code
+
+### 7.1 Clone and install
 
 ```bash
-# 1. Clone
-git clone https://github.com/k-nishant09/AINewsFeederLinkedin.git
-cd AINewsFeederLinkedin
+git clone <repo-url> AINewsfeederLinkedin
+cd AINewsfeederLinkedin
 
-# 2. Virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+# uv creates a .venv and installs all deps from pyproject.toml
+/Users/kumar/.local/bin/uv sync
+```
 
-# 3. Environment variables
+### 7.2 Configure environment
+
+Copy the example file and fill in real values:
+
+```bash
 cp .env.example .env
-# Edit .env — fill in LLM_API_KEY, GNEWS_API_KEY, JEV_BASE_URL, JEV_API_KEY, etc.
-
-# 4. Run tests (all must pass before any build)
-python -m pytest tests/unit tests/workflow -q
-# Expected: all tests pass
-
-# 5. Dry run (no LinkedIn post)
-PUBLISHING_ENABLED=false python -m daily_news.workflow_runner
-
-# 6. Live run
-python -m daily_news.workflow_runner
 ```
 
-### Key environment variables
+Minimum required for a dry run (no LLM calls, no LinkedIn):
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `LLM_BASE_URL` | ✅ | — | OpenAI-compatible endpoint |
-| `LLM_API_KEY` | ✅ | — | LLM bearer token |
-| `GNEWS_API_KEY` | ✅ | — | GNews primary key |
-| `GNEWS_API_KEY_2` | — | — | GNews key #2 (auto-rotates on 403) |
-| `JEV_BASE_URL` | ✅ | — | Jev gateway URL |
-| `JEV_API_KEY` | ✅ | — | Jev bearer token |
-| `JEV_ENABLED` | — | `true` | Set `false` to skip Jev (uses heuristics) |
-| `LINKEDIN_CLIENT_ID` | ✅ | — | LinkedIn app client ID |
-| `LINKEDIN_CLIENT_SECRET` | ✅ | — | LinkedIn app secret |
-| `PUBLISHING_ENABLED` | — | `true` | Set `false` for smoke/dry runs |
-| `EVAL_FACTUALITY_THRESHOLD` | — | `0.50` | Jev eval gate |
-| `EVAL_GROUNDEDNESS_THRESHOLD` | — | `0.50` | Jev eval gate |
-| `EVAL_HALLUCINATION_THRESHOLD` | — | `0.85` | Jev eval gate |
-| `AIFEEDERS_STORE_PATH` | — | `/tmp/aifeeders_published.json` | PublishedStore file path |
-| `LANGFUSE_SECRET_KEY` | — | — | Optional LLM tracing |
+```
+# .env — dry run only
+GNEWS_API_KEY=your_gnews_key_here
+GNEWS_API_KEY_2=your_second_gnews_key_here   # optional, but recommended
+
+LLM_BASE_URL=https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com/v1
+LLM_API_KEY=your_llm_api_key
+
+JEV_ENABLED=false          # skip Jev scoring locally — uses heuristic fallback
+PUBLISHING_ENABLED=false   # NEVER set true unless you intend to post to LinkedIn
+
+NEWS_MCP_URL=http://localhost:8001
+EVALUATION_MCP_URL=http://localhost:8002
+LINKEDIN_MCP_URL=http://localhost:8003
+PAGEINDEX_MCP_URL=http://localhost:8004
+```
+
+> **PUBLISHING_ENABLED is the safety gate.** When it is `false`, the pipeline runs all 7 stages, composes the full post, logs it to stdout, and stops — nothing is sent to LinkedIn. Always start with `false`.
+
+### 7.3 Run tests
+
+```bash
+/Users/kumar/.local/bin/uv run pytest tests/ --ignore=tests/evaluation -q
+```
+
+Expected output: `210 passed`. The `tests/evaluation` directory is excluded because those tests make real LLM calls — they are slow and cost quota.
+
+### 7.4 Dry run (no LinkedIn post)
+
+With `PUBLISHING_ENABLED=false`, run the pipeline end-to-end:
+
+```bash
+/Users/kumar/.local/bin/uv run python -m daily_news.main
+```
+
+The pipeline will:
+1. Query GNews for today's AI news
+2. Run PageIndex on each article
+3. Score with Jev (or heuristic if `JEV_ENABLED=false`)
+4. Extract story and summary
+5. Generate four persona passages
+6. Run grammar pass
+7. Compose and **print** the full post — then stop
+
+Read the printed post carefully before enabling live publishing.
+
+### 7.5 Live run (publishes to LinkedIn)
+
+Only do this when you have read the dry-run output and are happy with it:
+
+```bash
+PUBLISHING_ENABLED=true /Users/kumar/.local/bin/uv run python -m daily_news.main
+```
+
+The pipeline will pause at the publish step and ask for human confirmation before calling the LinkedIn API.
 
 ---
 
-## 7. OpenShift Deployment — End-to-End
+## 8. Docker — Understanding the Container Build
 
-### Step 1 — Log in
+### 8.1 Why rsync to a tmpdir before building
 
-```bash
-# Get your token from the OpenShift web console: top-right → "Copy login command"
-oc login --token=<token> --server=https://api.f80l034.fusion.tadn.ibm.com:6443
-oc new-project aifeeders   # skip if already exists
-oc project aifeeders
-```
+The `.venv/` directory created by `uv sync` is ~270 MB. If you pass the repo root directly to `docker build` or `oc start-build`, the build client uploads everything — including `.venv/` — to the daemon or the OpenShift build server. This causes build uploads to time out and wastes bandwidth on every build.
 
-### Step 2 — Apply ConfigMap and Secrets
+The fix is to rsync only what you need into a clean tmpdir and build from there:
 
 ```bash
-oc apply -f openshift/configmap.yaml -n aifeeders
-oc apply -f openshift/rbac.yaml -n aifeeders
-
-# Secrets — never commit real values to git
-# Replace placeholder base64 values: echo -n "your-value" | base64
-oc apply -f openshift/secrets.yaml -n aifeeders
+TMPDIR=$(mktemp -d) && rsync -a \
+  --exclude='.venv/' \
+  --exclude='**/__pycache__/' \
+  --exclude='**/*.pyc' \
+  --exclude='.git/' \
+  --exclude='.pytest_cache/' \
+  --exclude='*.egg-info/' \
+  --exclude='.env' \
+  --exclude='.env.*' \
+  --exclude='dist/' \
+  --exclude='build/' \
+  . "$TMPDIR/"
 ```
 
-### Step 3 — Create BuildConfigs (first time only)
+The tmpdir now contains only your source code — typically 2–5 MB. Build from `$TMPDIR`, not `.`.
+
+### 8.2 Dockerfile walkthrough
+
+```dockerfile
+FROM python:3.11-slim
+
+# Install uv into the image
+# We pin uv rather than using "latest" so builds are reproducible
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+WORKDIR /app
+
+# Copy dependency declaration files first
+# This layer is cached as long as pyproject.toml doesn't change
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies into the image's system Python
+# --no-dev excludes test/dev dependencies (pytest, etc.)
+RUN uv sync --frozen --no-dev
+
+# Copy application source — this layer changes on every code change
+COPY src/ ./src/
+COPY prompts/ ./prompts/
+
+# Run as non-root (security)
+RUN adduser --disabled-password --gecos "" appuser
+USER appuser
+
+CMD ["uv", "run", "uvicorn", "daily_news.main:app", "--host", "0.0.0.0", "--port", "8080"]
+```
+
+**Why `--frozen`?** `uv sync --frozen` refuses to update `uv.lock` during the build. This means the image always installs exactly the versions that were tested locally. Without `--frozen`, a build on a different day might silently pick up a newer (potentially breaking) package version.
+
+---
+
+## 9. OpenShift Deployment — End-to-End
+
+This section walks through a first-time deployment to the `aifeeders` namespace on `api-f80l034-fusion-tadn.ibm.com:6443`. If you are re-deploying after a code change, skip to [9.7 Trigger a build](#97-trigger-a-build).
+
+### 9.1 Log in
+
+```bash
+# Get a fresh token from the OpenShift web console:
+# Top-right menu → "Copy login command" → paste here
+oc login --token=<your-token> --server=https://api-f80l034-fusion-tadn.ibm.com:6443
+
+# Verify
+oc whoami
+oc project aifeeders   # switch to the right namespace
+```
+
+> If `oc whoami` errors with "session token expired", your token has expired. Go back to the web console and copy a new one. Tokens are short-lived by default on Fusion clusters.
+
+### 9.2 Apply ConfigMap (safe to commit)
+
+ConfigMap values are not secret — they are configuration that varies by environment:
+
+```bash
+oc apply -f openshift/configmaps/daily-news-config.yaml -n aifeeders
+```
+
+Key values in the ConfigMap:
+
+```yaml
+data:
+  PUBLISHING_ENABLED: "false"          # flip to "true" only in production
+  JEV_ENABLED: "true"
+  LLM_BASE_URL: "https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com/v1"
+  NEWS_MCP_URL: "http://news-mcp-service:8080"
+  EVALUATION_MCP_URL: "http://evaluation-mcp-service:8080"
+  LINKEDIN_MCP_URL: "http://linkedin-mcp-service:8080"
+  PAGEINDEX_MCP_URL: "http://pageindex-mcp-service:8080"
+```
+
+### 9.3 Create Secrets (never commit real values)
+
+```bash
+# Create the secret with real values — do not put these in a file
+oc create secret generic daily-news-secrets \
+  --from-literal=LLM_API_KEY=<your-llm-api-key> \
+  --from-literal=GNEWS_API_KEY=<your-gnews-key-1> \
+  --from-literal=GNEWS_API_KEY_2=<your-gnews-key-2> \
+  --from-literal=JEV_API_KEY=<your-jev-api-key> \
+  --from-literal=LINKEDIN_CLIENT_ID=<your-linkedin-client-id> \
+  --from-literal=LINKEDIN_CLIENT_SECRET=<your-linkedin-client-secret> \
+  -n aifeeders
+
+# If the secret already exists, use replace:
+oc create secret generic daily-news-secrets \
+  --from-literal=LLM_API_KEY=<your-llm-api-key> \
+  ... \
+  -n aifeeders \
+  --dry-run=client -o yaml | oc apply -f -
+```
+
+### 9.4 Apply RBAC
+
+The CronJob pods need a ServiceAccount with permission to read ConfigMaps and Secrets:
+
+```bash
+oc apply -f openshift/rbac/ -n aifeeders
+```
+
+### 9.5 Apply NetworkPolicy
+
+The default-deny-all policy is applied first, then explicit allow rules for each service:
+
+```bash
+oc apply -f openshift/networkpolicy/ -n aifeeders
+```
+
+> **Read section 14 before touching NetworkPolicy.** There is a known CronJob label bug that will silently break all outbound calls if you are not careful.
+
+### 9.6 Apply BuildConfigs and create ImageStreams
 
 ```bash
 oc apply -f openshift/buildconfigs/ -n aifeeders
-
-# Self-pruning: keep only 1 build per service (old builds auto-deleted)
-for bc in daily-news evaluation-mcp linkedin-mcp news-mcp pageindex-mcp; do
-  oc patch buildconfig/$bc -n aifeeders \
-    --type=merge -p '{"spec":{"successfulBuildsHistoryLimit":1,"failedBuildsHistoryLimit":1}}'
-done
+oc apply -f openshift/imagestreams/ -n aifeeders
 ```
 
-### Step 4 — Build all images
-
-```bash
-# IMPORTANT: exclude .venv/ — it's 270 MB and causes upload timeout
-TMPDIR=$(mktemp -d) && rsync -a \
-  --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
-  --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
-  --exclude='.env' --exclude='.env.*' \
-  . "$TMPDIR/"
-
-for svc in daily-news evaluation-mcp linkedin-mcp news-mcp pageindex-mcp; do
-  oc start-build $svc --from-dir="$TMPDIR" -n aifeeders --follow
-done
-```
-
-### Step 5 — Deploy services
-
-```bash
-oc apply -f openshift/api/ -n aifeeders
-oc apply -f openshift/news-mcp/ -n aifeeders
-oc apply -f openshift/evaluation-mcp/ -n aifeeders
-oc apply -f openshift/linkedin-mcp/ -n aifeeders
-oc apply -f openshift/pageindex-mcp/ -n aifeeders
-oc apply -f openshift/cronjob.yaml -n aifeeders
-oc apply -f openshift/hpa.yaml -n aifeeders
-oc apply -f openshift/pdb.yaml -n aifeeders
-oc apply -f openshift/networkpolicy.yaml -n aifeeders
-
-oc get pods -n aifeeders   # all should be Running
-```
-
-### Step 6 — Authorise LinkedIn (first time)
-
-```bash
-oc port-forward svc/linkedin-mcp 8080:8000 -n aifeeders &
-# Browser: http://localhost:8080/auth/linkedin
-# Grant: w_member_social + r_liteprofile
-# Token is stored in-memory — re-authorise after any pod restart
-# Token expires after 60 days — set a calendar reminder
-```
-
-### Step 7 — Smoke test and first live run
-
-```bash
-# Disable publishing, run the whole pipeline without posting
-oc patch configmap daily-news-config -n aifeeders \
-  --type=merge -p '{"data":{"PUBLISHING_ENABLED":"false"}}'
-oc create job smoke-$(date +%s) --from=cronjob/daily-ai-news-morning -n aifeeders
-# Wait and tail: expected "status=EVALUATED published=0 errors=0"
-
-# Re-enable and fire a live run
-oc patch configmap daily-news-config -n aifeeders \
-  --type=merge -p '{"data":{"PUBLISHING_ENABLED":"true"}}'
-oc create job live-$(date +%s) --from=cronjob/daily-ai-news-morning -n aifeeders
-```
-
----
-
-## 8. Build Flow → Launch Flow
-
-Every code change follows this exact sequence. **Never skip the test step.**
-
-```bash
-# 1. Test
-source .venv/bin/activate
-python -m pytest tests/unit tests/workflow -q --tb=short
-
-# 2. Build (exclude .venv/ — upload must be < 5 MB)
-TMPDIR=$(mktemp -d) && rsync -a \
-  --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
-  --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
-  --exclude='.env' --exclude='.env.*' \
-  . "$TMPDIR/"
-oc start-build daily-news --from-dir="$TMPDIR" -n aifeeders --follow
-
-# 3. Roll out (zero-downtime rolling restart)
-oc rollout restart deployment/daily-news-api -n aifeeders
-oc rollout status deployment/daily-news-api -n aifeeders --timeout=90s
-
-# 4. Run
-LIVE_JOB=$(oc create job live-$(date +%s) --from=cronjob/daily-ai-news-morning \
-  -n aifeeders --output=name | sed 's|job.batch/||')
-oc logs -f job/$LIVE_JOB -n aifeeders | grep -E "status=|published|ERROR"
-```
-
----
-
-## 9. Production Issues We Have Actually Hit
-
-This section documents every real failure we encountered on this system — what broke, why, and exactly how it was fixed. Read this before debugging any issue.
-
----
-
-### Issue #1 — CronJob pods silently timeout on every GNews search
-
-**Symptom:**
-```
-2026-09-25 03:47:16 WARNING news search failed for artificial intelligence LLM agentic AI model:
-2026-09-25 03:48:16 WARNING news search failed for artificial intelligence finance investment funding:
-```
-The error message is **empty** (nothing after the colon). All 9 queries fail. Pipeline produces 0 articles.
-
-**Root cause:**
-The CronJob pod template had **no labels**. OpenShift's `default-deny-all` NetworkPolicy blocked all outbound traffic from the CronJob pod to the MCP services. The 60-second httpx timeout fired before any GNews response arrived. The exception was a `TimeoutError` with empty string representation, which is why the log showed nothing after the colon.
-
-```
-CronJob pod labels: {batch.kubernetes.io/job-name: "...", controller-uid: "..."}
-NetworkPolicy allow-api-to-mcps: allows only pods with app=daily-news-api OR app=daily-news-worker
-Result: CronJob pod → news-mcp:8000 → CONNECTION TIMED OUT (60s)
-```
-
-The label was in the wrong YAML location:
+Limit build history to avoid accumulating stale images (important — old builds pile up and fill the registry):
 
 ```yaml
-# WRONG — labels under spec (does not exist in Kubernetes)
-template:
-  spec:
-    labels:                       ← This field doesn't exist
-      app: daily-news-worker
-
-# CORRECT — labels under metadata
-template:
-  metadata:
-    labels:
-      app: daily-news-worker      ← Network policy now allows this pod
-  spec:
-    ...
+# In each BuildConfig spec:
+spec:
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 ```
 
-**Fix:**
+### 9.7 Trigger a build
+
 ```bash
-oc patch cronjob daily-ai-news-morning --type='json' \
-  -p='[{"op":"add","path":"/spec/jobTemplate/spec/template/metadata/labels","value":{"app":"daily-news-worker"}}]'
-oc patch cronjob daily-ai-news-afternoon --type='json' \
-  -p='[{"op":"add","path":"/spec/jobTemplate/spec/template/metadata/labels","value":{"app":"daily-news-worker"}}]'
-```
-
-**How to verify the fix worked:**
-```bash
-# Confirm the new pod has the label
-oc get pod <cronjob-pod-name> -o jsonpath='{.metadata.labels}'
-# Must show: {"app":"daily-news-worker", ...}
-
-# Test connectivity from inside the pod
-oc exec <cronjob-pod-name> -- curl -s --max-time 5 http://news-mcp:8000/health
-# Must return: {"status":"healthy", ...}
-```
-
-**Lesson:** Always verify that NetworkPolicy `podSelector.matchLabels` values match exactly what your pod template `metadata.labels` contains. A missing label = silent network block.
-
----
-
-### Issue #2 — Build upload timeout — `.venv/` included in context
-
-**Symptom:**
-```
-oc start-build daily-news --from-dir=.
-Uploading directory "." as binary input...
-[hangs for 5+ minutes, then]
-error: build/daily-news-XX failed — error streaming build logs
-```
-
-**Root cause:**
-`.venv/` is ~270 MB. `oc start-build --from-dir=.` tarballs and streams the entire directory to the OpenShift build pod. At typical cluster upload speeds (~1 MB/s), this takes 4–5 minutes and exceeds the streaming timeout.
-
-**Fix:**
-Always rsync to a tmpdir first, excluding `.venv/`:
-```bash
+# Prepare clean build context (always do this — never build from repo root)
 TMPDIR=$(mktemp -d) && rsync -a \
   --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
   --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
-  --exclude='.env' --exclude='.env.*' \
+  --exclude='.env' --exclude='.env.*' --exclude='dist/' --exclude='build/' \
   . "$TMPDIR/"
-echo "Upload size: $(du -sh $TMPDIR | cut -f1)"  # Must be < 5 MB
+
+# Start the build
 oc start-build daily-news --from-dir="$TMPDIR" -n aifeeders --follow
 ```
 
-**Never run:**
+`--follow` streams build logs to your terminal. Wait for `Push successful` before continuing.
+
+### 9.8 Deploy
+
 ```bash
-oc start-build daily-news --from-dir=.   # ← Do NOT do this
+oc rollout restart deployment/daily-news-api -n aifeeders
+oc rollout status deployment/daily-news-api -n aifeeders
+# Wait for: "successfully rolled out"
+```
+
+Repeat for each MCP server that changed:
+
+```bash
+for svc in news-mcp evaluation-mcp linkedin-mcp pageindex-mcp; do
+  oc rollout restart deployment/$svc -n aifeeders
+  oc rollout status deployment/$svc -n aifeeders
+done
+```
+
+### 9.9 LinkedIn authorisation
+
+The `linkedin-mcp` pod holds the OAuth token in memory. After every restart, you must re-authorise:
+
+```bash
+# Port-forward the linkedin-mcp service to your laptop
+oc port-forward svc/linkedin-mcp-service 8003:8080 -n aifeeders
+
+# Open in your browser (do not use curl — OAuth needs a redirect):
+# http://localhost:8003/auth/linkedin
+```
+
+Complete the OAuth flow in your browser. The token is stored in the pod's memory. The port-forward can be closed once authorisation is complete.
+
+> **Do not restart `linkedin-mcp` unnecessarily.** Every restart requires re-authorisation. If you are deploying all services, deploy `linkedin-mcp` last and authorise once at the end.
+
+### 9.10 Smoke test
+
+```bash
+# Check all pods are Running
+oc get pods -n aifeeders
+
+# Hit the health endpoint
+oc port-forward svc/daily-news-api-service 8080:8080 -n aifeeders &
+curl http://localhost:8080/health
+# Expected: {"status":"ok"}
+
+# Dry run via API (PUBLISHING_ENABLED must be false in ConfigMap)
+curl -X POST http://localhost:8080/run
+# Watch logs:
+oc logs -f deployment/daily-news-api -n aifeeders
+```
+
+### 9.11 Enable CronJobs
+
+The CronJobs run at 08:00 UTC and 16:00 UTC daily:
+
+```bash
+oc apply -f openshift/cronjobs/ -n aifeeders
+
+# Verify schedule
+oc get cronjobs -n aifeeders
+```
+
+To trigger a manual run right now:
+
+```bash
+oc create job --from=cronjob/daily-news-cronjob manual-run-$(date +%s) -n aifeeders
+oc logs -f job/manual-run-<suffix> -n aifeeders
+```
+
+### 9.12 Enable live publishing
+
+Only after all smoke tests pass:
+
+```bash
+oc patch configmap daily-news-config \
+  --patch '{"data":{"PUBLISHING_ENABLED":"true"}}' \
+  -n aifeeders
+
+# Restart daily-news-api to pick up the new value
+oc rollout restart deployment/daily-news-api -n aifeeders
 ```
 
 ---
 
-### Issue #3 — GNews API key quota exhausted
+## 10. EKS Deployment — Docker + ECR
 
-**Symptom:**
-```
-WARNING news search failed for ...: 403 Client Error: Forbidden
-discovered 0 raw articles
-Workflow complete — status=PUBLISHED published=0 errors=9
-```
+EKS does not have OpenShift BuildConfigs — you build the image locally and push to ECR.
 
-**Root cause:**
-GNews free tier allows 100 requests/day per key. Our pipeline uses 9 queries per run × 2 runs/day = 18 requests/day. Running manual test jobs during development exhausted the daily quota.
+**Important:** EKS with the default VPC CNI plugin does **not** enforce `NetworkPolicy` resources. You must install [Calico](https://docs.projectcalico.org/getting-started/kubernetes/managed-public-cloud/eks) or [Cilium](https://docs.cilium.io/en/stable/gettingstarted/k8s-install-default/) separately before applying NetworkPolicy manifests, or your policies will be silently ignored.
 
-**Fix (immediate):**
-Wait until midnight UTC for quota reset.
-
-**Fix (permanent — key rotation):**
-We set up two GNews keys. The `news-mcp` server automatically switches to key 2 on any HTTP 403:
 ```bash
-oc patch secret daily-news-secrets -n aifeeders \
-  --type=merge -p "{\"data\":{\"GNEWS_API_KEY_2\":\"$(echo -n 'your-key-2' | base64)\"}}"
-oc rollout restart deployment/news-mcp -n aifeeders
-```
+# --- Variables (set these for your environment) ---
+AWS_REGION=us-east-1
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+ECR_REGISTRY=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+IMAGE=$ECR_REGISTRY/aifeeders/daily-news:latest
 
-Verify both keys are loaded:
-```bash
-oc exec deployment/news-mcp -n aifeeders -- curl -s http://localhost:8000/health | jq .
-# "keys_configured": 2  ← must show 2
-# "active_key_prefix": "e6f0db13..."
+# --- Create ECR repository (once only) ---
+aws ecr create-repository \
+  --repository-name aifeeders/daily-news \
+  --region $AWS_REGION
+
+# --- Prepare build context ---
+TMPDIR=$(mktemp -d) && rsync -a \
+  --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
+  --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
+  --exclude='.env' --exclude='.env.*' --exclude='dist/' --exclude='build/' \
+  . "$TMPDIR/"
+
+# --- Build and push ---
+docker build -t $IMAGE "$TMPDIR"
+aws ecr get-login-password --region $AWS_REGION \
+  | docker login --username AWS --password-stdin $ECR_REGISTRY
+docker push $IMAGE
+
+# --- Update your EKS kubeconfig ---
+aws eks update-kubeconfig --region $AWS_REGION --name <your-cluster-name>
+
+# --- Apply manifests (same files as OpenShift, minus BuildConfigs) ---
+kubectl apply -f openshift/configmaps/ -n aifeeders
+kubectl apply -f openshift/rbac/ -n aifeeders
+kubectl apply -f openshift/networkpolicy/ -n aifeeders   # requires Calico/Cilium!
+
+# Create secrets (same as OpenShift section 9.3, using kubectl)
+kubectl create secret generic daily-news-secrets \
+  --from-literal=LLM_API_KEY=<key> \
+  --from-literal=GNEWS_API_KEY=<key> \
+  --from-literal=GNEWS_API_KEY_2=<key> \
+  --from-literal=JEV_API_KEY=<key> \
+  --from-literal=LINKEDIN_CLIENT_ID=<id> \
+  --from-literal=LINKEDIN_CLIENT_SECRET=<secret> \
+  -n aifeeders
+
+# Update image reference in deployments to $IMAGE, then:
+kubectl apply -f openshift/deployments/ -n aifeeders
+kubectl apply -f openshift/services/ -n aifeeders
+kubectl apply -f openshift/cronjobs/ -n aifeeders
+
+# --- Rolling restart after image push ---
+kubectl rollout restart deployment/daily-news-api -n aifeeders
+kubectl rollout status deployment/daily-news-api -n aifeeders
+
+# --- LinkedIn auth (same port-forward approach) ---
+kubectl port-forward svc/linkedin-mcp-service 8003:8080 -n aifeeders
+# Open http://localhost:8003/auth/linkedin in browser
 ```
 
 ---
 
-### Issue #4 — LinkedIn token expired, posts silently fail
+## 11. AKS Deployment — Docker + ACR
 
-**Symptom:**
-```
-post FAILED http=401 article=news-abc123
-Workflow complete — status=PUBLISHED published=0 errors=1
+AKS with **Azure CNI Overlay** enforces NetworkPolicy natively — no Calico/Cilium needed. Standard CNI (kubenet) does not enforce NetworkPolicy; check which CNI your cluster uses before applying network policies.
+
+```bash
+# --- Variables ---
+AZ_ACR_NAME=<your-acr-name>
+ACR_REGISTRY=$AZ_ACR_NAME.azurecr.io
+IMAGE=$ACR_REGISTRY/aifeeders/daily-news:latest
+RESOURCE_GROUP=<your-resource-group>
+CLUSTER_NAME=<your-aks-cluster-name>
+
+# --- Create ACR (once only) ---
+az acr create \
+  --resource-group $RESOURCE_GROUP \
+  --name $AZ_ACR_NAME \
+  --sku Basic
+
+# --- Attach ACR to AKS (grants pull permission) ---
+az aks update \
+  --name $CLUSTER_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --attach-acr $AZ_ACR_NAME
+
+# --- Prepare build context ---
+TMPDIR=$(mktemp -d) && rsync -a \
+  --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
+  --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
+  --exclude='.env' --exclude='.env.*' --exclude='dist/' --exclude='build/' \
+  . "$TMPDIR/"
+
+# --- Build and push ---
+az acr login --name $AZ_ACR_NAME
+docker build -t $IMAGE "$TMPDIR"
+docker push $IMAGE
+
+# --- Get AKS credentials ---
+az aks get-credentials \
+  --resource-group $RESOURCE_GROUP \
+  --name $CLUSTER_NAME
+
+# --- Apply manifests ---
+kubectl apply -f openshift/configmaps/ -n aifeeders
+kubectl apply -f openshift/rbac/ -n aifeeders
+kubectl apply -f openshift/networkpolicy/ -n aifeeders   # works natively on Azure CNI Overlay
+
+kubectl create secret generic daily-news-secrets \
+  --from-literal=LLM_API_KEY=<key> \
+  --from-literal=GNEWS_API_KEY=<key> \
+  --from-literal=GNEWS_API_KEY_2=<key> \
+  --from-literal=JEV_API_KEY=<key> \
+  --from-literal=LINKEDIN_CLIENT_ID=<id> \
+  --from-literal=LINKEDIN_CLIENT_SECRET=<secret> \
+  -n aifeeders
+
+kubectl apply -f openshift/deployments/ -n aifeeders
+kubectl apply -f openshift/services/ -n aifeeders
+kubectl apply -f openshift/cronjobs/ -n aifeeders
+
+# --- Rolling restart ---
+kubectl rollout restart deployment/daily-news-api -n aifeeders
+kubectl rollout status deployment/daily-news-api -n aifeeders
+
+# --- LinkedIn auth ---
+kubectl port-forward svc/linkedin-mcp-service 8003:8080 -n aifeeders
+# Open http://localhost:8003/auth/linkedin in browser
 ```
 
-**Root cause:**
-LinkedIn OAuth tokens expire after **60 days**. The token is stored in-memory in `linkedin-mcp`. After expiry, every post attempt returns HTTP 401 Unauthorized.
+---
+
+## 12. Build Flow → Launch Flow
+
+### When to rebuild vs when to just restart
+
+| Changed | Do this |
+|---------|---------|
+| Python source code, prompts | Full build (sections 9.7 → 9.8) |
+| ConfigMap values only | `oc apply -f configmap.yaml` + `rollout restart` (no rebuild) |
+| Secret values only | `oc create secret ... --dry-run | oc apply` + `rollout restart` (no rebuild) |
+| Kubernetes manifests only (replicas, limits, etc.) | `oc apply -f ...` (Kubernetes updates in place; restart only if env vars changed) |
+
+### Never-skip steps (all platforms)
+
+These steps are easy to forget and will cause subtle failures:
+
+1. **Always rsync to tmpdir before building.** Building from repo root uploads `.venv/` (270 MB) and times out.
+2. **Always wait for `rollout status` to confirm `successfully rolled out`** before testing. Pods can be in `Running` state but still on the old image during a rollout.
+3. **Always re-authorise `linkedin-mcp` after restarting that pod.** The token is in-memory only.
+4. **Confirm `PUBLISHING_ENABLED=false` in staging** before flipping to `true` in production.
+5. **On EKS, install Calico or Cilium before applying NetworkPolicy.** Without it, the policies apply but are silently not enforced — your pods will appear to be communicating when they should be blocked.
+
+### Exact sequence for a code change on OpenShift
+
+```bash
+# 1. Run tests locally first
+/Users/kumar/.local/bin/uv run pytest tests/ --ignore=tests/evaluation -q
+
+# 2. Prepare build context
+TMPDIR=$(mktemp -d) && rsync -a \
+  --exclude='.venv/' --exclude='**/__pycache__/' --exclude='**/*.pyc' \
+  --exclude='.git/' --exclude='.pytest_cache/' --exclude='*.egg-info/' \
+  --exclude='.env' --exclude='.env.*' --exclude='dist/' --exclude='build/' \
+  . "$TMPDIR/"
+
+# 3. Build
+oc start-build daily-news --from-dir="$TMPDIR" -n aifeeders --follow
+# Wait for "Push successful"
+
+# 4. Deploy
+oc rollout restart deployment/daily-news-api -n aifeeders
+oc rollout status deployment/daily-news-api -n aifeeders
+# Wait for "successfully rolled out"
+
+# 5. Smoke test
+oc port-forward svc/daily-news-api-service 8080:8080 -n aifeeders &
+curl http://localhost:8080/health
+
+# 6. If this was a linkedin-mcp change, re-authorise
+oc port-forward svc/linkedin-mcp-service 8003:8080 -n aifeeders
+# Open http://localhost:8003/auth/linkedin
+```
+
+---
+
+## 13. Production Issues We Have Actually Hit
+
+These are real failures from running this pipeline in production. Each entry has: what you see, why it happens, and exactly how to fix it.
+
+---
+
+### Issue 1 — CronJob pods silently timeout on all outbound calls
+
+**Symptom:** CronJob runs appear to start (pod is `Running`), but the pipeline never returns any articles. All MCP calls time out. The same code works fine when run as a manual `kubectl create job`.
+
+**Root cause:** Kubernetes CronJob pod labels must be under `template.metadata.labels`. If you accidentally put them under `template.spec.labels` (which is not a valid field), Kubernetes silently ignores the key. The CronJob pod then has no `app` label, so the NetworkPolicy `podSelector` does not match it, and all outbound traffic is denied by the default-deny-all policy.
 
 **Fix:**
-```bash
-oc port-forward svc/linkedin-mcp 8080:8000 -n aifeeders &
-# Browser: http://localhost:8080/auth/linkedin
-# Complete OAuth flow (takes ~30 seconds)
-kill %1  # stop port-forward
-```
 
-**Prevention:**
-Set a repeating calendar reminder every 55 days titled "Renew LinkedIn OAuth token".
+```yaml
+# WRONG — spec.labels does not exist, silently ignored
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          labels:                      # ← WRONG PLACE
+            app: daily-news-worker
+
+# CORRECT — labels go under template.metadata
+spec:
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:                      # ← CORRECT
+            app: daily-news-worker
+        spec:
+          containers: ...
+```
 
 ---
 
-### Issue #5 — linkedin-mcp pod restart loses the OAuth token
+### Issue 2 — Build upload times out
 
-**Symptom:**
-Posts were working fine, then suddenly all start failing with `401` — even though the token was just renewed.
+**Symptom:** `oc start-build --from-dir=.` hangs or errors with a timeout before the build even starts.
 
-**Root cause:**
-The LinkedIn OAuth token is stored only in-memory in the `linkedin-mcp` process. Any pod restart (OOM kill, node eviction, deploy rollout) wipes the token.
+**Root cause:** You are building from the repo root. The `.venv/` directory is ~270 MB. The build client is uploading your entire working directory to the OpenShift build server.
 
-**Fix:**
-Re-authorise via OAuth after every `linkedin-mcp` pod restart:
-```bash
-# Always check token status after any restart
-oc exec deployment/linkedin-mcp -n aifeeders -- curl -s http://localhost:8000/health | jq .token_status
-# "valid" = OK;  "missing" or "expired" = need to re-authorise
-
-oc port-forward svc/linkedin-mcp 8080:8000 -n aifeeders &
-# http://localhost:8080/auth/linkedin
-```
-
-**Lesson:** Single-replica stateful pods lose their state on restart. Do not deploy new `linkedin-mcp` images carelessly — always re-authorise after.
+**Fix:** Always rsync to a tmpdir first (see section 9.7). The clean tmpdir is 2–5 MB and uploads in seconds.
 
 ---
 
-### Issue #6 — Post truncated mid-sentence on LinkedIn
+### Issue 3 — GNews quota exhausted (HTTP 403)
 
-**Symptom:**
-The post in logs looks complete and under the limit. On LinkedIn the post cuts off in the middle of a sentence, usually somewhere in the Jev decision block.
+**Symptom:** `news-mcp` logs show `403 Forbidden` from the GNews API. Pipeline returns zero articles.
 
-**Root cause:**
-LinkedIn's API counts characters as **UTF-16 code units** (like JavaScript's `String.length`). Python's `len()` counts Unicode code points. Most emoji — like `💼 🎓 🧠 🔥 📌 📈 👷 🔬 💬 🤖 ⚠️` — are outside the Basic Multilingual Plane (U+10000+), so each emoji costs **2 UTF-16 units** but only **1 Python code point**. A post with 30 such emoji that Python reports as 2980 chars is actually ~3010 LinkedIn units → silent mid-sentence truncation.
+**Root cause:** GNews free tier gives 100 requests per day per API key. The pipeline runs 9 queries per execution, twice a day — 18 requests per day. However, if you have been doing development runs locally, you may have used up the quota before the production CronJob runs.
 
-**Fix (in `publisher_agent.py`):**
+**Fix:** The pipeline automatically rotates to `GNEWS_API_KEY_2` on a 403. If both keys are exhausted, the pipeline will return zero articles and exit cleanly (it does not error). Check your GNews dashboard to see when the quota resets (midnight UTC).
+
+---
+
+### Issue 4 — LinkedIn token expired (HTTP 401)
+
+**Symptom:** `linkedin-mcp` logs show `401 Unauthorized` when attempting to post.
+
+**Root cause:** LinkedIn OAuth access tokens expire. The expiry is visible in the token response — typically 60 days, but can vary.
+
+**Fix:** Re-authorise:
+
+```bash
+oc port-forward svc/linkedin-mcp-service 8003:8080 -n aifeeders
+# Open http://localhost:8003/auth/linkedin in browser
+# Complete the OAuth flow
+```
+
+---
+
+### Issue 5 — `linkedin-mcp` pod restart wipes OAuth token
+
+**Symptom:** After deploying a new version of `linkedin-mcp`, or after the pod restarts due to an OOM kill or node eviction, posts fail with `401 Unauthorized` even though the token was recently set.
+
+**Root cause:** The OAuth token is stored in the `linkedin-mcp` process memory, not in a database or a Kubernetes Secret. Pod restart = memory wipe = token gone.
+
+**Fix:** Re-authorise after every `linkedin-mcp` restart (see Issue 4 fix). Long-term, the token should be persisted to a Kubernetes Secret or a small key-value store. This is a known architectural limitation.
+
+---
+
+### Issue 6 — Post truncated mid-sentence
+
+**Symptom:** The LinkedIn post appears cut off. The last visible character is in the middle of a word or sentence.
+
+**Root cause:** LinkedIn counts post length in **UTF-16 code units**, not Unicode code points. Standard Python `len()` counts code points. Emoji characters are outside the Basic Multilingual Plane and cost **2 UTF-16 units each**, not 1. A post full of emoji can appear to be 2800 characters but register as 3200 UTF-16 units, which exceeds LinkedIn's 3000-unit limit.
+
+**Fix:** The pipeline now uses a `_linkedin_len()` helper in `publisher_agent.py` that counts UTF-16 units correctly:
+
 ```python
 def _linkedin_len(text: str) -> int:
-    """Count as LinkedIn does: UTF-16 code units, not Unicode code points."""
+    """Count UTF-16 code units, matching LinkedIn's length check."""
     return sum(2 if ord(c) > 0xFFFF else 1 for c in text)
 ```
 
-All character budget calculations now use `_linkedin_len()` with a safety limit of **2900** (not 3000).
+---
+
+### Issue 7 — Comments API PERMISSION_ERROR
+
+**Symptom:** Attempting to post to LinkedIn comments (for the `labor.txt` Working Professional voice) returns a permission error from the LinkedIn API.
+
+**Root cause:** LinkedIn's Comments API requires the **Community Management API** product to be enabled on your LinkedIn Developer app. This product requires a separate approval process and is not available on all developer accounts.
+
+**Current state:** The Working Professional persona is fully written in `prompts/labor.txt` and wired through `PersonaAgentFactory`. It is intentionally not embedded in the main post body. Publishing it as a first comment is blocked until the Community Management API permission is granted.
+
+**Fix:** Apply for Community Management API access on your LinkedIn Developer app. Once granted, wire `labor.txt` to the Comments API in `linkedin-mcp`.
 
 ---
 
-### Issue #7 — `PERMISSION_ERROR` on LinkedIn Comments API
+### Issue 8 — Jev gateway timeout (ReadTimeout)
 
-**Symptom:**
-```
-INFO Comments API not available (PERMISSION_ERROR) — personas embedded in post body.
-```
+**Symptom:** Pipeline logs show `ReadTimeout` when calling the Jev System One endpoint. The article scoring step fails.
 
-**Root cause:**
-LinkedIn's Comments API requires the "Community Management API" product to be added to the LinkedIn Developer App. This requires separate approval from LinkedIn and is not available on basic developer apps.
+**Root cause:** The Jev gateway at `https://model-gateway-model-gateway.apps.f73l056.fusion.tadn.ibm.com` sometimes takes longer than the configured HTTP timeout to respond, especially under load.
 
-**This is expected behaviour, not a bug.** All 4 persona perspectives are embedded in the post body itself, so nothing is lost.
-
-**If you get LinkedIn Comments API approved:**
-No code change is needed. The publisher agent already attempts persona comments after each post. Remove the `PERMISSION_ERROR` check to let them post as threaded comments.
+**Fix:** The pipeline automatically falls back to heuristic scoring when Jev times out — it does not fail the run. You will see `[JEV FALLBACK] using heuristic scoring` in the logs. This is expected behaviour. If Jev timeouts are frequent, check the gateway health and consider increasing the timeout in `evaluation-mcp`.
 
 ---
 
-### Issue #8 — Jev gateway timeout — pipeline falls back silently
+### Issue 9 — Old builds accumulate and fill the registry
 
-**Symptom:**
+**Symptom:** `oc get builds -n aifeeders` shows dozens of old builds. The internal registry starts returning storage errors.
+
+**Root cause:** OpenShift BuildConfigs keep all historical builds by default. After 80+ builds, this adds up.
+
+**Fix:** Set `successfulBuildsHistoryLimit` and `failedBuildsHistoryLimit` in every BuildConfig:
+
+```yaml
+spec:
+  successfulBuildsHistoryLimit: 1
+  failedBuildsHistoryLimit: 2
 ```
-WARNING jev_prefilter failed (ReadTimeout) — falling back to [:1] selection
-```
-The post is published, but without Jev scoring — the first article is taken regardless of quality.
 
-**Root cause:**
-The Jev gateway had high load or was being restarted. The httpx timeout (30s) fired before a response arrived.
+Apply this to all existing BuildConfigs:
 
-**Behaviour:**
-The pipeline does NOT stop. It falls back gracefully:
-- `jev_prefilter` → picks first article (`[:1]`) with no scoring
-- `jev_router` → runs all 4 personas (no routing optimisation)
-- `evaluate` → uses LLM-based `EvaluationMCPClient`
-
-**If Jev is down repeatedly:**
 ```bash
-# Disable Jev entirely until it recovers
-oc patch configmap daily-news-config -n aifeeders \
-  --type=merge -p '{"data":{"JEV_ENABLED":"false"}}'
-oc rollout restart deployment/daily-news-api -n aifeeders
-# Re-enable when Jev is back
-```
-
----
-
-### Issue #9 — Old builds accumulate, namespace gets cluttered
-
-**Symptom:**
-```
-oc get builds -n aifeeders
-daily-news-68  Complete
-daily-news-69  Complete
-daily-news-70  Complete
-daily-news-71  Complete
-daily-news-72  Complete
-daily-news-73  Complete
-daily-news-74  Complete
-daily-news-75  Complete
-```
-
-**Root cause:**
-`successfulBuildsHistoryLimit` was not set on the BuildConfig. OpenShift keeps every completed build indefinitely by default.
-
-**Fix:**
-```bash
-for bc in daily-news evaluation-mcp linkedin-mcp news-mcp pageindex-mcp; do
-  oc patch buildconfig/$bc -n aifeeders \
-    --type=merge -p '{"spec":{"successfulBuildsHistoryLimit":1,"failedBuildsHistoryLimit":1}}'
+for bc in $(oc get bc -n aifeeders -o name); do
+  oc patch $bc -n aifeeders \
+    --patch '{"spec":{"successfulBuildsHistoryLimit":1,"failedBuildsHistoryLimit":2}}'
 done
-# Delete existing old builds manually
-oc delete builds -n aifeeders -l buildconfig=daily-news \
-  --field-selector status.phase=Complete
 ```
-
-With the limit set to 1, OpenShift deletes the previous build automatically when the next one succeeds.
 
 ---
 
-### Issue #10 — `oc whoami` shows error / session token expired
+### Issue 10 — `oc whoami` error / session token expired
 
-**Symptom:**
-```
-oc get pods -n aifeeders
-error: You must be logged in to the server (Unauthorized)
-```
+**Symptom:** `oc` commands fail with `Error from server (Unauthorized)` or `oc whoami` returns an error.
 
-**Root cause:**
-OpenShift session tokens expire. The token in `~/.kube/config` is no longer valid.
+**Root cause:** OpenShift session tokens are short-lived. After expiry, all `oc` commands will fail until you re-authenticate.
 
-**Fix:**
-1. Open the OpenShift web console
-2. Top-right → your username → "Copy login command"
-3. Paste the `oc login --token=... --server=...` command into your terminal
-
-This is normal and expected. Tokens expire for security reasons.
+**Fix:** Go to the OpenShift web console → top-right menu → **Copy login command** → paste the full `oc login --token=...` command in your terminal. There is no way to refresh the token from the CLI — you must go through the web console.
 
 ---
 
-## 10. Networking — How Pods Talk to Each Other
+## 14. Networking — How Pods Talk
 
-This is one of the most important things to understand about this system. **If networking is wrong, everything silently fails with timeouts.**
+### NetworkPolicy model
 
-### The NetworkPolicy model
+All pods in the `aifeeders` namespace operate under a **default-deny-all** NetworkPolicy. This means:
 
-The namespace uses a `default-deny-all` policy. **All traffic is blocked by default.** Only explicitly allowed paths work.
+- By default, a new pod cannot make any outbound calls and cannot receive any inbound calls.
+- You must explicitly add allow rules for every communication path.
 
-```
-default-deny-all  ──────  blocks all ingress and egress between pods
+This is the right default for production — it forces you to be explicit about what talks to what, and prevents a compromised pod from reaching arbitrary internal services.
 
-allow-api-to-mcps  ────  allows pods with label app=daily-news-api
-                          OR  app=daily-news-worker
-                         to reach pods with label role=mcp-server
-                         on port 8000
+The allow rules in `openshift/networkpolicy/` cover:
 
-allow-router-to-api  ──  allows the OpenShift router to reach daily-news-api
-allow-egress-internet  ─  allows all pods to reach external internet (GNews, LinkedIn, Jev)
-allow-router-to-linkedin-mcp  ──  allows the router to reach linkedin-mcp for OAuth
-```
+| From | To | Port |
+|------|-----|------|
+| `daily-news-api` | `news-mcp` | 8080 |
+| `daily-news-api` | `evaluation-mcp` | 8080 |
+| `daily-news-api` | `linkedin-mcp` | 8080 |
+| `daily-news-api` | `pageindex-mcp` | 8080 |
+| `daily-news-worker` (CronJob) | all MCP services | 8080 |
+| All pods | LLM gateway (egress) | 443 |
+| All pods | GNews API (egress) | 443 |
 
-### What label each pod needs
+### Pod DNS
 
-| Pod | Required label | Why |
-|---|---|---|
-| `daily-news-api` pods | `app: daily-news-api` | Can call all MCP services |
-| CronJob pods | `app: daily-news-worker` | Can call all MCP services |
-| MCP server pods | `role: mcp-server` | Accepts calls from the above |
+Within the cluster, services are reachable at `<service-name>.<namespace>.svc.cluster.local`. The ConfigMap uses short-form DNS (`http://news-mcp-service:8080`) which works within the same namespace. If you ever move a service to a different namespace, you will need the fully qualified name.
 
-### How to diagnose a networking problem
+### CronJob label bug (critical)
 
-```bash
-# Step 1: Check what labels a pod actually has
-oc get pod <pod-name> -o jsonpath='{.metadata.labels}' | python3 -m json.tool
+This is documented in Issue 1, but worth repeating here because it is a NetworkPolicy footgun:
 
-# Step 2: Test connectivity from inside the pod
-oc exec <pod-name> -- curl -s --max-time 5 http://news-mcp:8000/health
-# "Connection timed out" = NetworkPolicy blocking
-# "Connection refused" = pod not listening on that port
-# JSON response = working correctly
+**The `app` label on a CronJob pod must be under `template.metadata.labels`, not `template.spec.labels`.** If placed under `spec`, Kubernetes accepts the YAML without error, silently ignores the labels, and the pod starts with no matching `app` label. The NetworkPolicy `podSelector` for `app: daily-news-worker` will not match the pod. All outbound traffic will be silently dropped by the default-deny-all policy.
 
-# Step 3: Check what NetworkPolicies exist
-oc get networkpolicy -n aifeeders
+### EKS NetworkPolicy caveat
 
-# Step 4: Describe a specific policy to see its selectors
-oc describe networkpolicy allow-api-to-mcps -n aifeeders
-```
+The default EKS CNI plugin (AWS VPC CNI) **does not enforce `NetworkPolicy` resources**. The policies will be created and applied without error, but they will have no effect. You must install Calico or Cilium to enforce them. This is a well-known EKS limitation.
 
-### Service DNS names
+### AKS NetworkPolicy
 
-Inside the cluster, every Kubernetes Service is reachable by its name:
-
-| Service | Internal DNS name | Port |
-|---|---|---|
-| `news-mcp` | `http://news-mcp:8000` | 8000 |
-| `evaluation-mcp` | `http://evaluation-mcp:8000` | 8000 |
-| `linkedin-mcp` | `http://linkedin-mcp:8000` | 8000 |
-| `pageindex-mcp` | `http://pageindex-mcp:8000` | 8000 |
-| `daily-news-api` | `http://daily-news-api:8000` | 8000 |
-
-The MCP URL settings in the ConfigMap end with `/mcp` (e.g. `http://news-mcp:8000/mcp`). The `MCPHTTPClient` automatically strips `/mcp` off the base URL and appends `/call` for tool calls.
+Azure CNI Overlay (the default for newer AKS clusters) enforces NetworkPolicy natively. If your AKS cluster uses the older kubenet CNI, you will have the same problem as EKS.
 
 ---
 
-## 11. Scaling
+## 15. Scaling
 
 ### What scales automatically
 
-| Component | Mechanism | Trigger |
-|---|---|---|
-| `daily-news-api` | HPA (Horizontal Pod Autoscaler) | CPU > 70% → scales up to 4 pods |
-| `daily-news-api` | HPA | CPU < 30% for 5 min → scales down to 2 pods |
+- `daily-news-api`: HPA with `minReplicas: 2`, `maxReplicas: 4`, CPU-based. The FastAPI app is stateless — each request can be handled by any replica.
 
-### What does NOT scale
+### What does not scale
 
-| Component | Reason | Impact |
-|---|---|---|
-| `linkedin-mcp` | Stateful OAuth token — can't share state between replicas | Only 1 pod; pod failure = need to re-authorise |
-| `pageindex-mcp` | In-memory RAG index per run — no value in scaling | Only 1 pod; no data loss on restart |
-| CronJob pods | Each run is independent — 1 pod per run | `concurrencyPolicy: Forbid` prevents two runs at once |
-
-### PodDisruptionBudget
-
-`pdb.yaml` sets `minAvailable: 1` for `daily-news-api`. This means:
-- During node maintenance or cluster upgrades, Kubernetes will always keep at least 1 `daily-news-api` pod running.
-- Without this, an upgrade could terminate all pods simultaneously, causing API downtime.
+- `linkedin-mcp`: **must remain at 1 replica**. The OAuth token is in-memory. If you run 2 replicas, each will hold a different token state (or no token), and LinkedIn API calls from the replica that did not handle the `/auth/linkedin` callback will fail with 401.
+- `pageindex-mcp`: **must remain at 1 replica per run**. The document tree is built in memory during a run. If you scale to 2, the two replicas will have different trees and produce inconsistent results.
 
 ### Resource limits
 
-| Service | Request | Limit | Why |
-|---|---|---|---|
-| `daily-news-api` | 256Mi / 500m | 2Gi / 2 CPU | LangGraph + multiple LLM calls in parallel |
-| `news-mcp` | 128Mi / 100m | 256Mi / 500m | Lightweight HTTP adapter |
-| `evaluation-mcp` | 256Mi / 200m | 512Mi / 1 CPU | LLM inference calls |
-| `linkedin-mcp` | 128Mi / 100m | 256Mi / 500m | OAuth + HTTP |
-| `pageindex-mcp` | 128Mi / 200m | 512Mi / 1 CPU | In-memory index |
+```
+daily-news-api:
+  requests: { memory: 256Mi, cpu: 500m }
+  limits:    { memory: 2Gi,  cpu: 2    }
 
-Setting limits prevents one runaway pod from consuming all node resources and evicting neighbours.
+news-mcp, evaluation-mcp, linkedin-mcp, pageindex-mcp:
+  requests: { memory: 128Mi, cpu: 100m  }
+  limits:   { memory: 256Mi, cpu: 500m  }
+```
+
+The `daily-news-api` memory limit is intentionally generous (2Gi) because LangGraph state machines accumulate node outputs in memory across the 12-node graph. If you reduce this below 512Mi you may see OOMKilled pods during long runs.
+
+### PodDisruptionBudget
+
+A PDB ensures at least 1 `daily-news-api` replica is always available during node maintenance:
+
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: daily-news-pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: daily-news-api
+```
+
+### CronJob concurrency
+
+All CronJobs have `concurrencyPolicy: Forbid`. This means if the 08:00 UTC run is still in progress at 16:00 UTC, the 16:00 run is skipped rather than starting a second overlapping run. This prevents the pipeline from posting duplicate articles and avoids Jev API rate-limit issues from two concurrent scoring runs.
 
 ---
 
-## 12. Monitoring and Observability
+## 16. Monitoring and Observability
 
-### Checking if today's run worked
+### Log patterns to watch
 
 ```bash
-# 1. See all jobs from today
-oc get jobs -n aifeeders --sort-by=.metadata.creationTimestamp | tail -5
+# Follow live logs
+oc logs -f deployment/daily-news-api -n aifeeders
 
-# 2. Check the summary line of the last job
-oc logs job/<latest-job-name> -n aifeeders | grep "Workflow complete"
-# Expected: "Workflow complete — status=PUBLISHED published=1 errors=0"
-
-# 3. What article was selected (and why)
-oc logs job/<latest-job-name> -n aifeeders | grep "jev_prefilter:"
-# Shows: relevance score, engagement score, composite, which personas
-
-# 4. What was published in the last 7 days
-oc exec deployment/daily-news-api -n aifeeders -- \
-  cat /tmp/aifeeders_published.json | python3 -m json.tool
+# Key log lines and what they mean:
+[DISCOVER] Found 47 articles across 9 queries       # normal
+[DISCOVER] GNews key 1 exhausted, rotating to key 2  # expected if quota is hit
+[UNDERSTAND] PageIndex built: 47 nodes               # normal
+[ANALYZE] Jev selected article_id=abc123 (score=8.7) # normal
+[ANALYZE][JEV FALLBACK] using heuristic scoring      # Jev gateway timed out — ok
+[CREATE] Running 4 persona agents in parallel         # normal
+[GRAMMAR] pass complete — 3 corrections              # normal
+[GRAMMAR] pass failed — publishing uncorrected       # grammar agent error, non-blocking
+[PUBLISH] PUBLISHING_ENABLED=false — dry run only    # expected in staging
+[PUBLISH] Posted urn:li:share:xxxx                   # successful live post
 ```
 
-### Langfuse traces (LLM observability)
+### Health checks
 
-Every run creates a Langfuse session keyed by `run_id`. Each LLM call (summarise, persona, evaluate) is a span with:
-- Input: article text / summary
-- Output: structured result + decision
-- Tokens used and latency
-
-Access: https://us.cloud.langfuse.com → filter by `run_id` from the logs.
+```bash
+# All services expose /health
+curl http://localhost:8080/health   # daily-news-api
+# Expected: {"status":"ok","build":"daily-news-6"}
+```
 
 ### LinkedIn audit log
 
-```bash
-oc exec deployment/linkedin-mcp -n aifeeders -- \
-  curl -s http://localhost:8000/audit | jq .
-```
+All published post URNs are logged at the `[PUBLISH]` level. The latest live run URN is `urn:li:share:7509262700972101632`. Keep a record of these — you will need the URN if you need to delete a post via the LinkedIn API.
 
-Returns all post URNs published since the current pod started, with timestamps and character counts.
+### Langfuse
 
-### Prometheus metrics
-
-`daily-news-api` exposes metrics at `:8000/metrics`. Key metrics:
-- `workflow_runs_total` — total runs since pod start
-- `workflow_errors_total` — total error counts by type
-- `articles_published_total` — total LinkedIn posts published
-
-### Health check all services at once
-
-```bash
-for svc in news-mcp evaluation-mcp linkedin-mcp pageindex-mcp daily-news-api; do
-  echo -n "$svc: "
-  oc exec deployment/$svc -n aifeeders -- \
-    curl -s http://localhost:8000/health | jq -r '.status // "unknown"' 2>/dev/null \
-    || echo "EXEC FAILED"
-done
-```
-
-### Log patterns to watch for
-
-| Pattern | Meaning | Action needed? |
-|---|---|---|
-| `discovered 0 raw articles` | GNews quota hit or network error | Check quota; wait for reset |
-| `news search failed for ...: ` (empty error) | NetworkPolicy blocking pod | Check pod labels (Issue #1) |
-| `all articles already published today` | Dedup store blocking re-runs | Normal — wait until tomorrow |
-| `eval decision=BLOCK` | PII or injection detected in article | Review source article |
-| `eval decision=REGENERATE` | Quality below threshold | Auto-retries up to 2× |
-| `post FAILED http=401` | LinkedIn token expired | Re-authorise (Issue #4) |
-| `post FAILED http=429` | LinkedIn rate limit | Wait ~10 min |
-| `Comments API not available (PERMISSION_ERROR)` | Normal — app not approved for Comments | No action needed |
-| `status=PUBLISHED published=1 errors=0` | ✅ Perfect run | None |
+If you have a Langfuse instance, set `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in the ConfigMap. The LangGraph graph is instrumented with Langfuse tracing — every LLM call is logged with input, output, latency, and token count. This is the primary way to debug why a persona passage reads oddly or why Jev selected a particular article.
 
 ---
 
-## 13. Security
+## 17. Security
 
-### Secrets — never in code or ConfigMap
+### Secrets management
 
-All API keys and credentials live in the Kubernetes Secret `daily-news-secrets`. They are injected as environment variables at runtime. They are:
-- Never written to logs
-- Never included in the ConfigMap (which can be read by anyone with namespace access)
-- Never committed to git
+Never commit real secret values to the repository. The separation is:
 
-```bash
-# To rotate a key without restarting pods:
-oc patch secret daily-news-secrets -n aifeeders \
-  --type=merge -p "{\"data\":{\"LLM_API_KEY\":\"$(echo -n 'new-key' | base64)\"}}"
-# Then restart the pods that use it:
-oc rollout restart deployment/daily-news-api -n aifeeders
+| Type | File | Contains |
+|------|------|---------|
+| ConfigMap | `openshift/configmaps/daily-news-config.yaml` | `PUBLISHING_ENABLED`, `JEV_ENABLED`, `LLM_BASE_URL`, all service URLs — safe to commit |
+| Secret | Created via `oc create secret` — never in files | `LLM_API_KEY`, `GNEWS_API_KEY`, `GNEWS_API_KEY_2`, `JEV_API_KEY`, `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` — never commit |
+
+If you accidentally commit a secret, rotate it immediately (generate a new key at the provider) before treating the old key as revoked.
+
+### NetworkPolicy
+
+The default-deny-all NetworkPolicy limits blast radius if a pod is compromised. A compromised `pageindex-mcp` pod cannot reach the LinkedIn API directly — it can only receive calls from `daily-news-api` on port 8080.
+
+### Content safety gates
+
+The pipeline does not publish automatically. Two gates are in place:
+
+1. **`PUBLISHING_ENABLED` flag** — must be explicitly set to `true`. Defaults to `false` in ConfigMap.
+2. **Human approval step** — `PublisherAgent` prints the composed post and waits for confirmation before calling `linkedin-mcp`. This step is present even when `PUBLISHING_ENABLED=true`.
+
+### OAuth
+
+LinkedIn OAuth tokens are short-lived and stored in `linkedin-mcp` memory only. There is no persistent token store. This is a deliberate trade-off: storing tokens in a Kubernetes Secret would be more resilient but requires careful RBAC to ensure the Secret is not readable by other pods. The current approach means a pod restart requires re-authorisation — inconvenient but safe.
+
+---
+
+## 18. Health Checks
+
+All deployments use the same probe pattern:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 30    # give uv/Python time to start
+  periodSeconds: 10
+  failureThreshold: 3        # restart after 3 consecutive failures
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 5
+  failureThreshold: 3        # remove from load balancer after 3 failures
 ```
 
-### NetworkPolicy — default deny
+**Why different initial delays?** Liveness starts later (30s) because if the pod is killed too early during startup, Kubernetes enters a restart loop. Readiness starts sooner (15s) to begin accepting traffic as quickly as possible once the app is actually ready.
 
-The namespace uses `default-deny-all`. No pod can talk to any other pod unless there is an explicit NetworkPolicy `allow` rule covering both the source label and the destination port. See [Section 10](#10-networking--how-pods-talk-to-each-other) for the full model.
-
-### Jev content safety gates
-
-Before any article is published, Jev evaluates:
-- `pii_detected > 0.5` → **hard BLOCK** — post never published
-- `prompt_injection_detected > 0.5` → **hard BLOCK**
-- `policy_check = FAIL` → **hard BLOCK**
-
-These gates cannot be overridden by any configuration flag — they are enforced in code regardless of `JEV_ENABLED`.
-
-### LinkedIn OAuth
-
-The LinkedIn OAuth access token is:
-- Stored only in-memory in the `linkedin-mcp` process
-- Never written to disk, logs, or a database
-- Lost on pod restart (requires re-authorisation)
-- Valid for 60 days — rotation is the operator's responsibility
-
-### TLS
-
-All external API calls use HTTPS. The Jev gateway uses an IBM-internal TLS certificate; `httpx` is called with `verify=False` for that specific client only. All other external calls (GNews, LinkedIn, LLM endpoint, Langfuse) use standard TLS verification.
-
-### RBAC — minimum permissions
-
-The CronJob ServiceAccount (`daily-news-sa`) has only the permissions it needs:
-- `create` Jobs in the `aifeeders` namespace
-- `get`/`list` Pods (for health checks)
-- No cluster-level permissions
-- No access to Secrets (secrets are injected by the pod spec, not read by the app)
+The `/health` endpoint returns HTTP 200 with `{"status":"ok","build":"<current-build-name>"}`. The `build` field is useful for confirming that a rollout has completed and the new code is serving.
 
 ---
 
-## 14. EKS Deployment
-
-Everything except the image build and registry URL is identical between OpenShift and EKS.
-
-| Aspect | OpenShift | EKS |
-|---|---|---|
-| Image build | `oc start-build` (in-cluster S2I) | `docker build` + ECR push |
-| Image registry | `image-registry.openshift-image-registry.svc:5000/...` | `<account>.dkr.ecr.<region>.amazonaws.com/...` |
-| Secrets | `oc create secret generic` | External Secrets Operator + AWS Secrets Manager |
-| LinkedIn OAuth route | OpenShift Route | ALB Ingress or `kubectl port-forward` |
-| NetworkPolicy enforcement | Built-in | Requires Calico or Cilium CNI |
-| PublishedStore persistence | `/tmp` (ephemeral) | EFS PVC (recommended) |
-| All other YAML | **Identical** | **Identical** |
-
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) §10 for the full EKS setup.
-
----
-
-## 15. Health Checks
-
-```bash
-# All pods
-oc get pods -n aifeeders
-
-# Per-service health
-for svc in news-mcp evaluation-mcp linkedin-mcp pageindex-mcp daily-news-api; do
-  echo -n "$svc: "
-  oc exec deployment/$svc -n aifeeders -- curl -s http://localhost:8000/health \
-    | jq -r '.status // "unknown"' 2>/dev/null || echo "EXEC FAILED"
-done
-
-# GNews key status
-oc exec deployment/news-mcp -n aifeeders -- curl -s http://localhost:8000/health \
-  | jq '{keys_configured,active_key_index,active_key_prefix}'
-
-# Jev gateway (external — no auth needed)
-curl -s https://<your-jev-gateway>/health | jq .
-# Expected: {"status": "ready", "model": "...", "method": "lora_decision_head"}
-
-# CronJob schedule
-oc get cronjobs -n aifeeders
-# Expected: daily-ai-news-morning (0 8 * * *) and daily-ai-news-afternoon (0 16 * * *)
-
-# Today's run
-oc get jobs -n aifeeders --sort-by=.metadata.creationTimestamp | tail -3
-oc logs job/<latest-job> -n aifeeders | grep "Workflow complete"
-```
-
----
-
-## 16. Build History
+## 19. Build History
 
 | Build | Key changes |
-|---|---|
-| **#81** | **Docs rewrite** — README/RUNBOOK/ARCHITECTURE updated to build 80 baseline; GNews Key 2 rotated to primary |
-| #80 | **3-pass deduplication** — Pass 1 upgraded: URL normalisation (`_normalise_url`) strips scheme/www/slash before hashing. Pass 3 added: title-similarity dedup (`_normalise_title` + Jaccard, threshold 0.55) catches same story from different sources. 39 new tests — 91/91 total |
-| #79 | **Engagement upgrade** — Hook openers: rotating pool of 3 per event type (day-of-year). Default CTA: 6-choice production-reality question tuned to Senior/Director/VP IT Services audience. Business + policy CTAs expanded to 6 choices |
-| #78 | **Post format fixes** — policy CTA no longer leaks article title; `why_it_matters` prompt bans news-wire phrases |
-| #77 | **First live run with engagement-first format** — post `urn:li:share:7509115881449414656`; 90 impressions, 60 reached, 6 reactions; audience: Senior 23%, Director 20%, VP 13%, IT Services 38% |
-| #76 | Clean rebuild after old build deletion; confirmed post-publish to LinkedIn `urn:li:share:7509097557713833984` |
-| #75 | All visible text clips at sentence boundary — no more mid-sentence cuts from `_hard_clip` |
-| #74 | Full post format redesign — 10-section humanised engagement-first layout, all dynamic |
-| #73 | Single article per run (top-1 Jev), dual CronJob 08:00/16:00 UTC, all persona prompts rewritten |
-| #62 | Documentation rewrite. EKS portability guide. `IMPACT_LINE_CAP` 88→120. |
-| #61 | **LinkedIn truncation fix** — `_linkedin_len()` UTF-16 counting; safety limit 2900. Per-article `jev_prefilter_scores` keyed by `article_id`. LinkedIn MCP nested error detection. `publication_key` includes body hash. |
-| #60 | Post composition rewrite: hook category from Jev `event_type`, Jev decision block, footer guarantee. `AI_SEARCH_QUERIES` 6→9; `hours=48→24`; `limit=20→10`. |
-| #59 | Initial documentation. |
-| #58 | `evaluation_agent.py` fix for `personas.labor` AttributeError. |
+|-------|------------|
+| **#83** (current) | Dialogue-delivery post format (`_compose_main_post()`), GrammarAgent (new, `temperature=0`), persona prompts rewritten for multi-sentence story passages |
+| #82 | `NewsStory` model, `MediaStorytellerAgent`, two-pass summarise (story → summary), story-driven post format replacing bullet-point format |
+| #80–81 | Jaccard deduplication for discovered articles, per-article `jev_prefilter_scores` keyed by `article_id`, `score_reach` graph node |
+| #61 | UTF-16 length fix (`_linkedin_len()`), MCP nested error detection, `jev_prefilter_scores` refactored to use `article_id` as key |
+| <#61 | NewsDataIO removed; GNews became the sole article discovery provider |
+
+---
+
+## Contributing
+
+1. Branch from `main`.
+2. Run `uv sync` to get a fresh environment.
+3. Make your change.
+4. Run `uv run pytest tests/ --ignore=tests/evaluation -q` — all 210 tests must pass.
+5. Do a dry run (`PUBLISHING_ENABLED=false`) and read the output.
+6. Open a pull request.
+
+Do not commit `.env`, `.venv/`, or any file containing real API keys.
+
+---
+
+*Current build: `daily-news-6` · LLM: `qwen2-5-72b-instruct` · Latest post: `urn:li:share:7509262700972101632`*

@@ -1,58 +1,39 @@
 """
-News MCP Server — AI news search and article fetch via GNews API.
+News MCP Server — GNews sole provider.
 
-Rate limit note (free plan)
-────────────────────────────
-  GNews free plan allows 1 request/second and 100 requests/day per key.
-  Set GNEWS_REQUEST_DELAY_MS=1100 (default) to stay within the rate limit.
+Provider
+────────
+  GNews  (GNEWS_API_KEY — set via env)
+  API docs: https://docs.gnews.io
+  Endpoint: GET https://gnews.io/api/v4/search
+  Free plan: 100 requests/day, up to 10 articles/request
+  Rate limit: 1 req/sec on free plan — use GNEWS_REQUEST_DELAY_MS (default 1100ms)
 
-  Key rotation — automatic failover
-  ───────────────────────────────────
-  Two keys are supported:
-    GNEWS_API_KEY   — primary key (env var, required)
-    GNEWS_API_KEY_2 — secondary key (env var, optional)
-
-  On every GNews call the active key is tried first.  If the response is
-  HTTP 403 (quota exhausted or invalid key) the server automatically
-  switches to the other key for that call and all subsequent calls in this
-  process lifetime.  If both keys return 403 the error is surfaced to the
-  caller as usual.
-
-  Key state is in-process — it resets on pod restart.  The GNews free plan
-  resets quotas at midnight UTC so a scheduled pod restart is not required.
-
-API reference: https://docs.gnews.io
-Endpoint used: GET https://gnews.io/api/v4/search
-               GET https://gnews.io/api/v4/top-headlines
+Pipeline role
+─────────────
+  GNews → normalised article corpus → PageIndex → Intelligent Analysis → LinkedIn
 
 GNews response shape
-─────────────────────
+────────────────────
 {
   "totalArticles": 123,
   "articles": [
     {
-      "title": "...",
-      "description": "...",
-      "content": "...",        # truncated at 250 chars on free plan
-      "url": "...",
-      "image": "...",
-      "publishedAt": "2025-09-21T06:00:00Z",
+      "title": "...", "description": "...", "content": "...",
+      "url": "...", "image": "...", "publishedAt": "2025-09-21T06:00:00Z",
       "source": { "name": "...", "url": "..." }
     }
   ]
 }
 
-Free tier limits
+Rate limit notes
 ─────────────────
-  100 requests/day per key  ·  max=10 articles per request
-  Paid plans: up to 100 articles per request, higher rate limits
+  GNews free: 1 req/sec, 100 requests/day.  GNEWS_REQUEST_DELAY_MS=1100 (default).
+  Paid plans: higher limits — set GNEWS_REQUEST_DELAY_MS=0 to remove delay.
 
 Category mapping
-────────────────
-  GNews supports the "topic" param for top-headlines:
-    breaking-news, world, nation, business, technology, entertainment,
-    sports, science, health
-  For search, we use curated query strings per AI category.
+─────────────────
+  CATEGORY_QUERIES maps our AI news categories to query strings used by GNews.
 """
 from __future__ import annotations
 
@@ -71,68 +52,14 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("News MCP Server")
 
 # ── GNews config ──────────────────────────────────────────────────────────────
-# Primary key — injected from OpenShift Secret / .env as GNEWS_API_KEY
-# Secondary key — injected as GNEWS_API_KEY_2 (fallback when primary quota exhausted)
-_GNEWS_KEY_1 = os.environ.get("GNEWS_API_KEY", "")
-_GNEWS_KEY_2 = os.environ.get("GNEWS_API_KEY_2", "")
-
-# Build the rotation pool — skip empty strings
-_GNEWS_KEY_POOL: list[str] = [k for k in [_GNEWS_KEY_1, _GNEWS_KEY_2] if k]
-
-# Index into _GNEWS_KEY_POOL for the currently active key.
-# Mutated in-place by _rotate_key() when a 403 is received.
-_active_key_index: int = 0
-
-
-def _get_active_key() -> str:
-    """Return the currently active GNews API key, or '' if no keys configured."""
-    if not _GNEWS_KEY_POOL:
-        return ""
-    return _GNEWS_KEY_POOL[_active_key_index]
-
-
-def _rotate_key(exhausted_key: str) -> str | None:
-    """
-    Switch to the next key in the pool after a 403 on `exhausted_key`.
-
-    Returns the new active key, or None if all keys are exhausted.
-    Logs a warning so operators can see when rotation occurs.
-    """
-    global _active_key_index
-    current_key = _get_active_key()
-
-    # Only rotate if the 403 was for the key we're actually using
-    # (guards against concurrent calls racing on the same rotation)
-    if exhausted_key != current_key:
-        return current_key  # already rotated by another coroutine
-
-    next_index = _active_key_index + 1
-    if next_index >= len(_GNEWS_KEY_POOL):
-        logger.error(
-            "GNews: all %d key(s) quota exhausted — no more keys to try. "
-            "Quota resets at midnight UTC.",
-            len(_GNEWS_KEY_POOL),
-        )
-        return None
-
-    _active_key_index = next_index
-    logger.warning(
-        "GNews key #%d quota exhausted (403) — rotating to key #%d",
-        next_index,       # 1-based: was using key N
-        next_index + 1,   # now using key N+1
-    )
-    return _GNEWS_KEY_POOL[_active_key_index]
-
-
+# Sole news provider.  Set GNEWS_API_KEY in env / OpenShift Secret.
+# 32-char hex key from https://gnews.io/dashboard
+_GNEWS_API_KEY         = os.environ.get("GNEWS_API_KEY", "")
 GNEWS_SEARCH_URL       = "https://gnews.io/api/v4/search"
 GNEWS_HEADLINES_URL    = "https://gnews.io/api/v4/top-headlines"
-
-# GNews free plan max = 10; paid plans support up to 100
 GNEWS_MAX_PER_REQUEST  = int(os.environ.get("GNEWS_MAX_PER_REQUEST", "10"))
-
-# Delay between successive GNews requests (ms). Free plan: 1 req/sec → 1100ms.
-# Set to 0 to disable (e.g. paid plan with higher rate limits).
 GNEWS_REQUEST_DELAY_MS = int(os.environ.get("GNEWS_REQUEST_DELAY_MS", "1100"))
+
 
 # ── Curated queries per AI news category ──────────────────────────────────────
 CATEGORY_QUERIES: dict[str, str] = {
@@ -169,25 +96,38 @@ def _from_timestamp(hours: int) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _normalise_article(item: dict[str, Any]) -> dict[str, Any]:
+def _normalise_gnews_article(item: dict[str, Any]) -> dict[str, Any]:
     """Map a GNews article object to our internal NewsArticle shape."""
     source = item.get("source", {})
+    url    = item.get("url", "")
     return {
-        "article_id":   _make_article_id(item.get("url", "")),
-        "title":        item.get("title", ""),
-        "url":          item.get("url", ""),
-        "source":       source.get("name", ""),
-        "source_url":   source.get("url", ""),
-        "published_at": item.get("publishedAt", ""),
-        "content":      item.get("content", "") or item.get("description", ""),
-        "description":  item.get("description", ""),
-        "image":        item.get("image", ""),
-        "content_hash": hashlib.md5(item.get("url", "").encode()).hexdigest(),
-        "language":     "en",
+        "article_id":      _make_article_id(url),
+        "title":           item.get("title", ""),
+        "url":             url,
+        "source":          source.get("name", ""),
+        "source_url":      source.get("url", ""),
+        "published_at":    item.get("publishedAt", ""),
+        "content":         item.get("content", "") or item.get("description", ""),
+        "description":     item.get("description", ""),
+        "image":           item.get("image", ""),
+        "content_hash":    hashlib.md5(url.encode()).hexdigest(),
+        "language":        "en",
+        # Sentiment fields — populated downstream by the Intelligent News Agent
+        # (sentiment_resolver → Jev inference) rather than from the API.
+        "ai_tag":          None,
+        "sentiment":       None,
+        "sentiment_stats": None,
+        "ai_region":       None,
+        "ai_org":          None,
+        "provider":        "gnews",
     }
 
 
-# ── GNews API call ────────────────────────────────────────────────────────────
+# Backward-compat alias — keeps any code that imports _normalise_article working.
+_normalise_article = _normalise_gnews_article
+
+
+# ── GNews API calls ───────────────────────────────────────────────────────────
 
 async def _gnews_search(
     query: str,
@@ -199,32 +139,31 @@ async def _gnews_search(
     """
     Search GNews for articles matching `query` published within the last `hours`.
 
-    Automatically rotates to the secondary key (GNEWS_API_KEY_2) on HTTP 403.
-
     Ref: https://docs.gnews.io/#search-endpoint
     Params:
-      q        — search query (supports AND, OR, NOT, exact phrases)
-      apikey   — GNews API key
-      lang     — language code (en, fr, de …)
-      country  — country code (us, gb, in …)
-      max      — number of results (1–10 free, 100 paid)
-      from     — ISO-8601 datetime lower bound
-      in       — fields to search: title, description, content (comma-separated)
-      sortby   — publishedAt | relevance
+      q       — keyword query
+      apikey  — GNews API key
+      lang    — language code (e.g. "en")
+      country — country code (e.g. "us")
+      max     — max results per request (free plan cap: 10)
+      from    — ISO-8601 lower bound for publishedAt
+      in      — fields to search: title,description,content
+      sortby  — sort order: publishedAt | relevance
+
+    On HTTP 403 (quota exhausted or invalid key) logs an error and returns [].
+    When no key is configured, returns mock articles for local dev / CI.
     """
-    active_key = _get_active_key()
-    if not active_key:
+    if not _GNEWS_API_KEY:
         logger.warning("No GNEWS_API_KEY configured — returning mock results for dev")
         return _mock_articles(query)
 
-    # Rate-limit guard: free plan allows 1 req/sec
     if GNEWS_REQUEST_DELAY_MS > 0:
         import asyncio
         await asyncio.sleep(GNEWS_REQUEST_DELAY_MS / 1000)
 
     params: dict[str, Any] = {
         "q":       query,
-        "apikey":  active_key,
+        "apikey":  _GNEWS_API_KEY,
         "lang":    lang,
         "country": country,
         "max":     min(max_results, GNEWS_MAX_PER_REQUEST),
@@ -235,18 +174,16 @@ async def _gnews_search(
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(GNEWS_SEARCH_URL, params=params)
-
-        # On 403 (quota exhausted or invalid key) — rotate and retry once
         if resp.status_code == 403:
-            fallback_key = _rotate_key(active_key)
-            if fallback_key and fallback_key != active_key:
-                params["apikey"] = fallback_key
-                resp = await client.get(GNEWS_SEARCH_URL, params=params)
-
+            logger.error(
+                "GNews key quota exhausted or invalid (403). "
+                "Quota resets at midnight UTC."
+            )
+            return []
         resp.raise_for_status()
         data = resp.json()
 
-    return [_normalise_article(a) for a in data.get("articles", [])]
+    return [_normalise_gnews_article(a) for a in data.get("articles", [])]
 
 
 async def _gnews_top_headlines(
@@ -258,14 +195,11 @@ async def _gnews_top_headlines(
     """
     Fetch top headlines for a GNews topic.
 
-    Automatically rotates to the secondary key (GNEWS_API_KEY_2) on HTTP 403.
-
     Ref: https://docs.gnews.io/#top-headlines-endpoint
     Supported topics: breaking-news, world, nation, business,
                       technology, entertainment, sports, science, health
     """
-    active_key = _get_active_key()
-    if not active_key:
+    if not _GNEWS_API_KEY:
         return _mock_articles(f"top-headlines:{topic}")
 
     if GNEWS_REQUEST_DELAY_MS > 0:
@@ -274,7 +208,7 @@ async def _gnews_top_headlines(
 
     params: dict[str, Any] = {
         "topic":   topic,
-        "apikey":  active_key,
+        "apikey":  _GNEWS_API_KEY,
         "lang":    lang,
         "country": country,
         "max":     min(max_results, GNEWS_MAX_PER_REQUEST),
@@ -282,48 +216,55 @@ async def _gnews_top_headlines(
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.get(GNEWS_HEADLINES_URL, params=params)
-
-        # On 403 — rotate and retry once
         if resp.status_code == 403:
-            fallback_key = _rotate_key(active_key)
-            if fallback_key and fallback_key != active_key:
-                params["apikey"] = fallback_key
-                resp = await client.get(GNEWS_HEADLINES_URL, params=params)
-
+            logger.error("GNews top-headlines: key quota exhausted (403).")
+            return []
         resp.raise_for_status()
         data = resp.json()
 
-    return [_normalise_article(a) for a in data.get("articles", [])]
+    return [_normalise_gnews_article(a) for a in data.get("articles", [])]
 
 
 def _mock_articles(query: str) -> list[dict[str, Any]]:
-    """Return predictable mock articles when GNEWS_API_KEY is absent (CI / local dev)."""
+    """Return predictable mock articles when no API key is configured (CI / local dev)."""
     return [
         {
-            "article_id":   "news-mock-0001",
-            "title":        f"[MOCK] AI Tech News — {query[:50]}",
-            "url":          "https://example.com/mock-ai-tech-1",
-            "source":       "Mock Tech Source",
-            "source_url":   "https://example.com",
-            "published_at": datetime.now(tz=timezone.utc).isoformat(),
-            "content":      "Mock AI technology article for local development without GNEWS_API_KEY.",
-            "description":  "Mock description for AI tech news.",
-            "image":        "",
-            "content_hash": hashlib.md5(b"mock-tech-1").hexdigest(),
-            "language":     "en",
+            "article_id":      "news-mock-0001",
+            "title":           f"[MOCK] AI Tech News — {query[:50]}",
+            "url":             "https://example.com/mock-ai-tech-1",
+            "source":          "Mock Tech Source",
+            "source_url":      "https://example.com",
+            "published_at":    datetime.now(tz=timezone.utc).isoformat(),
+            "content":         "Mock AI technology article for local development without API keys.",
+            "description":     "Mock description for AI tech news.",
+            "image":           "",
+            "content_hash":    hashlib.md5(b"mock-tech-1").hexdigest(),
+            "language":        "en",
+            "ai_tag":          None,
+            "sentiment":       None,
+            "sentiment_stats": None,
+            "ai_region":       None,
+            "ai_org":          None,
+            "provider":        "mock",
         },
         {
-            "article_id":   "news-mock-0002",
-            "title":        f"[MOCK] AI Finance News — {query[:50]}",
-            "url":          "https://example.com/mock-ai-finance-1",
-            "source":       "Mock Finance Source",
-            "source_url":   "https://example.com",
-            "published_at": datetime.now(tz=timezone.utc).isoformat(),
-            "content":      "Mock AI finance article for local development without GNEWS_API_KEY.",
-            "description":  "Mock description for AI finance news.",
-            "image":        "",
-            "content_hash": hashlib.md5(b"mock-finance-1").hexdigest(),
-            "language":     "en",
+            "article_id":      "news-mock-0002",
+            "title":           f"[MOCK] AI Finance News — {query[:50]}",
+            "url":             "https://example.com/mock-ai-finance-1",
+            "source":          "Mock Finance Source",
+            "source_url":      "https://example.com",
+            "published_at":    datetime.now(tz=timezone.utc).isoformat(),
+            "content":         "Mock AI finance article for local development without API keys.",
+            "description":     "Mock description for AI finance news.",
+            "image":           "",
+            "content_hash":    hashlib.md5(b"mock-finance-1").hexdigest(),
+            "language":        "en",
+            "ai_tag":          None,
+            "sentiment":       None,
+            "sentiment_stats": None,
+            "ai_region":       None,
+            "ai_org":          None,
+            "provider":        "mock",
         },
     ]
 
@@ -339,20 +280,23 @@ async def news_search_latest(
     country: str = "us",
 ) -> dict:
     """
-    Search GNews for the latest articles matching `query`.
+    Search for the latest articles matching `query`.
 
-    Uses GET https://gnews.io/api/v4/search with `from` set to
-    `now - hours`.  `limit` is capped at GNEWS_MAX_PER_REQUEST
-    (10 on free plan, 100 on paid).
+    Provider: GNews (https://docs.gnews.io/#search-endpoint)
+
+    Sentiment, impact, and novelty analysis is performed downstream by the
+    Intelligent News Agent (Jev + sentiment_resolver) — not at fetch time.
 
     Example queries:
       "artificial intelligence enterprise AI"
       "AI finance investment funding"
       "LLM model release"
     """
-    articles = await _gnews_search(query, hours=hours, max_results=limit,
-                                   lang=lang, country=country)
-    return {"articles": articles, "total": len(articles), "query": query}
+    articles = await _gnews_search(
+        query=query, hours=hours, max_results=limit,
+        lang=lang, country=country,
+    )
+    return {"articles": articles, "total": len(articles), "query": query, "provider": "gnews"}
 
 
 @mcp.tool()
@@ -365,12 +309,14 @@ async def news_search_ai_tech(
     """
     Fetch AI technology news — LLMs, agentic AI, model releases, research.
 
-    Uses the curated AI_TECHNOLOGY query against GNews /search.
+    Uses the curated AI_TECHNOLOGY query via GNews.
     """
     query = CATEGORY_QUERIES["AI_TECHNOLOGY"]
-    articles = await _gnews_search(query, hours=hours, max_results=limit,
-                                   lang=lang, country=country)
-    return {"articles": articles, "total": len(articles), "category": "AI_TECHNOLOGY"}
+    articles = await _gnews_search(
+        query=query, hours=hours, max_results=limit,
+        lang=lang, country=country,
+    )
+    return {"articles": articles, "total": len(articles), "category": "AI_TECHNOLOGY", "provider": "gnews"}
 
 
 @mcp.tool()
@@ -383,12 +329,14 @@ async def news_search_ai_finance(
     """
     Fetch AI finance news — investment, funding rounds, market impact, fintech AI.
 
-    Uses the curated AI_FINANCE query against GNews /search.
+    Uses the curated AI_FINANCE query via GNews.
     """
     query = CATEGORY_QUERIES["AI_FINANCE"]
-    articles = await _gnews_search(query, hours=hours, max_results=limit,
-                                   lang=lang, country=country)
-    return {"articles": articles, "total": len(articles), "category": "AI_FINANCE"}
+    articles = await _gnews_search(
+        query=query, hours=hours, max_results=limit,
+        lang=lang, country=country,
+    )
+    return {"articles": articles, "total": len(articles), "category": "AI_FINANCE", "provider": "gnews"}
 
 
 @mcp.tool()
@@ -400,16 +348,18 @@ async def news_search_by_category(
     country: str = "us",
 ) -> dict:
     """
-    Search GNews by one of the predefined AI categories.
+    Search by one of the predefined AI categories via GNews.
 
     Valid categories: AI_TECHNOLOGY, AI_FINANCE, AI_BUSINESS, AI_JOBS,
                       AI_POLICY, AI_PRODUCTS, AI_RESEARCH,
                       AI_INFRASTRUCTURE, AI_SECURITY
     """
     query = CATEGORY_QUERIES.get(category, "artificial intelligence")
-    articles = await _gnews_search(query, hours=hours, max_results=limit,
-                                   lang=lang, country=country)
-    return {"articles": articles, "category": category, "total": len(articles)}
+    articles = await _gnews_search(
+        query=query, hours=hours, max_results=limit,
+        lang=lang, country=country,
+    )
+    return {"articles": articles, "category": category, "total": len(articles), "provider": "gnews"}
 
 
 @mcp.tool()
@@ -419,28 +369,27 @@ async def news_top_headlines_technology(
     country: str = "us",
 ) -> dict:
     """
-    Fetch top technology headlines from GNews.
-
-    Uses GET https://gnews.io/api/v4/top-headlines?topic=technology
-    Useful for discovering trending AI stories beyond keyword search.
+    Fetch top technology headlines via GNews top-headlines endpoint.
     """
-    articles = await _gnews_top_headlines(topic="technology",
-                                          max_results=limit, lang=lang, country=country)
-    return {"articles": articles, "total": len(articles), "topic": "technology"}
+    articles = await _gnews_top_headlines(
+        topic="technology", max_results=limit, lang=lang, country=country,
+    )
+    return {"articles": articles, "total": len(articles), "topic": "technology", "provider": "gnews"}
 
 
 @mcp.tool()
 async def news_fetch_article(url: str) -> dict:
     """
     Fetch full article content from a URL.
-    Note: GNews already returns content (truncated at 250 chars on free plan).
-    Production: replace body extraction with trafilatura for full text.
+
+    Used to supplement GNews article content with the full HTML body
+    (e.g. for PageIndex document indexing).
     """
     if not url or url.startswith("https://example.com/mock"):
         return {
-            "url": url,
-            "article_id": _make_article_id(url),
-            "content": "Mock content for local development.",
+            "url":          url,
+            "article_id":   _make_article_id(url),
+            "content":      "Mock content for local development.",
             "fetch_status": "mock",
         }
 
@@ -458,26 +407,26 @@ async def news_fetch_article(url: str) -> dict:
             content = ""
 
     return {
-        "url": url,
-        "article_id": _make_article_id(url),
-        "content": content,
+        "url":          url,
+        "article_id":   _make_article_id(url),
+        "content":      content,
         "fetch_status": "ok" if content else "failed",
     }
 
 
-# ── Tool registry — direct call dispatch ─────────────────────────────────────
-# Maps tool name → async function for use by POST /call
+# ── Tool registry — direct call dispatch ──────────────────────────────────────
 _TOOLS: dict[str, Any] = {
-    "news_search_latest":          news_search_latest,
-    "news.search_latest":          news_search_latest,   # alias
-    "news_fetch_article":          news_fetch_article,
-    "news.fetch_article":          news_fetch_article,   # alias
-    "news_search_by_category":     news_search_by_category,
-    "news.search_by_category":     news_search_by_category,
-    "news_search_ai_tech":         news_search_ai_tech,
-    "news_search_ai_finance":      news_search_ai_finance,
+    "news_search_latest":            news_search_latest,
+    "news.search_latest":            news_search_latest,          # alias
+    "news_fetch_article":            news_fetch_article,
+    "news.fetch_article":            news_fetch_article,          # alias
+    "news_search_by_category":       news_search_by_category,
+    "news.search_by_category":       news_search_by_category,
+    "news_search_ai_tech":           news_search_ai_tech,
+    "news_search_ai_finance":        news_search_ai_finance,
     "news_top_headlines_technology": news_top_headlines_technology,
 }
+
 
 # ── Health + app assembly ──────────────────────────────────────────────────────
 
@@ -486,16 +435,13 @@ _app = FastAPI()
 
 @_app.get("/health")
 def health():
-    active_key = _get_active_key()
     return {
-        "status":            "healthy",
-        "server":            "news-mcp",
-        "provider":          "gnews",
-        "keys_configured":   len(_GNEWS_KEY_POOL),
-        "active_key_index":  _active_key_index + 1,   # 1-based for humans
-        "active_key_prefix": active_key[:8] + "..." if active_key else "none",
-        "max_per_request":   GNEWS_MAX_PER_REQUEST,
-        "tools":             list(_TOOLS.keys()),
+        "status":                "healthy",
+        "server":                "news-mcp",
+        "provider":              "gnews",
+        "gnews_api_key_set":     bool(_GNEWS_API_KEY),
+        "gnews_max_per_request": GNEWS_MAX_PER_REQUEST,
+        "tools":                 list(_TOOLS.keys()),
     }
 
 
@@ -511,7 +457,10 @@ async def call_tool(request: dict):
     fn = _TOOLS.get(tool_name)
     if fn is None:
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail=f"Unknown tool: {tool_name!r}. Available: {list(_TOOLS)}")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown tool: {tool_name!r}. Available: {list(_TOOLS)}",
+        )
     import inspect
     result = await fn(**arguments) if inspect.iscoroutinefunction(fn) else fn(**arguments)
     return {"result": result}
