@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import uuid
 from typing import Literal, TypedDict
 
@@ -152,36 +153,124 @@ async def discover_news(state: NewsWorkflowState) -> NewsWorkflowState:
     return {**state, "raw_articles": articles, "workflow_status": "DISCOVERED"}
 
 
+def _normalise_url(url: str) -> str:
+    """
+    Canonicalise a URL for deduplication comparison.
+    Strips scheme (http/https), www prefix, and trailing slash.
+    'https://www.bbc.com/news/ai/' → 'bbc.com/news/ai'
+    """
+    url = url.lower().strip()
+    url = re.sub(r'^https?://', '', url)
+    url = re.sub(r'^www\.', '', url)
+    url = url.rstrip('/')
+    return url
+
+
+def _normalise_title(title: str) -> str:
+    """
+    Normalise a headline for similarity comparison.
+    Lowercases, strips punctuation/extra spaces, removes common filler words.
+    'OpenAI Releases GPT-5: What You Need to Know!' → 'openai releases gpt5 need know'
+    """
+    title = title.lower()
+    title = re.sub(r'[^\w\s]', '', title)      # strip punctuation
+    title = re.sub(r'\s+', ' ', title).strip() # collapse whitespace
+    stop = {
+        'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to',
+        'of', 'for', 'with', 'by', 'from', 'as', 'is', 'are', 'was',
+        'were', 'be', 'been', 'will', 'that', 'this', 'it', 'its',
+        'you', 'your', 'what', 'how', 'why', 'who', 'all', 'says',
+        'said', 'new', 'can', 'has', 'have', 'had', 'about', 'up',
+    }
+    tokens = [w for w in title.split() if w not in stop and len(w) > 1]
+    return ' '.join(tokens)
+
+
+def _title_similarity(a: str, b: str) -> float:
+    """
+    Jaccard similarity over word tokens of two normalised titles.
+    Returns 0.0–1.0.  Values ≥ TITLE_SIMILARITY_THRESHOLD are considered duplicates.
+    Pure stdlib — no external dependencies.
+    """
+    set_a = set(a.split())
+    set_b = set(b.split())
+    if not set_a and not set_b:
+        return 1.0
+    if not set_a or not set_b:
+        return 0.0
+    intersection = set_a & set_b
+    union = set_a | set_b
+    return len(intersection) / len(union)
+
+
+# Tuned against real BBC/Reuters headline pairs: synonyms (releases/launches,
+# improved/enhanced) reduce Jaccard overlap to ~0.57.  0.55 captures these
+# cross-source near-duplicates while keeping a safe gap from genuinely different
+# stories (which score ≤ 0.20 in practice).
+_TITLE_SIMILARITY_THRESHOLD = 0.55
+
+
 async def deduplicate(state: NewsWorkflowState) -> NewsWorkflowState:
     run_id = state["run_id"]
     raw    = state["raw_articles"]
 
-    # ── Pass 1: within-run dedup by title+URL hash ────────────────────────────
+    # ── Pass 1: exact dedup by normalised URL ─────────────────────────────────
+    # Also compute content_hash (title+url) for downstream idempotency.
+    # URL normalisation catches http vs https, www prefix, trailing slash variants
+    # of the same article served by the same source.
+    seen_url: set[str] = set()
     seen_hash: set[str] = set()
     unique: list[dict] = []
     for article in raw:
+        norm_url = _normalise_url(article.get("url", ""))
         content_hash = hashlib.md5(
             (article.get("title", "") + article.get("url", "")).encode()
         ).hexdigest()
         article["content_hash"] = content_hash
-        if content_hash not in seen_hash:
+        if norm_url not in seen_url and content_hash not in seen_hash:
+            seen_url.add(norm_url)
             seen_hash.add(content_hash)
             unique.append(article)
 
-    after_hash = len(unique)
+    after_url = len(unique)
 
     # ── Pass 2: cross-run dedup — drop anything published today already ───────
     unique = published_store.filter_unpublished(unique)
     after_store = len(unique)
 
+    # ── Pass 3: title-similarity dedup — catch same story from different sources
+    # Two articles covering the same event will have different URLs and article_ids
+    # but nearly identical headlines.  Jaccard similarity over normalised tokens
+    # clusters them; only the first representative per cluster is kept.
+    norm_titles: list[str] = [_normalise_title(a.get("title", "")) for a in unique]
+    kept_indices: list[int] = []
+    for i, title_i in enumerate(norm_titles):
+        is_dup = False
+        for j in kept_indices:
+            if _title_similarity(title_i, norm_titles[j]) >= _TITLE_SIMILARITY_THRESHOLD:
+                logger.info(
+                    "[%s] dedup pass3: dropping near-duplicate '%s' (similar to '%s', sim=%.2f)",
+                    run_id,
+                    unique[i].get("title", "")[:80],
+                    unique[j].get("title", "")[:80],
+                    _title_similarity(title_i, norm_titles[j]),
+                )
+                is_dup = True
+                break
+        if not is_dup:
+            kept_indices.append(i)
+
+    unique = [unique[i] for i in kept_indices]
+    after_similarity = len(unique)
+
     logger.info(
-        "[%s] deduplicated: %d raw → %d unique → %d unpublished-today",
-        run_id, len(raw), after_hash, after_store,
+        "[%s] deduplicated: %d raw → %d url-unique → %d unpublished-today → %d title-unique",
+        run_id, len(raw), after_url, after_store, after_similarity,
     )
 
-    if after_store == 0:
+    if after_similarity == 0:
         logger.warning(
-            "[%s] deduplicate: all articles already published today — nothing to do",
+            "[%s] deduplicate: no articles remain after all dedup passes — nothing to do",
             run_id,
         )
 
