@@ -1,6 +1,6 @@
 # AIFeeders — Architecture Reference
 
-> Build #76 · OpenShift `aifeeders` · LangGraph · Jev System One · EKS-portable
+> Build #81 · OpenShift `aifeeders` · LangGraph · Jev System One · EKS-portable
 
 This document explains **how the system is built, why it was built that way, and what production problems each design decision solves**. It is intended for engineers who need to understand, debug, or extend the system.
 
@@ -140,7 +140,7 @@ class NewsWorkflowState(TypedDict):
 | Node | Input state fields | Output state fields | Key behaviour |
 |---|---|---|---|
 | `discover_news` | — | `raw_articles` | 9 GNews queries; `hours=24`, `limit=10`; errors non-fatal |
-| `deduplicate` | `raw_articles` | `deduplicated_articles` | Pass 1: MD5 within-run; Pass 2: PublishedStore cross-run |
+| `deduplicate` | `raw_articles` | `deduplicated_articles` | Pass 1: URL-normalised hash within-run; Pass 2: PublishedStore cross-run; Pass 3: title-similarity (Jaccard ≥ 0.55) |
 | `fetch_articles` | `deduplicated_articles` | `selected_articles` | Full HTML fetch; caps at 30 for Jev scoring budget |
 | `index_pageindex` | `selected_articles` | `pageindex_documents` | RAG index per article; errors non-fatal |
 | `jev_prefilter` | `selected_articles` | `selected_articles` (top 1), `jev_prefilter_scores`, `jev_persona_hints` | Jev Decision #1 |
@@ -302,20 +302,62 @@ The pipeline can be re-triggered, retried by Kubernetes, or run twice on the sam
 
 ### Gate 1 — deduplicate node (before any LLM work)
 
+Three passes run sequentially. If any pass empties the list, no downstream LLM calls are made — cost saved upfront.
+
 ```python
-# Pass 1: within-run hash dedup
-# 9 GNews queries can return the same article multiple times
-# MD5(title + URL) is deterministic and fast
+# Pass 1: within-run URL-normalised hash dedup
+# 9 GNews queries often return the same article from http:// and https:// variants,
+# or with/without www or trailing slash.
+# _normalise_url() strips scheme, www prefix, and trailing slash before hashing.
+def _normalise_url(url: str) -> str:
+    u = url.lower().strip()
+    for prefix in ("https://", "http://"):
+        if u.startswith(prefix):
+            u = u[len(prefix):]
+            break
+    if u.startswith("www."):
+        u = u[4:]
+    return u.rstrip("/")
+
 for article in raw:
-    h = md5(article["title"] + article["url"])
+    h = md5(_normalise_url(article["url"]))
     if h not in seen:
         seen.add(h)
-        unique.append(article)
+        url_unique.append(article)
 
-# Pass 2: cross-run dedup
-# Removes articles already published today from PublishedStore
-unique = published_store.filter_unpublished(unique)
-# If this empties the list, no LLM calls are made — cost saved upfront
+# Pass 2: cross-run dedup via PublishedStore
+# Removes articles already published in the last 7 days.
+unpublished = published_store.filter_unpublished(url_unique)
+
+# Pass 3: title-similarity dedup (build 80+)
+# Catches the same story from different sources: BBC "OpenAI unveils..." vs
+# Reuters "OpenAI announces..." — same article, different URL, different domain.
+# Jaccard similarity on word tokens after normalisation (lowercase, strip punctuation).
+# Threshold: 0.55 — high enough to catch rewrites, low enough not to merge distinct stories.
+def _normalise_title(title: str) -> set[str]:
+    return set(re.sub(r"[^\w\s]", "", title.lower()).split())
+
+def _title_similarity(a: str, b: str) -> float:
+    sa, sb = _normalise_title(a), _normalise_title(b)
+    if not sa or not sb:
+        return 0.0
+    return len(sa & sb) / len(sa | sb)  # Jaccard
+
+title_unique = []
+seen_titles: list[str] = []
+for article in unpublished:
+    if all(_title_similarity(article["title"], t) < 0.55 for t in seen_titles):
+        seen_titles.append(article["title"])
+        title_unique.append(article)
+```
+
+**New log format (build 80+):**
+```
+# Before build 80:
+deduplicated: N raw → M unique → K unpublished-today
+
+# Build 80+:
+deduplicated: N raw → M url-unique → K unpublished-today → J title-unique
 ```
 
 ### Gate 2 — publish node (right before the LinkedIn call)
@@ -1094,6 +1136,11 @@ volumes:
 
 | Build | Date | Changes |
 |---|---|---|
+| **#81** | 2026-09 | **Docs rewrite** — README/RUNBOOK/ARCHITECTURE updated to build 80 baseline. GNews Key 2 rotated to primary. |
+| #80 | 2026-09 | **3-pass deduplication.** Pass 1 upgraded: `_normalise_url()` strips scheme/www/slash before hashing — catches http vs https variants. Pass 3 added: `_normalise_title()` + `_title_similarity()` Jaccard at threshold 0.55 — catches same story from different sources. `_TITLE_SIMILARITY_THRESHOLD` exported. 39 new tests in `test_deduplication.py` — 91/91 total. New log format: `N raw → M url-unique → K unpublished-today → J title-unique`. |
+| #79 | 2026-09 | **Engagement upgrade.** Hook openers: rotating pool of 3 per `event_type` (day-of-year rotation). Default/fallback CTA: 6-choice production-reality question tuned to confirmed Senior/Director/VP IT Services audience. Business CTA and policy CTA each expanded to 6 choices. |
+| #78 | 2026-09 | **Post format fixes.** Policy CTA no longer leaks article title into question. `why_it_matters` prompt updated — bans news-wire phrases ("in a move that", "marks a significant") and requires direct practitioner voice. |
+| #77 | 2026-09 | **First live run with engagement-first format.** Post `urn:li:share:7509115881449414656`. 90 impressions, 60 reached, 6 reactions, 0 comments. Audience: Senior 23%, Director 20%, VP 13%; IT Services 38%, Software Dev 25%; enterprise (10,001+) 42%. |
 | #76 | 2026-09 | Clean rebuild after old build deletion. Confirmed live post `urn:li:share:7509097557713833984`. Docs rewrite with all production incidents. |
 | #75 | 2026-09 | All visible text uses `_clip_at_sentence()` — no more mid-sentence cuts. `KP_CAP` 95→160, `IMPACT_CAP` 115→160. |
 | #74 | 2026-09 | Full post format redesign — 10-section humanised engagement-first layout. `_build_signal_block()`, `_build_cta()`, `_extract_dynamic_tags()`. |

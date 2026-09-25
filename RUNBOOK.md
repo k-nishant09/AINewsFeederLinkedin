@@ -1,6 +1,6 @@
 # AIFeeders — Operations Runbook
 
-> Build #76 · OpenShift `aifeeders` · Last updated: 2026-09
+> Build #81 · OpenShift `aifeeders` · Last updated: 2026-09
 > For architecture details: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 > For project overview: [`README.md`](README.md)
 
@@ -422,7 +422,7 @@ INFO Starting daily news workflow — run_id=RUN-6FFC7CF7862F
 INFO [RUN-6FFC7CF7862F] discover_news started
 INFO [RUN-6FFC7CF7862F] discovered 5 raw articles
 
-INFO [RUN-6FFC7CF7862F] deduplicated: 5 raw → 4 unique → 4 unpublished-today
+INFO [RUN-6FFC7CF7862F] deduplicated: 5 raw → 4 url-unique → 4 unpublished-today → 4 title-unique
 
 INFO [RUN-6FFC7CF7862F] jev_prefilter: #1 article_id=news-4cf396b3c7e1
      relevance=0.89 engagement=0.60 composite=0.78 personas=['business','policy','genz','linkedin']
@@ -450,7 +450,7 @@ INFO Workflow complete — status=PUBLISHED published=1 errors=0
 | Log pattern | What it means |
 |---|---|
 | `discovered N raw articles` | GNews returned N articles across all 9 queries |
-| `deduplicated: X raw → Y unique → Z unpublished-today` | X total → Y after removing duplicates → Z after removing already-published |
+| `deduplicated: X raw → Y url-unique → Z unpublished-today → W title-unique` | 4-field format (build 80+): URL-normalised hash dedup → cross-run store filter → title-similarity dedup |
 | `jev_prefilter: #1 ... composite=0.78` | Jev scored all articles; this one ranked highest |
 | `jev_route_personas: merged → [...]` | These LLM persona calls will run (others are skipped) |
 | `eval decision=PASS factuality=0.69` | Article passed all quality checks; safe to publish |
