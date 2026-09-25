@@ -466,12 +466,17 @@ class PublisherAgent:
             )
             return self._skipped_result(summary, f"guardrail_block:{evaluation.decision.value}")
 
-        main_text       = self._compose_main_post(summary, personas, jev_scores=jev_scores)
+        # Use pre-composed + repaired text if score_reach already built it
+        _repaired = getattr(personas, "_repaired_post", None)
+        if not _repaired and isinstance(personas, dict):
+            _repaired = personas.get("_repaired_post")
+        main_text       = _repaired or self._compose_main_post(summary, personas, jev_scores=jev_scores)
         publication_key = self._make_publication_key(summary.article_id, summary.headline, main_text)
 
         logger.info(
-            "[%s] post composed article=%s python_len=%d linkedin_utf16_len=%d",
+            "[%s] post composed article=%s python_len=%d linkedin_utf16_len=%d%s",
             run_id, summary.article_id, len(main_text), _linkedin_len(main_text),
+            " (reach-repaired)" if _repaired else "",
         )
         logger.info("[%s] POST TEXT START ---\n%s\n--- POST TEXT END", run_id, main_text)
         logger.info("[%s] publishing main post article=%s key=%s", run_id, summary.article_id, publication_key)
