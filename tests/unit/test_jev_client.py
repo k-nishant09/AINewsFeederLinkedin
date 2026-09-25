@@ -310,8 +310,8 @@ class TestJevPrefilterNode:
             mock_settings.return_value.jev_enabled = False
             result = await jev_prefilter_articles(state)
 
-        # Fallback keeps first two articles
-        assert len(result["selected_articles"]) == 2
+        # Fallback keeps the single best (first) article
+        assert len(result["selected_articles"]) == 1
         assert result["selected_articles"][0]["article_id"] == "a1"
 
     @pytest.mark.asyncio
@@ -350,16 +350,15 @@ class TestJevPrefilterNode:
 
             result = await jev_prefilter_articles(state)
 
-        # Top 2 returned — highest composite score first
-        assert len(result["selected_articles"]) == 2
+        # Top 1 returned — highest composite score selected
+        assert len(result["selected_articles"]) == 1
         assert result["selected_articles"][0]["article_id"] == "high"
-        # jev_prefilter_scores is now a dict keyed by article_id
+        # jev_prefilter_scores only contains the selected article
         scores = result["jev_prefilter_scores"]
         assert isinstance(scores, dict)
         assert "high" in scores
-        assert "low" in scores
+        assert "low" not in scores
         assert scores["high"]["relevance_score"] == pytest.approx(0.95)
-        assert scores["low"]["relevance_score"] == pytest.approx(0.4)
 
     @pytest.mark.asyncio
     async def test_falls_back_when_jev_raises(self):

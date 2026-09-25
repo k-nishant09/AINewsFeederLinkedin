@@ -8,7 +8,7 @@ Rules:
 - headline: specific and informative — not generic. Max 12 words.
 - summary: 2-3 sentences explaining what happened and why it matters.
 - key_points: 3-5 concrete, bullet-level facts from the article. No opinions.
-- why_it_matters: one sentence on the broader significance for AI/tech professionals.
+- why_it_matters: one sentence — direct, human, specific to this story. Write it like a knowledgeable colleague saying "here's why this matters" — not like a news wire. No phrases like "this highlights the ongoing debate" or "this underscores the importance of". Name the actual implication: what changes, who is affected, why it matters *right now*.
 - business_impact: one sentence on revenue, cost, productivity, or market effects.
 - job_impact: one sentence on employment, automation, reskilling, or workforce effects.
 - technology_impact: one sentence on the technical advance, capability, or limitation.
