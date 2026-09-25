@@ -267,14 +267,34 @@ def _build_cta(
             f"Genuinely curious about the gap between research and real-world deployment. 👇"
         )
 
-    # Fallback — practical persona-driven question with numbered choices
+    # Fallback — 6-choice production-reality CTA tuned to Senior/Director/VP
+    # practitioners in IT Services and Software Development (confirmed audience).
+    # This format outperforms policy debate questions for this audience.
+    _PRODUCTION_CTA = (
+        "Everyone is talking about AI agents.\n\n"
+        "But here's the question I keep coming back to:\n\n"
+        "Can we actually operate them reliably in production?\n\n"
+        "The architecture quickly becomes:\n"
+        "Agent + Model + Data + Tools + Security + Observability + Governance\n\n"
+        "For those building or deploying AI today — what's your biggest production challenge?\n\n"
+        "1️⃣ Model quality & reliability\n"
+        "2️⃣ Security & data privacy\n"
+        "3️⃣ Data quality & pipelines\n"
+        "4️⃣ Observability & debugging\n"
+        "5️⃣ Infrastructure cost at scale\n"
+        "6️⃣ Organisational adoption\n\n"
+        "Drop the number + your experience below. 👇"
+    )
+
     if top_persona == "business":
         return (
             f"If your team is evaluating AI investments right now, what's your top decision criterion?\n\n"
             f"1️⃣ ROI evidence from similar companies\n"
             f"2️⃣ Build vs buy cost analysis\n"
             f"3️⃣ Data security and compliance\n"
-            f"4️⃣ Availability of internal talent\n\n"
+            f"4️⃣ Availability of internal AI talent\n"
+            f"5️⃣ Speed to production\n"
+            f"6️⃣ Vendor lock-in risk\n\n"
             f"What's driving the conversation at your org? 👇"
         )
     if top_persona == "policy":
@@ -283,28 +303,15 @@ def _build_cta(
             "1️⃣ Clear liability rules\n"
             "2️⃣ Mandatory transparency & audit rights\n"
             "3️⃣ International standards alignment\n"
-            "4️⃣ Better enforcement of existing rules\n\n"
+            "4️⃣ Better enforcement of existing rules\n"
+            "5️⃣ Independent safety testing requirements\n"
+            "6️⃣ Something else — drop it below\n\n"
             "Builders, policy folks, and end users — where do you each see the gap? 👇"
         )
     if top_persona == "linkedin":
-        return (
-            f"For engineers and practitioners working with AI today: what has been your biggest unexpected challenge?\n\n"
-            f"1️⃣ Model reliability and hallucinations\n"
-            f"2️⃣ Infrastructure and cost at scale\n"
-            f"3️⃣ Data quality and privacy\n"
-            f"4️⃣ Organisational resistance to adoption\n\n"
-            f"Real experiences over theory here. 👇"
-        )
-    # genz / other
-    return (
-        "Most AI coverage focuses on the technology. Very little focuses on who actually benefits.\n\n"
-        f"In your view — who gains most from developments like {subject} in the next 3 years?\n\n"
-        "1️⃣ Big tech companies\n"
-        "2️⃣ Knowledge workers who adapt fast\n"
-        "3️⃣ Consumers and everyday users\n"
-        "4️⃣ Investors and shareholders\n\n"
-        "Drop your take below. 👇"
-    )
+        return _PRODUCTION_CTA
+    # genz / other — default to production CTA (matches confirmed audience)
+    return _PRODUCTION_CTA
 
 
 # ── Context line builder ─────────────────────────────────────────────────────
@@ -342,24 +349,56 @@ def _build_context_line(
 
 # ── Engagement hook builder ───────────────────────────────────────────────────
 
-_HOOK_OPENERS: dict[str, str] = {
-    "regulation":     "Most people underestimate how fast AI regulation is moving.",
-    "product_launch": "A new AI capability just dropped — and it changes what's possible.",
-    "funding":        "Big capital is moving fast in AI. Here's what the money is chasing.",
-    "research":       "A research finding that could shift how we build AI systems.",
-    "acquisition":    "AI consolidation is accelerating. Here's why this deal matters.",
-    "other":          "Here's an AI story that's worth 2 minutes of your attention.",
+import hashlib as _hashlib
+
+# Pool of 3 openers per event type — rotated by date so the same opener
+# never appears two days in a row. Keeps the feed feeling fresh.
+_HOOK_POOLS: dict[str, list[str]] = {
+    "regulation": [
+        "Most people underestimate how fast AI regulation is moving.",
+        "The compliance deadline your legal team doesn't know about yet.",
+        "AI governance just got real. Here's what the timeline actually looks like.",
+    ],
+    "product_launch": [
+        "A new AI capability just dropped — and it changes what's possible.",
+        "The benchmark numbers look clean. The production reality is more complicated.",
+        "Something shipped today that practitioners need to evaluate, not just read about.",
+    ],
+    "funding": [
+        "Big capital is moving fast in AI. Here's what the money is chasing.",
+        "Another major AI bet. Here's what it means for everyone building on top of these platforms.",
+        "When the big players consolidate, the dependency risk changes for everyone else.",
+    ],
+    "research": [
+        "A research finding that could shift how we build AI systems.",
+        "The benchmark looked impressive. The production reality is a different question.",
+        "Academic paper today. Production reality in 18 months. Here's the gap worth tracking.",
+    ],
+    "acquisition": [
+        "AI consolidation is accelerating. Here's why this deal matters.",
+        "Another major acquisition. Here's what platform dependency now looks like.",
+        "When the big players acquire, the ecosystem shifts for everyone building on top.",
+    ],
+    "other": [
+        "Here's an AI story that's worth 2 minutes of your attention.",
+        "Everyone is talking about AI agents. Here's the production question nobody is asking.",
+        "The news cycle moved on. This story hasn't finished mattering yet.",
+    ],
 }
 
 
 def _build_hook_line(event_type: str, headline: str, source: str) -> str:
     """
     Build a strong opening hook line — the first thing the reader sees.
-    Uses the event_type opener, then the headline as the specific detail.
+    Rotates through the event-type pool using a date-based index so the
+    same opener never repeats on consecutive days.
     Human-voice, not robotic. No scores, no brand names.
     """
-    opener = _HOOK_OPENERS.get(event_type, _HOOK_OPENERS["other"])
-    return opener
+    from datetime import date
+    pool = _HOOK_POOLS.get(event_type, _HOOK_POOLS["other"])
+    # Deterministic rotation: day-of-year mod pool size — same pool order per day
+    day_index = date.today().timetuple().tm_yday
+    return pool[day_index % len(pool)]
 
 
 # ── Main Publisher Agent ──────────────────────────────────────────────────────
