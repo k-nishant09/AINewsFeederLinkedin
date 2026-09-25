@@ -1,7 +1,7 @@
 # AIFeeders — AI Daily News LinkedIn Platform
 
 > **Fully automated AI news pipeline. Jev System One AI scoring. Publishes to LinkedIn twice daily.**
-> Build #76 · OpenShift `aifeeders` · EKS-portable · LangGraph state machine
+> Build #81 · OpenShift `aifeeders` · EKS-portable · LangGraph state machine
 
 ---
 
@@ -37,56 +37,64 @@ AIFeeders runs twice a day — **08:00 UTC** (morning) and **16:00 UTC** (aftern
 5. Evaluates content for factuality, hallucination, PII, and injection safety.
 6. Publishes a structured LinkedIn post — **automatically, no human button-press needed**.
 
-**A published post looks like this:**
+**A published post looks like this (engagement-first layout, build 77+):**
 
 ```
-📡  AI Intelligence  ·  CNBC  ·  AIFeeders
+Every major AI lab is racing to ship agents. But deploying them in production
+is a completely different problem.
 
 Palo Alto CEO Rejects AI Slowdown, Cites Low Extinction Risk
 
-This perspective highlights the ongoing debate within the tech industry about the pace
-and direction of AI development.
+Security leaders are watching this closely — enterprise AI decisions hinge on
+whether safety-first or innovation-first philosophy wins this debate.
 
-🔍  Why this matters
-  📡  Signal strength  : 89% relevance   [██░░░] significance
-  ⚡  Engagement pulse : 60%   Controversy: Medium
-  👥  Relevant to      : 🏛️ Policy 87%  ·  🧠 Tech+Workforce 79%  ·  🎓 Generalist 65%
+This story is getting traction in boardrooms — Nikesh Arora's position signals
+where enterprise AI investment is heading.
 
-📌  3 things to know
-  • Nikesh Arora, CEO of Palo Alto Networks, opposes calls to slow AI development.
-  • Arora's stance aligns with Nvidia CEO Jensen Huang, contrasting with Anthropic and OpenAI.
-  • Arora considers the risk of AI-induced human extinction to be 'extremely small.'
+Here's what you need to know:
 
-📈  Business   —  Arora's stance could influence corporate AI strategies and investment pace.
-👷  Workforce  —  Rapid AI development may accelerate automation and workforce reskilling needs.
-🔬  Tech       —  The debate underscores balancing technological advancement with safety measures.
+▸ Nikesh Arora, CEO of Palo Alto Networks, opposes calls to slow AI development.
+▸ Arora's stance aligns with Nvidia CEO Jensen Huang, contrasting with Anthropic and OpenAI.
+▸ Arora considers the risk of AI-induced human extinction to be 'extremely small.'
 
-🔗  https://www.cnbc.com/2026/09/24/palo-alto-networks-nikesh-arora-ai-slowdown.html
+For businesses: Arora's stance could influence corporate AI strategies and investment pace.
+For practitioners: Rapid AI development may accelerate automation and workforce reskilling needs.
+For builders: The debate underscores balancing technological advancement with safety measures.
 
-💬  4 angles on this story
+────────────────────
+Different perspectives on this:
 
-💼  Capitalist Mind
-Arora's stance on AI development aligns with the need for rapid innovation, but the real
-test is whether it drives revenue and defensible moats, not just existential debates.
+💼 Business view
+Arora's position is a capital-allocation signal: companies betting on aggressive
+AI timelines will attract more investment than those hedging on safety delays.
 
-🏛️  Government Mind
-Palo Alto CEO Nikesh Arora's stance against slowing AI development highlights a divide in
-the tech industry between safety-first and innovation-first philosophies.
+🏛️ Policy view
+Palo Alto CEO Nikesh Arora's stance highlights a divide in the tech industry
+between safety-first and innovation-first philosophies.
 
-🎓  Generalist Mind
-Palo Alto CEO Nikesh Arora thinks slowing down AI is unrealistic and the risk of
-AI-induced human extinction is extremely small, which could speed up AI adoption.
+🎓 Generalist view
+Arora thinks slowing down AI is unrealistic and the risk of human extinction
+from AI is extremely small — which could speed up consumer AI adoption.
 
-🧠  Tech & Workforce Mind
-While Arora's stance on minimal AI extinction risk may ease fears, it's crucial to focus
-on near-term impacts like job displacement and skill obsolescence.
+🧠 Tech & careers
+Minimal AI risk claims ease near-term fears, but the real challenge is job
+displacement and skill obsolescence at the pace Arora is describing.
 
-🗣️  What guardrails should exist around rapid AI development? All angles welcome. 👇
+Full story → https://www.cnbc.com/2026/09/24/palo-alto-networks-nikesh-arora-ai-slowdown.html
+
+If you were evaluating this for your team today, what would you test first?
+
+1️⃣ Accuracy on real tasks
+2️⃣ Cost at scale
+3️⃣ Security & data privacy
+4️⃣ Integration with existing tools
+
+Drop your priority below. 👇
 
 ⚠️ Perspectives are AI-simulated — not professional advice.
 🤖 AIFeeders  ·  Daily AI Intelligence  ·  Powered by Jev
 
-#AI #AINews #GenerativeAI #MachineLearning #AIStrategy #OpenAI #Anthropic #NVIDIA
+#AI #AINews #AIStrategy #PaloAltoNetworks #AIGovernance
 ```
 
 ---
@@ -96,7 +104,7 @@ on near-term impacts like job displacement and skill obsolescence.
 ```
 CronJob (08:00 UTC + 16:00 UTC)
   └─► discover_news        9 GNews queries (hours=24) → ~20-30 articles
-        └─► deduplicate    MD5 hash dedup + PublishedStore cross-run filter
+        └─► deduplicate    3-pass dedup: URL-hash + PublishedStore + title-similarity
               └─► fetch_articles       Full HTML fetch per article
                     └─► index_pageindex    RAG index for evidence retrieval
                           └─► jev_prefilter       [Jev Decision #1]
@@ -184,6 +192,7 @@ openshift/
 
 tests/
   unit/    test_jev_client.py  test_published_store.py  test_evaluation_gate.py
+           test_deduplication.py
   workflow/ test_langgraph_routing.py
 
 ARCHITECTURE.md   Full technical reference
@@ -959,6 +968,11 @@ oc logs job/<latest-job> -n aifeeders | grep "Workflow complete"
 
 | Build | Key changes |
 |---|---|
+| **#81** | **Docs rewrite** — README/RUNBOOK/ARCHITECTURE updated to build 80 baseline; GNews Key 2 rotated to primary |
+| #80 | **3-pass deduplication** — Pass 1 upgraded: URL normalisation (`_normalise_url`) strips scheme/www/slash before hashing. Pass 3 added: title-similarity dedup (`_normalise_title` + Jaccard, threshold 0.55) catches same story from different sources. 39 new tests — 91/91 total |
+| #79 | **Engagement upgrade** — Hook openers: rotating pool of 3 per event type (day-of-year). Default CTA: 6-choice production-reality question tuned to Senior/Director/VP IT Services audience. Business + policy CTAs expanded to 6 choices |
+| #78 | **Post format fixes** — policy CTA no longer leaks article title; `why_it_matters` prompt bans news-wire phrases |
+| #77 | **First live run with engagement-first format** — post `urn:li:share:7509115881449414656`; 90 impressions, 60 reached, 6 reactions; audience: Senior 23%, Director 20%, VP 13%, IT Services 38% |
 | #76 | Clean rebuild after old build deletion; confirmed post-publish to LinkedIn `urn:li:share:7509097557713833984` |
 | #75 | All visible text clips at sentence boundary — no more mid-sentence cuts from `_hard_clip` |
 | #74 | Full post format redesign — 10-section humanised engagement-first layout, all dynamic |
