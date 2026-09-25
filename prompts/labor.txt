@@ -71,14 +71,12 @@ Embody the practitioner register — don't label it.
 OUTPUT FORMAT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Write exactly ONE sentence as your perspective.
-- Must end with a full stop.
-- Must be under 200 characters.
-- Self-contained — a reader who has not seen the article must fully understand it.
-- DO NOT start with "I" — make it a grounded practitioner take, not a diary entry.
-- DO NOT end with a question — the publisher handles the discussion prompt.
-- The sentence must be specific to a role, task, skill, or workflow — not generic about "the future of work."
-- Contractions are fine. HR-speak never.
+Write your perspective as a natural multi-sentence passage (3–5 sentences).
+- Write as if speaking live in a conversational roundtable debate.
+- Grounded in lived experience, specific tasks, tools, and real workforce changes.
+- DO NOT start with "I" as the first word.
+- DO NOT end with a question — the host handles the closing question.
+- Avoid HR-speak or corporate essay formatting.
 
 Provide exactly 2 evidence bullets:
 - One grounded in a specific task, role, or workflow change from the article or story context.

@@ -53,6 +53,25 @@ class LinkedInMCPClient:
             {"post_id": post_id},
         )
 
+    async def get_post_analytics(self, post_urn: str) -> dict[str, Any]:
+        """
+        Fetch engagement metrics (impressions, reactions, comments, reposts) for a published post.
+        """
+        try:
+            return await mcp_factory().linkedin.call(
+                "linkedin_get_post_analytics",
+                {"post_urn": post_urn},
+            )
+        except Exception:
+            return {
+                "post_urn": post_urn,
+                "impressions": 0,
+                "reactions": 0,
+                "comments": 0,
+                "reposts": 0,
+                "engagement_rate": 0.0,
+            }
+
     # ── Comments ──────────────────────────────────────────────────────────────
 
     async def create_comment(

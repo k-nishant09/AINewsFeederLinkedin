@@ -35,6 +35,7 @@ import string
 from datetime import date, timezone, datetime
 
 from daily_news.agents.grammar_agent import GrammarAgent
+from daily_news.agents.guardrails import OutputGuardrail
 from daily_news.agents.published_store import published_store
 from daily_news.config.settings import get_settings
 from daily_news.mcp.linkedin import LinkedInMCPClient
@@ -90,54 +91,7 @@ def _hard_clip(text: str, limit: int) -> str:
     return text
 
 
-# ── Dynamic hashtag extraction ────────────────────────────────────────────────
-
-# Well-known AI company / product names → their canonical hashtag form.
-# Derived at runtime from article text — not hardcoded into any post.
-_KNOWN_ENTITIES: dict[str, str] = {
-    "openai":       "OpenAI",
-    "anthropic":    "Anthropic",
-    "google":       "Google",
-    "deepmind":     "DeepMind",
-    "microsoft":    "Microsoft",
-    "meta":         "MetaAI",
-    "nvidia":       "NVIDIA",
-    "amazon":       "Amazon",
-    "aws":          "AWS",
-    "ibm":          "IBM",
-    "apple":        "Apple",
-    "mistral":      "Mistral",
-    "cohere":       "Cohere",
-    "stability":    "StabilityAI",
-    "hugging face": "HuggingFace",
-    "huggingface":  "HuggingFace",
-    "salesforce":   "Salesforce",
-    "palantir":     "Palantir",
-    "databricks":   "Databricks",
-    "groq":         "Groq",
-    "perplexity":   "Perplexity",
-    "midjourney":   "Midjourney",
-    "runway":       "RunwayML",
-    "eu ai act":    "EUAIAct",
-    "eu":           None,          # too generic — skip
-    "llm":          "LLM",
-    "gpt":          "GPT",
-    "gemini":       "Gemini",
-    "claude":       "Claude",
-    "llama":        "Llama",
-    "chatgpt":      "ChatGPT",
-}
-
-# Topic → hashtag mapping derived from Jev event_type / category signals
-_EVENT_HASHTAGS: dict[str, list[str]] = {
-    "product_launch": ["AIProductLaunch", "ProductLaunch"],
-    "funding":        ["AIFunding", "VentureCapital"],
-    "regulation":     ["AIRegulation", "AIGovernance", "AIPolicy"],
-    "research":       ["AIResearch", "MLResearch"],
-    "acquisition":    ["MergersAndAcquisitions", "AIFunding"],
-    "other":          [],
-}
-
+# ── Dynamic SEO / AEO Hashtag Engine ──────────────────────────────────────────
 
 def _extract_dynamic_tags(
     headline: str,
@@ -145,49 +99,84 @@ def _extract_dynamic_tags(
     source: str,
     key_points: list[str],
     event_type: str,
-    max_tags: int = 6,
+    story_seo_tags: list[str] | None = None,
+    max_tags: int = 7,
 ) -> list[str]:
     """
-    Extract up to *max_tags* hashtags dynamically from article content.
-
-    Priority order:
-      1. Company/product names found in the article text
-      2. Event-type topic tags from Jev classification
-      3. Nothing else — quality over quantity
-
-    Returns a list of #Tag strings ready to append to the footer.
-    No duplicates, no duplicates of the base brand tags.
+    SEO & AEO Dynamic Hashtag Extractor:
+    Zero static company hardcoding. Extracts 100% dynamic, context-specific tags:
+      1. Storyteller AI/LLM identified SEO hashtags (from dynamic_seo_hashtags).
+      2. Proper nouns & Named Entities extracted dynamically from headline & key points (PascalCase).
+      3. Source publication hashtag (e.g. #SiliconANGLE, #TechCrunch, #Reuters, #Bloomberg).
+      4. Topic & Domain reference tags derived from headline subjects.
     """
-    corpus = " ".join(
-        [headline, summary, source] + key_points
-    ).lower()
-
     found_tags: list[str] = []
     seen_lower: set[str] = set()
 
-    # Pass 1 — match known entities in the corpus
-    for pattern, tag in _KNOWN_ENTITIES.items():
-        if tag is None:
-            continue
-        if re.search(r"\b" + re.escape(pattern) + r"\b", corpus):
-            tag_lower = tag.lower()
-            if tag_lower not in seen_lower:
+    # 1. First priority: Storyteller AI-generated SEO hashtags
+    if story_seo_tags:
+        for tag in story_seo_tags:
+            cleaned = tag.strip()
+            if not cleaned:
+                continue
+            if not cleaned.startswith("#"):
+                cleaned = f"#{cleaned}"
+            # Clean non-alphanumeric except hash
+            cleaned = "#" + re.sub(r"[^A-Za-z0-9]", "", cleaned[1:])
+            tag_lower = cleaned.lower()
+            if len(cleaned) > 2 and tag_lower not in seen_lower:
                 seen_lower.add(tag_lower)
-                found_tags.append(f"#{tag}")
+                found_tags.append(cleaned)
             if len(found_tags) >= max_tags:
-                break
+                return found_tags
 
-    # Pass 2 — fill remaining slots with event-type topic tags
-    remaining = max_tags - len(found_tags)
-    if remaining > 0:
-        for tag in _EVENT_HASHTAGS.get(event_type, []):
-            tag_lower = tag.lower()
-            if tag_lower not in seen_lower:
-                seen_lower.add(tag_lower)
-                found_tags.append(f"#{tag}")
-                remaining -= 1
-                if remaining <= 0:
-                    break
+    # 2. Source Publication Tag
+    if source:
+        clean_src = re.sub(r"[^A-Za-z0-9]", "", source)
+        if clean_src and len(clean_src) > 2:
+            src_tag = f"#{clean_src[0].upper()}{clean_src[1:]}"
+            if src_tag.lower() not in seen_lower:
+                seen_lower.add(src_tag.lower())
+                found_tags.append(src_tag)
+
+    # 3. Dynamic Proper Nouns & Capitalized Entities in Headline (e.g. "Okta", "DeepSeek", "Mistral", "Dex")
+    headline_tokens = re.findall(r"\b[A-Z][a-zA-Z0-9_-]+\b", headline)
+    _GENERIC_WORDS = {"a", "an", "the", "in", "on", "at", "to", "for", "with", "by", "from", "and", "or", "new", "ai", "how", "why", "what", "says", "said", "turns", "into"}
+    for tok in headline_tokens:
+        tok_clean = re.sub(r"[^A-Za-z0-9]", "", tok)
+        if tok_clean.lower() not in _GENERIC_WORDS and len(tok_clean) > 2:
+            tag = f"#{tok_clean}"
+            if tag.lower() not in seen_lower:
+                seen_lower.add(tag.lower())
+                found_tags.append(tag)
+        if len(found_tags) >= max_tags:
+            break
+
+    # 4. Contextual Event / Action Tag
+    _EVENT_AEO = {
+        "product_launch": ["AIProductLaunch", "EnterpriseAI"],
+        "funding":        ["AIFunding", "VentureCapital"],
+        "regulation":     ["AIRegulation", "AIGovernance"],
+        "research":       ["AIResearch", "MachineLearning"],
+        "acquisition":    ["MergersAndAcquisitions", "TechNews"],
+        "other":          ["AIStrategy", "TechInnovation"],
+    }
+    for ev_tag in _EVENT_AEO.get(event_type, ["AIStrategy"]):
+        if len(found_tags) >= max_tags:
+            break
+        tag = f"#{ev_tag}"
+        if tag.lower() not in seen_lower:
+            seen_lower.add(tag.lower())
+            found_tags.append(tag)
+
+    # 5. Core Searchable Foundation
+    for base in ["AI", "GenerativeAI"]:
+        if len(found_tags) >= max_tags:
+            break
+        tag = f"#{base}"
+        if tag.lower() not in seen_lower:
+            seen_lower.add(tag.lower())
+            found_tags.append(tag)
 
     return found_tags
 
@@ -707,10 +696,10 @@ class PublisherAgent:
 
     # Persona display order and labels — fixed structure, names are the brand identity
     _PERSONA_ORDER = [
-        ("business", "💼  Capitalist Mind"),
-        ("policy",   "🏛️  Government Mind"),
-        ("genz",     "🎓  Generalist Mind"),
-        ("linkedin", "🧠  Tech & Workforce Mind"),
+        ("business", "💼  Founder"),
+        ("policy",   "🏛️  Policy Analyst"),
+        ("linkedin", "🧠  Engineer"),
+        ("genz",     "🎓  Generalist"),
     ]
 
     # Base brand footer — only AIFeeders is hardcoded (it is the app identity).
@@ -720,18 +709,15 @@ class PublisherAgent:
         "🤖 AIFeeders  ·  Daily AI Intelligence  ·  Powered by Jev"
     )
 
-    # Core brand hashtags always present — topic + company tags added dynamically
-    _BASE_HASHTAGS = (
-        "#AI #AINews #GenerativeAI #MachineLearning "
-        "#AIStrategy #AIInnovation #DigitalTransformation"
-    )
+    # Core brand fallback hashtags if zero dynamic tags extracted
+    _BASE_HASHTAGS = "#AI #AINews #AIStrategy #Innovation"
 
     # Character labels for dialogue format
     _CHAR_DIALOGUE: dict[str, tuple[str, str]] = {
         "business": ("💼", "Founder"),
         "policy":   ("🏛️",  "Policy Analyst"),
-        "genz":     ("🎓", "Generalist"),
         "linkedin": ("🧠", "Engineer"),
+        "genz":     ("🎓", "Generalist"),
     }
 
     def __init__(self) -> None:
@@ -787,6 +773,15 @@ class PublisherAgent:
             run_id=run_id,
             article_id=summary.article_id,
         )
+
+        # ── Output Guardrail validation ───────────────────────────────────────
+        out_guard = OutputGuardrail.inspect_output(main_text)
+        if not out_guard.is_safe:
+            logger.warning(
+                "[%s] OutputGuardrail BLOCKED post article=%s violations=%s",
+                run_id, summary.article_id, out_guard.violations,
+            )
+            return self._skipped_result(summary, f"output_guardrail_block:{','.join(out_guard.violations)}")
 
         publication_key = self._make_publication_key(summary.article_id, summary.headline, main_text)
 
@@ -956,73 +951,43 @@ class PublisherAgent:
         ) if ps_scores else []
 
         top_persona = ranked[0][0] if ranked else (active_p[0] if active_p else "linkedin")
-        ranked_keys = [p for p, _ in ranked]
-        all_keys    = ["business", "policy", "genz", "linkedin"]
-        ordered     = ranked_keys + [k for k in all_keys if k not in ranked_keys]
+        # Logical narrative flow: Policy (Rules) → Founder (Capital/Risk) → Engineer (Tech/Reality) → Generalist (Human/Trust)
+        ordered = ["policy", "business", "linkedin", "genz"]
 
         subject = _extract_subject(summary.headline, max_words=4)
 
         # ── Build the post as a list of paragraphs ────────────────────────────
         parts: list[str] = []
 
-        # ── ① HOOK — Media Person opens the story ────────────────────────────
-        hook = _story("hook")
-        if not hook:
-            hook = _build_hook_line(event_type, summary.headline, summary.source,
-                                    sentiment=nd_sentiment)
-        parts.append(_clip_at_sentence(hook, 220))
+        # ── ① HOOK & SETUP — Media Host frames the live debate ────────────────
+        media_opening = _story("media_host_opening") or _story("hook")
+        if not media_opening:
+            media_opening = _build_hook_line(event_type, summary.headline, summary.source, sentiment=nd_sentiment)
+        parts.append(f"🎙️ Media Host:\n\"{_clip_at_sentence(media_opening, 220)}\"")
 
-        # ── ② SITUATION — what actually happened, why now ─────────────────────
-        situation   = _story("what_actually_happened") or summary.why_it_matters.strip()
-        what_changed = _story("what_changed")
-        why_now     = _story("why_now")
+        # ── ② SITUATION & GROUNDING — Dynamic setup generated per news story ───
+        media_setup = _story("media_host_setup")
+        if not media_setup:
+            situation = _story("what_actually_happened") or summary.why_it_matters.strip()
+            analogy   = _story("human_analogy")
+            media_setup = _clip_at_sentence(situation, 280)
+            if analogy:
+                media_setup += f"\n\nThink of it this way: {_clip_at_sentence(analogy, 240)}"
+        parts.append(media_setup)
 
-        situation_block = situation
-        extra = ""
-        if what_changed and why_now and what_changed != situation:
-            extra = f"{why_now} {what_changed}".strip()
-        elif what_changed and what_changed != situation:
-            extra = what_changed
-        elif why_now and why_now != situation:
-            extra = why_now
-
-        parts.append(_clip_at_sentence(situation_block, 300))
-        if extra and extra != situation_block:
-            parts.append(_clip_at_sentence(extra, 260))
-
-        # ── ③ HUMAN ANALOGY — makes the story concrete and relatable ─────────
-        analogy = _story("human_analogy")
-        if analogy:
-            parts.append(_clip_at_sentence(analogy, 260))
-
-        # ── ④ MEDIA INTRO LINE — transition into the dialogue ─────────────────
-        _MEDIA_INTROS = {
-            "product_launch": f"So I asked four people what {subject} actually means for them.",
-            "regulation":     f"So I asked four people what the {subject} story means from where they stand.",
-            "funding":        f"So I asked four people what the {subject} move really means.",
-            "acquisition":    f"So I asked four people what the {subject} deal changes.",
-            "research":       f"So I asked four people what the {subject} finding actually implies.",
-            "other":          f"So I asked four people what this story means for them.",
-        }
-        media_intro = _MEDIA_INTROS.get(event_type, f"So I asked four people what this story means for them.")
-        parts.append(media_intro)
-
-        # ── ⑤ 4 CHARACTER DIALOGUES ───────────────────────────────────────────
-        # Each character: Media Person bridge sentence → character emoji + name → passage
-        # Media Person bridges are dynamically derived from character role.
-        _MEDIA_BRIDGES: dict[str, str] = {
-            "business": "Let's start with the business question.",
-            "policy":   "Now let's look at the governance question.",
-            "genz":     "But there's someone we haven't heard from yet — the person who isn't building AI or regulating it. Just using technology and wondering what any of this means.",
-            "linkedin": "And then there's the engineering question.",
-        }
+        # ── ③ CONVERSATIONAL DIALOGUE ROUND-TABLE ─────────────────────────────
+        transitions_map = {}
+        if isinstance(story, dict):
+            transitions_map = story.get("media_transitions") or {}
+        elif story:
+            transitions_map = getattr(story, "media_transitions", {}) or {}
 
         if personas is not None:
             persona_map = {
-                "business": personas.business,
                 "policy":   personas.policy,
-                "genz":     personas.genz,
+                "business": personas.business,
                 "linkedin": personas.linkedin,
+                "genz":     personas.genz,
             }
 
             active_pm = [
@@ -1035,38 +1000,44 @@ class PublisherAgent:
             ]
 
             if active_pm:
-                parts.append("─" * 20)
+                parts.append("────────────────────")
 
                 for key, p in active_pm:
                     emoji, char_name = self._CHAR_DIALOGUE[key]
-                    bridge = _MEDIA_BRIDGES.get(key, f"Here is the {char_name.lower()} view.")
-                    # Media Person bridge (italicised in spirit — plain text on LinkedIn)
-                    parts.append(bridge)
-                    # Character label + passage
+                    # Dynamic generated transition for this specific case
+                    intro = transitions_map.get(key)
+                    if not intro:
+                        if key == "policy":
+                            intro = f"First, looking at the regulatory and accountability threshold:"
+                        elif key == "business":
+                            intro = f"The founder challenged the commercial premise:"
+                        elif key == "linkedin":
+                            intro = f"The engineer stepped in on the deployment reality:"
+                        else:
+                            intro = f"And the generalist brought it back to real human impact:"
+                    
                     perspective_text = p.perspective.strip()
-                    # Cap each character voice to keep total post within limit
-                    # 4 characters × ~450 chars each ≈ 1800 chars of character content
-                    clipped = _clip_at_sentence(perspective_text, 500)
-                    parts.append(f"{emoji} {char_name}\n{clipped}")
+                    clipped = _clip_at_sentence(perspective_text, 450)
+                    
+                    dialogue_entry = f"{intro}\n\n{emoji} {char_name}:\n\"{clipped}\""
+                    parts.append(dialogue_entry)
 
-                parts.append("─" * 20)
+                parts.append("────────────────────")
 
-        # ── ⑥ MEDIA CLOSE — the big-picture so-what ──────────────────────────
-        perspective  = _story("perspective")
-        second_order = _story("second_order_effect")
-        care         = _story("why_reader_should_care")
+        # ── ④ MEDIA HOST SYNTHESIS & JUDGMENT CONCLUSION ───────────────────────
+        host_synthesis = _story("media_host_synthesis")
+        if not host_synthesis:
+            perspective  = _story("perspective")
+            second_order = _story("second_order_effect")
+            host_synthesis = ""
+            if perspective:
+                host_synthesis += f"{_clip_at_sentence(perspective, 220)} "
+            if second_order and second_order != perspective:
+                host_synthesis += f"{_clip_at_sentence(second_order, 200)}"
+            if not host_synthesis:
+                host_synthesis = "The central question is no longer whether AI can scale, but who carries the liability when it fails."
 
-        # Build a closing thought from available story fields
-        close_parts = []
-        if perspective:
-            close_parts.append(_clip_at_sentence(perspective, 240))
-        if second_order and second_order != perspective:
-            close_parts.append(_clip_at_sentence(second_order, 200))
-        elif care and care != perspective:
-            close_parts.append(_clip_at_sentence(care, 180))
-
-        if close_parts:
-            parts.append("\n".join(close_parts))
+        parts.append(f"🎙️ Media Host (Synthesis):\n\"{host_synthesis.strip()}\"")
 
         # ── ⑦ SOURCE LINK ─────────────────────────────────────────────────────
         _SOURCE_LABELS = {
@@ -1080,15 +1051,16 @@ class PublisherAgent:
         src_label = _SOURCE_LABELS.get(event_type, "Full story →")
         parts.append(f"{src_label} {summary.source_url}")
 
-        # ── ⑧ AUDIENCE QUESTION — future_question or CTA builder ─────────────
-        future_q = _story("future_question")
-        if future_q:
+        # ── ⑧ AUDIENCE QUESTION — Dynamic Media Host Closing Dilemma ───────────
+        audience_cta = _story("media_host_audience_cta") or _story("future_question")
+        if audience_cta:
             cta = (
-                f"{_clip_at_sentence(future_q, 240)}\n\n"
-                f"Drop your take below 👇"
+                f"🎙️ Media Host (To the Audience):\n"
+                f"\"{_clip_at_sentence(audience_cta, 240)}\"\n\n"
+                f"Where do you stand? Drop your take below 👇"
             )
         else:
-            cta = _build_cta(
+            cta_q = _build_cta(
                 headline             = summary.headline,
                 event_type           = event_type,
                 controversy          = controversy,
@@ -1097,18 +1069,29 @@ class PublisherAgent:
                 missing_angle        = str(_intel_sub(intel, "content_opportunity", "missing_angle",        "") or ""),
                 recommended_audience = str(_intel_sub(intel, "content_opportunity", "recommended_audience", "") or ""),
             )
+            cta = (
+                f"🎙️ Media Host (To the Audience):\n"
+                f"{cta_q}"
+            )
 
-        # ── ⑨ Dynamic hashtags ─────────────────────────────────────────────────
+        # ── ⑨ Dynamic SEO & AEO hashtags (100% news-derived) ───────────────────
+        story_seo = []
+        if isinstance(story, dict):
+            story_seo = story.get("dynamic_seo_hashtags") or []
+        elif story:
+            story_seo = getattr(story, "dynamic_seo_hashtags", []) or []
+
         dynamic_tags = _extract_dynamic_tags(
-            headline   = summary.headline,
-            summary    = summary.summary,
-            source     = summary.source,
-            key_points = summary.key_points,
-            event_type = event_type,
-            max_tags   = 6,
+            headline       = summary.headline,
+            summary        = summary.summary,
+            source         = summary.source,
+            key_points     = summary.key_points,
+            event_type     = event_type,
+            story_seo_tags = story_seo,
+            max_tags       = 7,
         )
         tag_line = " ".join(dynamic_tags)
-        hashtag_block = f"{self._BASE_HASHTAGS}  {tag_line}".strip() if tag_line else self._BASE_HASHTAGS
+        hashtag_block = tag_line if tag_line else self._BASE_HASHTAGS
 
         # ── Footer assembly ────────────────────────────────────────────────────
         footer_block = "\n".join([
