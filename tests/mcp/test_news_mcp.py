@@ -1,22 +1,25 @@
 """
-Tests for the GNews-backed News MCP server.
+Tests for the News MCP server (GNews sole provider).
 
 Covers:
-  - health endpoint
-  - _normalise_article mapping
-  - _mock_articles fallback (no API key)
-  - _from_timestamp generates a valid ISO-8601 string
+  - health endpoint fields
+  - _make_article_id stability
+  - _from_timestamp ISO-8601 format
+  - _normalise_gnews_article field mapping
+  - _normalise_article backward-compat alias
+  - _mock_articles fallback (no API keys)
   - news_search_latest mock path
   - news_search_ai_tech mock path
   - news_search_ai_finance mock path
-  - news_search_by_category with AI_FINANCE category
+  - news_search_by_category with AI_FINANCE
+  - news_search_by_category unknown category falls back gracefully
   - news_top_headlines_technology mock path
   - news_fetch_article mock URL guard
+  - CATEGORY_QUERIES coverage
 """
 from __future__ import annotations
 
 import hashlib
-import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -41,8 +44,7 @@ def test_news_mcp_health(news_client):
     assert data["status"] == "healthy"
     assert data["server"] == "news-mcp"
     assert data["provider"] == "gnews"
-    assert "api_key_set" in data
-    assert "max_per_request" in data
+    assert "gnews_api_key_set" in data
 
 
 # ── Unit: helpers ─────────────────────────────────────────────────────────────
@@ -66,6 +68,7 @@ def test_from_timestamp_format():
 
 
 def test_normalise_article_maps_fields():
+    """_normalise_article is aliased to _normalise_gnews_article."""
     from mcp_servers.news_mcp.server import _normalise_article
     raw = {
         "title": "AI Breakthrough",
@@ -84,6 +87,10 @@ def test_normalise_article_maps_fields():
     assert result["content"] == "Full content here"
     assert result["language"] == "en"
     assert result["article_id"].startswith("news-")
+    assert result["provider"] == "gnews"
+    # Sentiment fields are None — resolved downstream by Intelligent News Agent
+    assert result["ai_tag"] is None
+    assert result["sentiment"] is None
 
 
 def test_normalise_article_falls_back_to_description():
@@ -109,10 +116,23 @@ def test_mock_articles_returns_two_items():
     assert any("Finance" in t for t in titles)
 
 
-# ── Integration: MCP tool calls via mock (no real GNews HTTP) ─────────────────
+def test_mock_articles_have_null_sentiment_fields():
+    """Mock articles have None sentiment — resolved downstream by Intelligent News Agent."""
+    from mcp_servers.news_mcp.server import _mock_articles
+    articles = _mock_articles("test query")
+    for a in articles:
+        assert "sentiment" in a
+        assert "ai_tag" in a
+        assert "sentiment_stats" in a
+        assert a["sentiment"] is None
+        assert a["ai_tag"] is None
+        assert a["provider"] == "mock"
+
+
+# ── Integration: tool calls via mock (no real API HTTP) ───────────────────────
 
 @pytest.mark.asyncio
-async def test_news_search_latest_returns_mock_when_no_key(monkeypatch):
+async def test_news_search_latest_returns_mock_when_no_keys(monkeypatch):
     monkeypatch.setenv("GNEWS_API_KEY", "")
     import importlib
     import mcp_servers.news_mcp.server as srv
@@ -125,12 +145,12 @@ async def test_news_search_latest_returns_mock_when_no_key(monkeypatch):
     assert "total" in result
     assert "query" in result
     assert result["query"] == "artificial intelligence"
-    # Mock should return 2 articles
     assert result["total"] == 2
+    assert result["provider"] == "gnews"
 
 
 @pytest.mark.asyncio
-async def test_news_search_ai_tech_returns_mock_when_no_key(monkeypatch):
+async def test_news_search_ai_tech_returns_mock_when_no_keys(monkeypatch):
     monkeypatch.setenv("GNEWS_API_KEY", "")
     import importlib
     import mcp_servers.news_mcp.server as srv
@@ -139,10 +159,11 @@ async def test_news_search_ai_tech_returns_mock_when_no_key(monkeypatch):
     result = await srv.news_search_ai_tech(hours=24, limit=3)
     assert result["category"] == "AI_TECHNOLOGY"
     assert result["total"] >= 1
+    assert result["provider"] == "gnews"
 
 
 @pytest.mark.asyncio
-async def test_news_search_ai_finance_returns_mock_when_no_key(monkeypatch):
+async def test_news_search_ai_finance_returns_mock_when_no_keys(monkeypatch):
     monkeypatch.setenv("GNEWS_API_KEY", "")
     import importlib
     import mcp_servers.news_mcp.server as srv
@@ -151,6 +172,7 @@ async def test_news_search_ai_finance_returns_mock_when_no_key(monkeypatch):
     result = await srv.news_search_ai_finance(hours=24, limit=3)
     assert result["category"] == "AI_FINANCE"
     assert result["total"] >= 1
+    assert result["provider"] == "gnews"
 
 
 @pytest.mark.asyncio
@@ -165,6 +187,7 @@ async def test_news_search_by_category_ai_finance(monkeypatch):
     )
     assert result["category"] == "AI_FINANCE"
     assert "articles" in result
+    assert result["provider"] == "gnews"
 
 
 @pytest.mark.asyncio
@@ -188,6 +211,7 @@ async def test_news_top_headlines_technology_mock(monkeypatch):
     result = await srv.news_top_headlines_technology(limit=3)
     assert result["topic"] == "technology"
     assert "articles" in result
+    assert result["provider"] == "gnews"
 
 
 @pytest.mark.asyncio

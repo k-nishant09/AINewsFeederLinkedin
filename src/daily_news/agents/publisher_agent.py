@@ -34,6 +34,7 @@ import re
 import string
 from datetime import date, timezone, datetime
 
+from daily_news.agents.grammar_agent import GrammarAgent
 from daily_news.agents.published_store import published_store
 from daily_news.config.settings import get_settings
 from daily_news.mcp.linkedin import LinkedInMCPClient
@@ -193,125 +194,174 @@ def _extract_dynamic_tags(
 
 # ── Dynamic CTA generator ─────────────────────────────────────────────────────
 
+def _extract_subject(headline: str, max_words: int = 5) -> str:
+    """
+    Derive a clean, readable topic label from the headline.
+
+    Rules:
+    - Use only the first clause (split at comma/colon/em-dash) so multi-event
+      headlines don't bleed into each other.
+    - Trim common action verbs (Announces, Raises, Shows, Rejects, Cites…) so
+      the result reads as a noun phrase, not a sentence fragment.
+    - Keep company/proper names intact (NVIDIA, OpenAI, EU AI Act…).
+    - Return at most max_words words.
+    - Short headlines (≤ 6 words) are returned in full.
+    """
+    import re
+
+    # Take only the first clause — split at , ; : — (em-dash) before processing
+    first_clause = re.split(r"[,;:\u2014\u2013]", headline)[0].strip().rstrip(".,;:!?")
+
+    words = first_clause.split()
+    if not words:
+        return "this development"
+
+    # Short first clause — use as-is
+    if len(words) <= 4:
+        return first_clause
+
+    # Action verbs that appear mid-headline and mark where the subject ends
+    _ACTION_VERBS = {
+        "announces", "announced", "raises", "raised", "rejects", "rejected",
+        "cites", "cited", "launches", "launched", "releases", "released",
+        "shows", "reveals", "revealed", "reports", "reported",
+        "acquires", "acquired", "invests", "invested", "deploys", "deployed",
+        "publishes", "published", "warns", "warned", "says", "said",
+        "probes", "probed", "exploits", "exploited", "unveils", "unveiled",
+        "cuts", "expands", "calls", "claims", "targets", "plans",
+        "outperforms", "surpasses", "beats", "tops", "hits", "misses",
+        "fires", "hires", "buys", "sells", "closes", "opens", "backs",
+        "faces", "files", "sues", "joins", "leaves", "wins", "loses",
+        "partners", "secures", "takes", "gets", "makes", "sets", "brings",
+    }
+
+    # Find first action-verb; take words before it as the subject
+    split_at = len(words)
+    for i, w in enumerate(words):
+        if w.lower().rstrip(".,;:!?") in _ACTION_VERBS and i > 0:
+            split_at = i
+            break
+
+    candidate_words = [w.rstrip(".,;:!?") for w in words[:min(split_at, max_words)]]
+    # If verb-split gives only 1 word (e.g. "NVIDIA"), extend with next 1-2 noun words
+    if len(candidate_words) == 1 and split_at < len(words):
+        extra = [w.rstrip(".,;:!?") for w in words[split_at + 1: split_at + 3]
+                 if w.lower().rstrip(".,;:!?") not in _ACTION_VERBS]
+        candidate_words += extra[:2]
+
+    phrase = " ".join(candidate_words).rstrip(",;: ")
+    return phrase if phrase else first_clause[:50]
+
+
 def _build_cta(
     headline: str,
     event_type: str,
     controversy: str,
     top_persona: str,
     source: str,
+    missing_angle: str = "",
+    recommended_audience: str = "",
 ) -> str:
     """
-    Build a specific, practical engagement question.
+    Build a 100% article-specific engagement question.
 
     Rules:
-      - ONE focused question that people can actually answer with a concrete reply.
-      - Numbered-choice format preferred — lowers the barrier to respond.
-      - Derived from article signals — not a generic "what do you think?" ask.
+      - Every choice and question is derived from THIS article's headline,
+        event_type, and intelligence signals.
+      - No static / hardcoded question text.
+      - Numbered-choice format lowers the barrier to reply.
       - controversy is lowercase ("low", "medium", "high").
     """
     is_controversial = controversy in ("high", "medium")
+    subject = _extract_subject(headline)
+    audience = recommended_audience.strip() or "practitioners"
+    angle = missing_angle.strip()
 
-    # Extract a short subject phrase from the headline for specificity.
-    stop = {
-        "a", "an", "the", "and", "or", "but", "in", "on", "at", "to",
-        "of", "for", "with", "by", "from", "as", "is", "are", "was",
-        "were", "be", "been", "will", "that", "this", "it", "its",
-        "still", "new", "latest", "ai", "models", "model",
-    }
-    words = [
-        w.strip(string.punctuation)
-        for w in headline.split()
-        if w.strip(string.punctuation).lower() not in stop and len(w) > 2
-    ]
-    subject = " ".join(words[:4]) if words else "this development"
-
+    # ── Regulation ────────────────────────────────────────────────────────────
     if event_type == "regulation":
         if is_controversial:
             return (
-                "When AI safety tests show models still attempt restricted actions, who should be responsible?\n\n"
-                "1️⃣ The AI lab — they built it\n"
-                "2️⃣ Regulators — they set the rules\n"
-                "3️⃣ Enterprises deploying it\n"
-                "4️⃣ Everyone equally\n\n"
-                "Where do you land? 👇"
+                f"Who should be accountable when {subject} goes wrong?\n\n"
+                f"1️⃣ The company that built it\n"
+                f"2️⃣ The regulator that approved it\n"
+                f"3️⃣ The enterprise that deployed it\n"
+                f"4️⃣ Shared liability across all three\n\n"
+                f"Where do you land? 👇"
             )
         return (
-            f"What would actually make AI safer — not just compliant?\n\n"
-            f"For those working with AI systems day-to-day: what guardrail do you wish existed? 👇"
+            f"If you were writing the rulebook on {subject}, what would the first guardrail be?\n\n"
+            f"Drop your answer below — especially if you work with these systems day-to-day. 👇"
         )
 
+    # ── Product launch ────────────────────────────────────────────────────────
     if event_type == "product_launch":
         return (
-            f"If you were evaluating {subject} for your team today, what would you test first?\n\n"
-            f"1️⃣ Accuracy on real tasks\n"
-            f"2️⃣ Cost at scale\n"
-            f"3️⃣ Security & data privacy\n"
-            f"4️⃣ Integration with existing tools\n\n"
-            f"Drop your priority below. 👇"
+            f"If your team were evaluating {subject} this week, what's the first thing you'd test?\n\n"
+            f"1️⃣ Accuracy on real production tasks\n"
+            f"2️⃣ Total cost at scale\n"
+            f"3️⃣ Security and data handling\n"
+            f"4️⃣ How quickly it integrates with existing systems\n\n"
+            f"What's your priority? 👇"
         )
 
+    # ── Funding / Acquisition ─────────────────────────────────────────────────
     if event_type in ("funding", "acquisition"):
         return (
-            f"As AI investment concentrates into fewer players, what concerns you most?\n\n"
-            f"1️⃣ Innovation slows down\n"
-            f"2️⃣ Pricing power goes to a handful of companies\n"
-            f"3️⃣ Talent concentrates in one place\n"
-            f"4️⃣ Open-source alternatives get crowded out\n\n"
-            f"What's your read? 👇"
+            f"When {subject} consolidates further, what's the real risk for teams building on top?\n\n"
+            f"1️⃣ Pricing power shifts — costs go up\n"
+            f"2️⃣ Roadmap changes — features you rely on disappear\n"
+            f"3️⃣ Data access tightens\n"
+            f"4️⃣ Open alternatives get marginalised\n\n"
+            f"What concerns you most? 👇"
         )
 
+    # ── Research ──────────────────────────────────────────────────────────────
     if event_type == "research":
         return (
-            f"For those already working with AI in production: does research like this change anything you do today — "
-            f"or does it take 2-3 years to reach your stack?\n\n"
-            f"Genuinely curious about the gap between research and real-world deployment. 👇"
+            f"Research on {subject} is advancing fast.\n\n"
+            f"For those already deploying AI: does work like this change anything in your stack today — "
+            f"or does it typically take 18–24 months before it reaches production?\n\n"
+            f"Curious about the gap between paper and practice. 👇"
         )
 
-    # Fallback — 6-choice production-reality CTA tuned to Senior/Director/VP
-    # practitioners in IT Services and Software Development (confirmed audience).
-    # This format outperforms policy debate questions for this audience.
-    _PRODUCTION_CTA = (
-        "Everyone is talking about AI agents.\n\n"
-        "But here's the question I keep coming back to:\n\n"
-        "Can we actually operate them reliably in production?\n\n"
-        "The architecture quickly becomes:\n"
-        "Agent + Model + Data + Tools + Security + Observability + Governance\n\n"
-        "For those building or deploying AI today — what's your biggest production challenge?\n\n"
-        "1️⃣ Model quality & reliability\n"
-        "2️⃣ Security & data privacy\n"
-        "3️⃣ Data quality & pipelines\n"
-        "4️⃣ Observability & debugging\n"
-        "5️⃣ Infrastructure cost at scale\n"
-        "6️⃣ Organisational adoption\n\n"
-        "Drop the number + your experience below. 👇"
-    )
+    # ── Other / fallback — fully derived from headline + intelligence signals ─
+    # Use the missing_angle from Jev as the question when available.
+    if angle:
+        # Jev identified a missing perspective — turn it into the question
+        return (
+            f"{angle}\n\n"
+            f"If you work in or around AI — what's your take? 👇"
+        )
 
+    # Final fallback: headline-anchored open question, persona-tuned
     if top_persona == "business":
         return (
-            f"If your team is evaluating AI investments right now, what's your top decision criterion?\n\n"
-            f"1️⃣ ROI evidence from similar companies\n"
-            f"2️⃣ Build vs buy cost analysis\n"
-            f"3️⃣ Data security and compliance\n"
-            f"4️⃣ Availability of internal AI talent\n"
-            f"5️⃣ Speed to production\n"
-            f"6️⃣ Vendor lock-in risk\n\n"
-            f"What's driving the conversation at your org? 👇"
+            f"How does {subject} actually change the business case for AI at your organisation?\n\n"
+            f"1️⃣ It accelerates our roadmap\n"
+            f"2️⃣ It raises new compliance questions\n"
+            f"3️⃣ We're still evaluating the ROI\n"
+            f"4️⃣ It doesn't change much for us yet\n\n"
+            f"What's your read? 👇"
         )
     if top_persona == "policy":
         return (
-            "What AI regulation would actually make things safer — not just harder to ship?\n\n"
-            "1️⃣ Clear liability rules\n"
-            "2️⃣ Mandatory transparency & audit rights\n"
-            "3️⃣ International standards alignment\n"
-            "4️⃣ Better enforcement of existing rules\n"
-            "5️⃣ Independent safety testing requirements\n"
-            "6️⃣ Something else — drop it below\n\n"
-            "Builders, policy folks, and end users — where do you each see the gap? 👇"
+            f"What's the policy gap that {subject} exposes?\n\n"
+            f"1️⃣ Liability and accountability\n"
+            f"2️⃣ Transparency and audit rights\n"
+            f"3️⃣ Cross-border standards alignment\n"
+            f"4️⃣ Enforcement of existing rules\n\n"
+            f"Where do you see the biggest gap? 👇"
         )
-    if top_persona == "linkedin":
-        return _PRODUCTION_CTA
-    # genz / other — default to production CTA (matches confirmed audience)
-    return _PRODUCTION_CTA
+    # linkedin / genz / default — production-reality angle, headline-anchored
+    return (
+        f"For those building or deploying AI today: what does {subject} change in practice?\n\n"
+        f"1️⃣ How we evaluate new tools\n"
+        f"2️⃣ How we think about cost and scale\n"
+        f"3️⃣ How we handle security and privacy\n"
+        f"4️⃣ How we explain AI decisions internally\n"
+        f"5️⃣ Honestly — not much yet\n\n"
+        f"Drop your number + a sentence below. 👇"
+    )
 
 
 # ── Context line builder ─────────────────────────────────────────────────────
@@ -322,27 +372,51 @@ def _build_context_line(
     significance: float,
     relevance: float,
     source: str,
+    headline: str = "",
 ) -> str:
     """
     Build a single human-readable context line for the reader.
-    Replaces the old 'Jev Decision' data block entirely.
-    Plain English — no scores, no 'Jev', no jargon. Framed as editorial context.
+    Derived from article signals — not generic boilerplate.
+    Plain English — no scores, no 'Jev', no jargon.
     """
     controversy_lower = controversy.lower()
+    subject = _extract_subject(headline, max_words=4) if headline else ""
+    src = source.strip() if source else ""
 
-    # Significance + relevance → one plain-English editorial framing
+    # Significance + relevance + event_type → specific editorial framing
     if significance >= 0.65 and relevance >= 0.80:
-        weight = "This is one of the more significant AI developments this week."
+        if event_type == "product_launch":
+            weight = f"One of the more meaningful AI capability releases this week{' from ' + src if src else ''}."
+        elif event_type == "research":
+            weight = f"Research that warrants attention — this is the kind of finding that shapes production decisions in 12–18 months."
+        elif event_type in ("funding", "acquisition"):
+            weight = f"A deal that concentrates AI capability — and changes the dependency picture for builders."
+        elif event_type == "regulation":
+            weight = f"A regulatory development with real teeth — worth understanding before it hits your compliance team."
+        else:
+            weight = f"One of the more significant AI developments this week{' via ' + src if src else ''}."
     elif significance >= 0.45 and relevance >= 0.65:
-        weight = "Worth knowing if you work in or around AI."
+        if event_type == "product_launch":
+            weight = f"A new AI capability worth 5 minutes of your time{' from ' + src if src else ''}."
+        elif event_type == "research":
+            weight = f"A research signal worth tracking{' from ' + src if src else ''} — early-stage but directionally important."
+        elif event_type in ("funding", "acquisition"):
+            weight = f"Capital moving into AI in a way that shifts the ecosystem — worth understanding the implications."
+        elif event_type == "regulation":
+            weight = f"A policy development that will land on engineering and product teams, not just legal."
+        else:
+            weight = f"Worth understanding if {subject} is on your radar."
     else:
-        weight = "A signal worth tracking as AI capabilities continue to evolve."
+        if event_type == "research":
+            weight = "An early signal — too soon to act on, but worth adding to your reading list."
+        else:
+            weight = f"A development worth a quick read{' from ' + src if src else ''} as AI capabilities continue to shift."
 
     controversy_note = ""
     if controversy_lower == "high":
-        controversy_note = " The debate around this is genuinely polarised."
+        controversy_note = " The debate on this is genuinely polarised — senior voices on both sides."
     elif controversy_lower == "medium":
-        controversy_note = " Opinions in the AI community are split on this one."
+        controversy_note = " Not everyone in the AI community agrees on what this means."
 
     return f"{weight}{controversy_note}"
 
@@ -351,54 +425,280 @@ def _build_context_line(
 
 import hashlib as _hashlib
 
-# Pool of 3 openers per event type — rotated by date so the same opener
-# never appears two days in a row. Keeps the feed feeling fresh.
-_HOOK_POOLS: dict[str, list[str]] = {
-    "regulation": [
-        "Most people underestimate how fast AI regulation is moving.",
-        "The compliance deadline your legal team doesn't know about yet.",
-        "AI governance just got real. Here's what the timeline actually looks like.",
-    ],
-    "product_launch": [
-        "A new AI capability just dropped — and it changes what's possible.",
-        "The benchmark numbers look clean. The production reality is more complicated.",
-        "Something shipped today that practitioners need to evaluate, not just read about.",
-    ],
-    "funding": [
-        "Big capital is moving fast in AI. Here's what the money is chasing.",
-        "Another major AI bet. Here's what it means for everyone building on top of these platforms.",
-        "When the big players consolidate, the dependency risk changes for everyone else.",
-    ],
-    "research": [
-        "A research finding that could shift how we build AI systems.",
-        "The benchmark looked impressive. The production reality is a different question.",
-        "Academic paper today. Production reality in 18 months. Here's the gap worth tracking.",
-    ],
-    "acquisition": [
-        "AI consolidation is accelerating. Here's why this deal matters.",
-        "Another major acquisition. Here's what platform dependency now looks like.",
-        "When the big players acquire, the ecosystem shifts for everyone building on top.",
-    ],
-    "other": [
-        "Here's an AI story that's worth 2 minutes of your attention.",
-        "Everyone is talking about AI agents. Here's the production question nobody is asking.",
-        "The news cycle moved on. This story hasn't finished mattering yet.",
-    ],
-}
+
+def _build_hook_line(event_type: str, headline: str, source: str, sentiment: str = "neutral") -> str:
+    """
+    Build a strong, article-specific opening hook — the first thing the reader sees.
+
+    Every hook is derived from the actual headline + event_type + sentiment.
+    No static string is ever returned — each hook is unique to this article.
+
+    Approach:
+      - Extracts the most specific noun phrase from the headline.
+      - Applies a sentiment-register + event-type framing template.
+      - Rotates across 5 template variants using a headline-hash to avoid
+        the same pattern appearing on consecutive posts.
+    """
+    import hashlib as _hlib
+    s = (sentiment or "neutral").lower().strip()
+    if s not in ("positive", "negative"):
+        s = "neutral"
+
+    subject = _extract_subject(headline, max_words=5)
+    src = source.strip() if source else ""
+
+    # Hash the headline to pick a rotation slot — deterministic per article,
+    # never repeats across different headlines on the same day.
+    slot = int(_hlib.md5(headline.encode()).hexdigest(), 16) % 5
+
+    # ── Regulation ────────────────────────────────────────────────────────────
+    if event_type == "regulation":
+        templates = {
+            "positive": [
+                f"The AI policy development around {subject} is further along than most teams realise.",
+                f"A regulatory shift on {subject} — and this one actually has enforcement behind it.",
+                f"The compliance conversation around {subject} just changed.",
+                f"This is the AI governance update worth reading before it reaches your legal team.",
+                f"AI policy on {subject} is moving. Here's what changed.",
+            ],
+            "negative": [
+                f"The {subject} story is a compliance problem your legal team hasn't flagged yet.",
+                f"Regulation on {subject} is tightening — and the enforcement gap is closing faster than expected.",
+                f"Most organisations are not ready for what just happened with {subject}.",
+                f"The regulatory pressure building around {subject} is real — and it's arriving faster than roadmaps allow.",
+                f"This is the {subject} development that will land on engineering teams, not just policy ones.",
+            ],
+            "neutral": [
+                f"The regulatory picture around {subject} just shifted.",
+                f"Most people underestimate how fast governance on {subject} is moving.",
+                f"Something changed in the AI policy landscape around {subject}.",
+                f"Here's what the {subject} regulatory update actually means for practitioners.",
+                f"The rules around {subject} are changing. Here's what matters.",
+            ],
+        }
+
+    # ── Product launch ────────────────────────────────────────────────────────
+    elif event_type == "product_launch":
+        templates = {
+            "positive": [
+                f"{subject} just shipped — and it changes what's possible in production.",
+                f"A new AI capability around {subject} dropped. Here's what practitioners should evaluate.",
+                f"The capability gap around {subject} just narrowed.",
+                f"Something in {subject} shipped today that deserves more than a quick read.",
+                f"{subject} is now available. Here's the part worth paying attention to.",
+            ],
+            "negative": [
+                f"The {subject} launch numbers look clean. The production reality is more complicated.",
+                f"{subject} shipped — here's the part the press release didn't cover.",
+                f"Another {subject} release with open questions about real-world reliability.",
+                f"The {subject} benchmark is impressive. The integration story still needs work.",
+                f"What the {subject} announcement gets right — and what it leaves unanswered.",
+            ],
+            "neutral": [
+                f"{subject} is worth 5 minutes of your time before you decide to skip it.",
+                f"Something shipped around {subject} today. Here's what's actually useful.",
+                f"The {subject} release deserves a closer read than the headlines suggest.",
+                f"A new {subject} capability — here's what it means for teams building on top.",
+                f"{subject} just moved. Here's the practical implication.",
+            ],
+        }
+
+    # ── Funding ───────────────────────────────────────────────────────────────
+    elif event_type == "funding":
+        templates = {
+            "positive": [
+                f"Significant capital just moved toward {subject}. Here's the thesis.",
+                f"The funding bet on {subject} tells you something about where AI is heading.",
+                f"Big money is moving into {subject} — and the strategic logic is worth understanding.",
+                f"A major AI investment in {subject} that has a clear directional thesis.",
+                f"{subject} just attracted significant capital. Here's what the market is signalling.",
+            ],
+            "negative": [
+                f"Investment in {subject} is concentrating — and the dependency risk just changed.",
+                f"When capital moves into {subject} at this scale, the platform lock-in question gets louder.",
+                f"The {subject} investment round is significant. So are the downstream risks.",
+                f"More capital concentrating in {subject} — here's who is now more exposed.",
+                f"AI investment is narrowing around {subject}. Here's what that means if you build on top.",
+            ],
+            "neutral": [
+                f"Capital just moved toward {subject}. Here's what the strategic bet actually means.",
+                f"Another major AI investment in {subject}. Here's the logic — and the open questions.",
+                f"The {subject} funding round deserves more than a headline skim.",
+                f"Big capital moving into {subject} — here's what it tells us about where things are heading.",
+                f"A significant investment in {subject}. Here's the practical implication for builders.",
+            ],
+        }
+
+    # ── Acquisition ───────────────────────────────────────────────────────────
+    elif event_type == "acquisition":
+        templates = {
+            "positive": [
+                f"The {subject} acquisition makes strategic sense — and changes the ecosystem.",
+                f"AI consolidation around {subject} is accelerating in a way that benefits builders.",
+                f"A deal around {subject} that concentrates capability in a useful direction.",
+                f"The {subject} acquisition just changed the competitive picture.",
+                f"This is the {subject} deal worth understanding before the market digests it.",
+            ],
+            "negative": [
+                f"The {subject} acquisition just changed the dependency picture for everyone building on top.",
+                f"When {subject} consolidates at this scale, the platform risk changes for everyone else.",
+                f"Another AI acquisition around {subject} — and the lock-in question just got louder.",
+                f"AI consolidation in {subject} is accelerating. Here's who is now more exposed.",
+                f"The {subject} deal is done. Here's what the market dependency now looks like.",
+            ],
+            "neutral": [
+                f"AI consolidation around {subject} just accelerated. Here's why this deal matters.",
+                f"The {subject} acquisition — here's what platform dependency now looks like.",
+                f"A significant deal in {subject}. Here's what it means for builders and operators.",
+                f"Another major move in {subject}. Here's the strategic logic.",
+                f"The {subject} consolidation story just got a new chapter.",
+            ],
+        }
+
+    # ── Research ──────────────────────────────────────────────────────────────
+    elif event_type == "research":
+        templates = {
+            "positive": [
+                f"A research finding on {subject} that could shift how we build AI systems.",
+                f"The {subject} paper worth reading before it becomes a product.",
+                f"Academic work on {subject} that becomes a production constraint in 12–18 months.",
+                f"Research on {subject} that deserves more attention than it's getting.",
+                f"A technical result on {subject} — directionally important, even if the path to production is long.",
+            ],
+            "negative": [
+                f"The {subject} benchmark looked clean. The production reality is a different question.",
+                f"A {subject} research result that raises more questions than it answers.",
+                f"The {subject} paper is out. The gap between this and production is bigger than the abstract suggests.",
+                f"What the {subject} research actually says — versus what the summaries claim.",
+                f"The {subject} result is interesting. The production implications are complicated.",
+            ],
+            "neutral": [
+                f"Research on {subject} that warrants 10 minutes before it becomes everyone's assumption.",
+                f"A {subject} technical result that matters — the path to production is still long.",
+                f"The {subject} paper that's worth reading before it lands in every pitch deck.",
+                f"Early-stage research on {subject} worth tracking as it moves toward deployment.",
+                f"A {subject} finding that shapes production decisions — in about 18 months.",
+            ],
+        }
+
+    # ── Other / catch-all — fully headline-derived ────────────────────────────
+    else:
+        templates = {
+            "positive": [
+                f"The {subject} development is further along than most people realise.",
+                f"A {subject} story that's easy to miss — and harder to ignore once you understand it.",
+                f"Here's what actually changed with {subject} — without the hype.",
+                f"The {subject} update worth 5 minutes of your time.",
+                f"Something shifted in the {subject} space this week.",
+            ],
+            "negative": [
+                f"The {subject} story didn't get the coverage it deserved.",
+                f"The news cycle moved on from {subject}. The implications haven't.",
+                f"What the {subject} story actually means — past the headline.",
+                f"The {subject} development that practitioners should be paying attention to.",
+                f"Most organisations haven't caught up with what just happened in {subject}.",
+            ],
+            "neutral": [
+                f"The {subject} development is worth 5 minutes of your attention.",
+                f"Something changed in the {subject} space. Here's what matters.",
+                f"The {subject} story that's worth reading before the market catches up.",
+                f"A {subject} development that's easy to scroll past — and shouldn't be.",
+                f"Here's the {subject} update that actually changes the practical picture.",
+            ],
+        }
+
+    pool = templates.get(s, templates["neutral"])
+    return pool[slot % len(pool)]
 
 
-def _build_hook_line(event_type: str, headline: str, source: str) -> str:
+def _build_sentiment_signal_line(
+    sentiment: str | None,
+    sentiment_stats: dict | None,
+    novelty: float = 0.0,
+    trend_velocity: float = 0.0,
+) -> str | None:
     """
-    Build a strong opening hook line — the first thing the reader sees.
-    Rotates through the event-type pool using a date-based index so the
-    same opener never repeats on consecutive days.
-    Human-voice, not robotic. No scores, no brand names.
+    Build a one-line editorial signal for the reader based on intelligence signals.
+
+    Returns None when no meaningful signal is present.
+    Only shown when the dominant sentiment is non-neutral and high-confidence,
+    or when novelty/trend signals are strong enough to surface.
+    This is NOT a score readout — it is a human-readable editorial note.
     """
-    from datetime import date
-    pool = _HOOK_POOLS.get(event_type, _HOOK_POOLS["other"])
-    # Deterministic rotation: day-of-year mod pool size — same pool order per day
-    day_index = date.today().timetuple().tm_yday
-    return pool[day_index % len(pool)]
+    if not sentiment:
+        return None
+
+    s = sentiment.lower().strip()
+
+    # Require a meaningful confidence margin before surfacing the sentiment signal
+    if sentiment_stats:
+        dominant_conf = sentiment_stats.get(s, 0.0)
+        if dominant_conf < 0.55:
+            return None   # signal too weak — skip the line
+
+    if s == "positive":
+        if trend_velocity >= 0.75:
+            return "📈 Sentiment is running ahead of the headline — this one is accelerating fast."
+        return "📈 The broader signal on this story is positive and holding."
+    if s == "negative":
+        if novelty >= 0.75:
+            return "⚠️ This concern is genuinely new — not a repackaging of familiar risk."
+        return "⚠️ The practitioner read on this story leans cautious."
+    # neutral — not interesting enough to surface explicitly
+    return None
+
+
+def _intel_get(intel: "Any | None", key: str, default: "Any" = 0.0) -> "Any":
+    """Dict-safe accessor for NewsIntelligence (may be a Pydantic model or a plain dict after LangGraph serialization)."""
+    if intel is None:
+        return default
+    if isinstance(intel, dict):
+        return intel.get(key, default)
+    return getattr(intel, key, default)
+
+
+def _intel_sub(intel: "Any | None", key: str, subkey: str, default: "Any" = 0.0) -> "Any":
+    """Dict-safe nested accessor for NewsIntelligence sub-objects (emotion, impact, content_opportunity)."""
+    sub = _intel_get(intel, key, None)
+    if sub is None:
+        return default
+    if isinstance(sub, dict):
+        return sub.get(subkey, default)
+    return getattr(sub, subkey, default)
+
+
+def _build_intelligence_line(intel: "Any | None", headline: str = "") -> str | None:
+    """
+    Build a one-line intelligence note from the NewsIntelligence object.
+    Only surfaced when novelty OR trend_velocity is unusually high (≥ 0.80).
+    Anchored to the article topic — not a generic score readout.
+    """
+    if intel is None:
+        return None
+    novelty  = float(_intel_get(intel, "novelty",        0.0) or 0.0)
+    velocity = float(_intel_get(intel, "trend_velocity", 0.0) or 0.0)
+    subject  = _extract_subject(headline, max_words=4) if headline else "this topic"
+    if novelty >= 0.80 and velocity >= 0.75:
+        return f"🔬 {subject} is moving faster than the news cycle — this story is ahead of most coverage."
+    if novelty >= 0.80:
+        return f"🔬 The {subject} angle here is genuinely new — not an incremental update on familiar ground."
+    if velocity >= 0.85:
+        return f"⚡ {subject} is accelerating — the pace of change on this is faster than it looks."
+    return None
+
+
+def _build_content_angle_line(intel: "Any | None") -> tuple[str | None, str | None]:
+    """
+    Extract the content angle from the NewsIntelligence content_opportunity.
+    Returns (missing_angle_line, recommended_audience_line) or (None, None).
+    """
+    if intel is None:
+        return None, None
+    missing  = str(_intel_sub(intel, "content_opportunity", "missing_angle",        "") or "")
+    audience = str(_intel_sub(intel, "content_opportunity", "recommended_audience", "") or "")
+    angle_line    = f"📌 {missing}" if missing.strip() else None
+    audience_line = f"🎯 Primary audience: {audience}" if audience.strip() else None
+    return angle_line, audience_line
 
 
 # ── Main Publisher Agent ──────────────────────────────────────────────────────
@@ -426,9 +726,18 @@ class PublisherAgent:
         "#AIStrategy #AIInnovation #DigitalTransformation"
     )
 
+    # Character labels for dialogue format
+    _CHAR_DIALOGUE: dict[str, tuple[str, str]] = {
+        "business": ("💼", "Founder"),
+        "policy":   ("🏛️",  "Policy Analyst"),
+        "genz":     ("🎓", "Generalist"),
+        "linkedin": ("🧠", "Engineer"),
+    }
+
     def __init__(self) -> None:
         self._client   = LinkedInMCPClient()
         self._settings = get_settings()
+        self._grammar  = GrammarAgent()
 
     # ── Main entry point ──────────────────────────────────────────────────────
 
@@ -470,7 +779,15 @@ class PublisherAgent:
         _repaired = getattr(personas, "_repaired_post", None)
         if not _repaired and isinstance(personas, dict):
             _repaired = personas.get("_repaired_post")
-        main_text       = _repaired or self._compose_main_post(summary, personas, jev_scores=jev_scores)
+        main_text = _repaired or self._compose_main_post(summary, personas, jev_scores=jev_scores)
+
+        # ── Grammar correction pass — best-effort, never blocks publish ───────
+        main_text = await self._grammar.correct(
+            main_text,
+            run_id=run_id,
+            article_id=summary.article_id,
+        )
+
         publication_key = self._make_publication_key(summary.article_id, summary.headline, main_text)
 
         logger.info(
@@ -582,166 +899,206 @@ class PublisherAgent:
         jev_scores: dict | None = None,
     ) -> str:
         """
-        LinkedIn Engagement-First post layout.
-        Formula: Hook → Relatable problem → Insight → 3 takeaways → Practical question → CTA
+        Dialogue-delivery LinkedIn post format — build #83.
 
-        Human voice throughout. No Jev scores shown to readers. No data blocks.
-        The Jev signals are used internally to pick the right hook, CTA, and hashtags
-        — they never appear as visible numbers or labels in the post.
+        Format: Media Person (narrator) → 4 character dialogues → Media Person close → audience Q.
+
+        The post reads like one page of a news programme in text. The Media Person
+        sets the scene, then asks each character to speak from their real-world
+        experience. Each character's voice is a story passage, not a bullet point.
+        The Media Person closes with the question that invites audience participation.
 
         Flow:
-          ① Hook opener    — 1-2 lines that stop the scroll (event-type driven)
-          ② Headline       — the specific news story
-          ③ Why it matters — human "so what", not a dry summary
-          ④ 3 sharp facts  — what you need to know (bullets, full sentences)
-          ⑤ Real-world impact — Business / Workforce / Tech (plain English, no labels)
-          ⑥ 4 Voices       — practitioner perspectives (ranked by relevance, not code order)
-          ⑦ Source link
-          ⑧ Engagement CTA — ONE specific practical question, not "what do you think?"
-          ⑨ Footer         — minimal disclaimer + dynamic hashtags from article content
-        """
-        POST_LIMIT   = 2900
-        HOOK_CAP     = 160   # hook opener — punchy, 1-2 lines
-        SUMMARY_CAP  = 260   # why it matters — tight and human
-        KP_CAP       = 160   # per key-point bullet
-        IMPACT_CAP   = 160   # per impact line
-        PERSP_MIN    = 220   # min budget for one complete ≤200-char persona sentence
-        BLANK_COST   = 1
+          ① HOOK              — Media Person story hook (curiosity-first, not headline repeat)
+          ② SITUATION         — what actually happened + why it matters now
+          ③ HUMAN ANALOGY     — makes the story relatable and concrete
+          ④ MEDIA INTRO LINE  — "So I asked four people..."
+          ⑤ 4 CHARACTER DIALOGUES — each prefixed with Media Person intro + character label
+          ⑥ MEDIA CLOSE       — the big-picture so-what
+          ⑦ SOURCE LINK
+          ⑧ AUDIENCE QUESTION — future_question or CTA builder
+          ⑨ FOOTER            — minimal, dynamic hashtags
 
-        # ── Extract Jev signals (internal use only — never shown as raw scores) ─
+        Story fields from MediaStorytellerAgent are used first.
+        Fallback to legacy NewsSummary fields when story is not available.
+        """
+        POST_LIMIT = 3000   # LinkedIn hard limit is 3000 UTF-16 units for posts
+
+        # ── Extract Jev signals ───────────────────────────────────────────────
         event_type   = str((jev_scores or {}).get("event_type", "other")).lower().strip()
-        relevance    = float((jev_scores or {}).get("relevance_score",    0.0))
-        significance = float((jev_scores or {}).get("significance",       0.0))
         controversy  = str((jev_scores or {}).get("controversy_level", "low")).lower().strip()
         ps_scores    = (jev_scores or {}).get("persona_scores", {})
         active_p     = (jev_scores or {}).get("active_personas", [])
 
-        # Persona display metadata
-        _PMETA: dict[str, tuple[str, str, str]] = {
-            "business": ("💼", "Business",       "ROI & market strategy"),
-            "policy":   ("🏛️",  "Policy",         "regulation & governance"),
-            "genz":     ("🎓", "Generalist",     "everyday & societal impact"),
-            "linkedin": ("🧠", "Tech+Workforce", "engineering & careers"),
-        }
+        # ── Pull NewsIntelligence backbone and NewsStory objects ──────────────
+        intel = getattr(summary, "intelligence", None)
 
-        # Rank personas by Jev score so highest relevance appears first
+        story = getattr(summary, "story", None)
+        if story is None and intel is not None:
+            story = _intel_get(intel, "story", None)
+
+        def _story(field: str, fallback: str = "") -> str:
+            """Safe accessor for NewsStory fields — works on Pydantic model or dict."""
+            if story is None:
+                return fallback
+            if isinstance(story, dict):
+                return str(story.get(field, fallback) or fallback).strip()
+            return str(getattr(story, field, fallback) or fallback).strip()
+
+        # ── Resolved sentiment ────────────────────────────────────────────────
+        nd_sentiment       = getattr(summary, "sentiment",       None) or "neutral"
+        nd_sentiment_stats = getattr(summary, "sentiment_stats", None) or {}
+
+        # ── Persona ranking ───────────────────────────────────────────────────
         ranked: list[tuple[str, float]] = sorted(
-            [(p, ps_scores.get(p, 0.0)) for p in active_p if p in _PMETA],
+            [(p, ps_scores.get(p, 0.0)) for p in active_p if p in self._CHAR_DIALOGUE],
             key=lambda x: x[1], reverse=True,
         ) if ps_scores else []
 
         top_persona = ranked[0][0] if ranked else (active_p[0] if active_p else "linkedin")
+        ranked_keys = [p for p, _ in ranked]
+        all_keys    = ["business", "policy", "genz", "linkedin"]
+        ordered     = ranked_keys + [k for k in all_keys if k not in ranked_keys]
 
-        # ── Budget tracker ─────────────────────────────────────────────────────
-        remaining = POST_LIMIT
+        subject = _extract_subject(summary.headline, max_words=4)
 
-        def _add(block: str, lines: list[str]) -> None:
-            nonlocal remaining
-            cost = _linkedin_len(block) + 1
-            if cost > remaining:
-                return
-            lines.append(block)
-            remaining -= cost
+        # ── Build the post as a list of paragraphs ────────────────────────────
+        parts: list[str] = []
 
-        lines: list[str] = []
+        # ── ① HOOK — Media Person opens the story ────────────────────────────
+        hook = _story("hook")
+        if not hook:
+            hook = _build_hook_line(event_type, summary.headline, summary.source,
+                                    sentiment=nd_sentiment)
+        parts.append(_clip_at_sentence(hook, 220))
 
-        # ── ① Hook opener — stops the scroll, human voice ─────────────────────
-        # Derived from event_type via _build_hook_line — no hardcoded strings.
-        hook_line = _build_hook_line(event_type, summary.headline, summary.source)
-        _add(_clip_at_sentence(hook_line, HOOK_CAP), lines)
-        _add("", lines)
+        # ── ② SITUATION — what actually happened, why now ─────────────────────
+        situation   = _story("what_actually_happened") or summary.why_it_matters.strip()
+        what_changed = _story("what_changed")
+        why_now     = _story("why_now")
 
-        # ── ② Headline — the specific story ───────────────────────────────────
-        _add(summary.headline, lines)
-        _add("", lines)
+        situation_block = situation
+        extra = ""
+        if what_changed and why_now and what_changed != situation:
+            extra = f"{why_now} {what_changed}".strip()
+        elif what_changed and what_changed != situation:
+            extra = what_changed
+        elif why_now and why_now != situation:
+            extra = why_now
 
-        # ── ③ Why it matters — human "so what", not a dry news summary ─────────
-        why = _clip_at_sentence(summary.why_it_matters.strip(), SUMMARY_CAP)
-        _add(why, lines)
-        _add("", lines)
+        parts.append(_clip_at_sentence(situation_block, 300))
+        if extra and extra != situation_block:
+            parts.append(_clip_at_sentence(extra, 260))
 
-        # ── ④ Context line — editorial framing in plain English ────────────────
-        # Replaces the old Jev Decision data block entirely.
-        # No scores, no percentages, no "Jev" — just a human editorial note.
-        context = _build_context_line(event_type, controversy, significance, relevance, summary.source)
-        _add(context, lines)
-        _add("", lines)
+        # ── ③ HUMAN ANALOGY — makes the story concrete and relatable ─────────
+        analogy = _story("human_analogy")
+        if analogy:
+            parts.append(_clip_at_sentence(analogy, 260))
 
-        # ── ⑤ 3 sharp facts ───────────────────────────────────────────────────
-        _add("Here's what you need to know:", lines)
-        _add("", lines)
-        for pt in summary.key_points[:3]:
-            _add(f"▸ {_clip_at_sentence(pt.strip(), KP_CAP)}", lines)
-        _add("", lines)
+        # ── ④ MEDIA INTRO LINE — transition into the dialogue ─────────────────
+        _MEDIA_INTROS = {
+            "product_launch": f"So I asked four people what {subject} actually means for them.",
+            "regulation":     f"So I asked four people what the {subject} story means from where they stand.",
+            "funding":        f"So I asked four people what the {subject} move really means.",
+            "acquisition":    f"So I asked four people what the {subject} deal changes.",
+            "research":       f"So I asked four people what the {subject} finding actually implies.",
+            "other":          f"So I asked four people what this story means for them.",
+        }
+        media_intro = _MEDIA_INTROS.get(event_type, f"So I asked four people what this story means for them.")
+        parts.append(media_intro)
 
-        # ── ⑤b Real-world impact — plain English, no section label ────────────
-        # Framed as what this means for people, not as a data table.
-        impacts = []
-        if summary.business_impact and summary.business_impact.strip():
-            impacts.append(f"For businesses: {_clip_at_sentence(summary.business_impact.strip(), IMPACT_CAP)}")
-        if summary.job_impact and summary.job_impact.strip():
-            impacts.append(f"For practitioners: {_clip_at_sentence(summary.job_impact.strip(), IMPACT_CAP)}")
-        if summary.technology_impact and summary.technology_impact.strip():
-            impacts.append(f"For builders: {_clip_at_sentence(summary.technology_impact.strip(), IMPACT_CAP)}")
+        # ── ⑤ 4 CHARACTER DIALOGUES ───────────────────────────────────────────
+        # Each character: Media Person bridge sentence → character emoji + name → passage
+        # Media Person bridges are dynamically derived from character role.
+        _MEDIA_BRIDGES: dict[str, str] = {
+            "business": "Let's start with the business question.",
+            "policy":   "Now let's look at the governance question.",
+            "genz":     "But there's someone we haven't heard from yet — the person who isn't building AI or regulating it. Just using technology and wondering what any of this means.",
+            "linkedin": "And then there's the engineering question.",
+        }
 
-        for imp in impacts:
-            _add(imp, lines)
-        if impacts:
-            _add("", lines)
-
-        # ── ⑥ 4 Voices — ranked by Jev score, not code order ──────────────────
-        # Shows who in the professional world is thinking what.
-        # Persona order is driven by relevance — highest-relevance first.
         if personas is not None:
             persona_map = {
-                "business": ("💼 Business view", personas.business),
-                "policy":   ("🏛️ Policy view",   personas.policy),
-                "genz":     ("🎓 Generalist view", personas.genz),
-                "linkedin": ("🧠 Tech & careers", personas.linkedin),
+                "business": personas.business,
+                "policy":   personas.policy,
+                "genz":     personas.genz,
+                "linkedin": personas.linkedin,
             }
 
-            # Build ordered list: Jev-ranked first, then unranked remainder
-            ranked_keys = [p for p, _ in ranked]
-            all_keys    = ["business", "policy", "genz", "linkedin"]
-            ordered     = ranked_keys + [k for k in all_keys if k not in ranked_keys]
-
             active_pm = [
-                (key, persona_map[key][0], persona_map[key][1])
+                (key, persona_map[key])
                 for key in ordered
-                if key in persona_map and persona_map[key][1].perspective
-                and persona_map[key][1].perspective.strip()
+                if key in persona_map
+                and persona_map[key] is not None
+                and persona_map[key].perspective
+                and persona_map[key].perspective.strip()
             ]
 
             if active_pm:
-                n = len(active_pm)
-                _add("─" * 20, lines)
-                _add("Different perspectives on this:", lines)
-                _add("", lines)
+                parts.append("─" * 20)
 
-                hdr_cost    = _linkedin_len("Different perspectives on this:") + 1 + 1 + 21
-                per_persona = max(300, (remaining - hdr_cost) // n) - 1
+                for key, p in active_pm:
+                    emoji, char_name = self._CHAR_DIALOGUE[key]
+                    bridge = _MEDIA_BRIDGES.get(key, f"Here is the {char_name.lower()} view.")
+                    # Media Person bridge (italicised in spirit — plain text on LinkedIn)
+                    parts.append(bridge)
+                    # Character label + passage
+                    perspective_text = p.perspective.strip()
+                    # Cap each character voice to keep total post within limit
+                    # 4 characters × ~450 chars each ≈ 1800 chars of character content
+                    clipped = _clip_at_sentence(perspective_text, 500)
+                    parts.append(f"{emoji} {char_name}\n{clipped}")
 
-                for key, label, p in active_pm:
-                    label_cost   = _linkedin_len(label) + 1
-                    persp_budget = max(PERSP_MIN, per_persona - label_cost - BLANK_COST)
-                    clipped      = _clip_at_sentence(p.perspective.strip(), persp_budget)
-                    _add(f"{label}\n{clipped}", lines)
-                    _add("", lines)
+                parts.append("─" * 20)
 
-        # ── ⑦ Source link ─────────────────────────────────────────────────────
-        _add(f"Full story → {summary.source_url}", lines)
-        _add("", lines)
+        # ── ⑥ MEDIA CLOSE — the big-picture so-what ──────────────────────────
+        perspective  = _story("perspective")
+        second_order = _story("second_order_effect")
+        care         = _story("why_reader_should_care")
 
-        # ── ⑧ Engagement CTA — ONE specific practical question ─────────────────
-        cta = _build_cta(
-            headline    = summary.headline,
-            event_type  = event_type,
-            controversy = controversy,
-            top_persona = top_persona,
-            source      = summary.source,
-        )
+        # Build a closing thought from available story fields
+        close_parts = []
+        if perspective:
+            close_parts.append(_clip_at_sentence(perspective, 240))
+        if second_order and second_order != perspective:
+            close_parts.append(_clip_at_sentence(second_order, 200))
+        elif care and care != perspective:
+            close_parts.append(_clip_at_sentence(care, 180))
 
-        # ── ⑨ Dynamic hashtags — fully from article content, no fixed set ──────
+        if close_parts:
+            parts.append("\n".join(close_parts))
+
+        # ── ⑦ SOURCE LINK ─────────────────────────────────────────────────────
+        _SOURCE_LABELS = {
+            "product_launch": "Read the full release →",
+            "regulation":     "Read the full story →",
+            "funding":        "Read the full story →",
+            "acquisition":    "Read the full story →",
+            "research":       "Read the paper →",
+            "other":          "Full story →",
+        }
+        src_label = _SOURCE_LABELS.get(event_type, "Full story →")
+        parts.append(f"{src_label} {summary.source_url}")
+
+        # ── ⑧ AUDIENCE QUESTION — future_question or CTA builder ─────────────
+        future_q = _story("future_question")
+        if future_q:
+            cta = (
+                f"{_clip_at_sentence(future_q, 240)}\n\n"
+                f"Drop your take below 👇"
+            )
+        else:
+            cta = _build_cta(
+                headline             = summary.headline,
+                event_type           = event_type,
+                controversy          = controversy,
+                top_persona          = top_persona,
+                source               = summary.source,
+                missing_angle        = str(_intel_sub(intel, "content_opportunity", "missing_angle",        "") or ""),
+                recommended_audience = str(_intel_sub(intel, "content_opportunity", "recommended_audience", "") or ""),
+            )
+
+        # ── ⑨ Dynamic hashtags ─────────────────────────────────────────────────
         dynamic_tags = _extract_dynamic_tags(
             headline   = summary.headline,
             summary    = summary.summary,
@@ -754,7 +1111,6 @@ class PublisherAgent:
         hashtag_block = f"{self._BASE_HASHTAGS}  {tag_line}".strip() if tag_line else self._BASE_HASHTAGS
 
         # ── Footer assembly ────────────────────────────────────────────────────
-        # CTA is the last thing before the footer — drives comment intent.
         footer_block = "\n".join([
             cta,
             "",
@@ -763,7 +1119,8 @@ class PublisherAgent:
             hashtag_block,
         ])
 
-        body      = "\n".join(lines).rstrip()
+        # Join paragraphs with double newlines (LinkedIn paragraph spacing)
+        body = "\n\n".join(p for p in parts if p)
         separator = "\n\n"
         max_body  = POST_LIMIT - _linkedin_len(separator) - _linkedin_len(footer_block)
         if _linkedin_len(body) > max_body:

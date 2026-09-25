@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -20,6 +20,12 @@ class NewsCategory(str, Enum):
     UNCATEGORIZED = "UNCATEGORIZED"
 
 
+class NewsSentiment(str, Enum):
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+    NEUTRAL = "neutral"
+
+
 class NewsArticle(BaseModel):
     article_id: str
     title: str
@@ -32,6 +38,25 @@ class NewsArticle(BaseModel):
     content_hash: str
     credibility_score: Optional[float] = None
     language: str = "en"
+
+    # ── Sentiment / analysis fields ───────────────────────────────────────────
+    # Populated downstream by the Intelligent News Agent (sentiment_resolver
+    # + Jev inference) — not at fetch time.  GNews does not return these fields.
+    #
+    # ai_tag:          AI-classified tag / category string
+    # sentiment:       overall article sentiment
+    # sentiment_stats: per-class probability distribution
+    # ai_region:       AI-classified geographic region (future)
+    # ai_org:          AI-extracted organisation name  (future)
+    ai_tag: Optional[str] = None
+    sentiment: Optional[NewsSentiment] = None
+    sentiment_stats: Optional[dict[str, Any]] = None
+    ai_region: Optional[str] = None
+    ai_org: Optional[str] = None
+
+    # ── Source provider ───────────────────────────────────────────────────────
+    # "gnews" | "mock"
+    provider: Optional[str] = None
 
 
 class NewsSearchRequest(BaseModel):

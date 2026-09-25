@@ -2,7 +2,9 @@
 # AI Daily News Platform — Main API Dockerfile (UBI9 Python 3.11)
 # Uses OpenShift internal registry base image — no apt-get required
 # =============================================================================
-FROM image-registry.openshift-image-registry.svc:5000/openshift/python:3.11-ubi9
+# Local Podman / CI — use public slim image
+# OpenShift deployment uses: image-registry.openshift-image-registry.svc:5000/openshift/python:3.11-ubi9
+FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

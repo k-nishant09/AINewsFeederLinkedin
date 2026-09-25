@@ -87,7 +87,8 @@ def section(title: str) -> None:
 # ── 1. Environment variables ──────────────────────────────────────────────────
 
 REQUIRED_ENV = [
-    ("GNEWS_API_KEY",          "GNews — AI tech & finance news search"),
+    # News provider — GNews is the sole news provider
+    ("GNEWS_API_KEY",          "GNews — sole AI news provider (32-char hex key from gnews.io)"),
     ("LINKEDIN_ACCESS_TOKEN",  "LinkedIn — publish posts"),
     ("LINKEDIN_CLIENT_ID",     "LinkedIn — OAuth app"),
     ("LLM_API_KEY",            "IBM Model Gateway — bearer token"),
@@ -176,80 +177,43 @@ def check_llm_gateway(base_url: str, api_key: str, model: str, dry_run: bool) ->
         return False
 
 
-# ── 3. GNews API ──────────────────────────────────────────────────────────────
-
-def _gnews_call(api_key: str, params: dict) -> tuple[bool, list]:
-    """Shared GNews HTTP call — returns (success, articles)."""
-    url = "https://gnews.io/api/v4/search"
-    try:
-        r = httpx.get(url, params={**params, "apikey": api_key}, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        return True, data.get("articles", [])
-    except httpx.HTTPStatusError as e:
-        fail(f"HTTP {e.response.status_code}: {e.response.text[:300]}")
-        if e.response.status_code == 403:
-            print("      → API key invalid or quota exhausted")
-            print("      → Check dashboard at https://gnews.io")
-        return False, []
-    except Exception as e:
-        fail(str(e))
-        return False, []
-
+# ── 3. GNews API (sole news provider) ────────────────────────────────────────
 
 def check_gnews(api_key: str, dry_run: bool) -> bool:
-    section("2. GNews API  (https://gnews.io/api/v4/search)")
+    section("3. GNews API  (https://gnews.io/api/v4/search)  [SOLE PROVIDER]")
     if dry_run or not api_key:
         skip("Skipped (--dry-run or GNEWS_API_KEY not set)")
         return True
 
+    print("  GNews is the sole news provider for the AI News Intelligence pipeline.")
     all_ok = True
 
-    # ── 2a. AI Tech news ──────────────────────────────────────────────────────
-    print("  [2a] AI Technology news:")
-    success, articles = _gnews_call(api_key, {
-        "q": "artificial intelligence LLM agentic AI model",
-        "lang": "en", "country": "us", "max": "3",
-        "in": "title,description,content", "sortby": "publishedAt",
-    })
-    if success:
+    # ── 4a. AI Tech news ──────────────────────────────────────────────────────
+    print("\n  [4a] AI Technology news:")
+    try:
+        r = httpx.get(
+            "https://gnews.io/api/v4/search",
+            params={
+                "q": "artificial intelligence LLM agentic AI model",
+                "apikey": api_key, "lang": "en", "country": "us", "max": "3",
+                "in": "title,description,content", "sortby": "publishedAt",
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        articles = r.json().get("articles", [])
         ok(f"AI tech search — {len(articles)} articles returned")
         for i, a in enumerate(articles[:2], 1):
             print(f"     [{i}] {a.get('title', '')[:75]}")
             print(f"         {a.get('url', '')}")
-    else:
+    except httpx.HTTPStatusError as e:
+        fail(f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+        if e.response.status_code == 403:
+            warn("      → GNews key quota exhausted or invalid")
         all_ok = False
-
-    # ── 2b. AI Finance news ───────────────────────────────────────────────────
-    print("\n  [2b] AI Finance news:")
-    success2, articles2 = _gnews_call(api_key, {
-        "q": "artificial intelligence finance investment funding fintech",
-        "lang": "en", "country": "us", "max": "3",
-        "in": "title,description,content", "sortby": "publishedAt",
-    })
-    if success2:
-        ok(f"AI finance search — {len(articles2)} articles returned")
-        for i, a in enumerate(articles2[:2], 1):
-            print(f"     [{i}] {a.get('title', '')[:75]}")
-            print(f"         {a.get('url', '')}")
-    else:
-        all_ok = False
-
-    # ── 2c. Top technology headlines ─────────────────────────────────────────
-    print("\n  [2c] Top technology headlines:")
-    try:
-        r = httpx.get(
-            "https://gnews.io/api/v4/top-headlines",
-            params={"topic": "technology", "lang": "en", "max": "3", "apikey": api_key},
-            timeout=15,
-        )
-        r.raise_for_status()
-        hl = r.json().get("articles", [])
-        ok(f"Top headlines — {len(hl)} articles returned")
-        for i, a in enumerate(hl[:2], 1):
-            print(f"     [{i}] {a.get('title', '')[:75]}")
     except Exception as e:
-        warn(f"Top headlines call failed: {e}")
+        fail(str(e))
+        all_ok = False
 
     return all_ok
 
@@ -483,14 +447,14 @@ def main() -> int:
 
     env = check_env()
 
-    llm_ok     = check_llm_gateway(
-                     env.get("LLM_BASE_URL", ""),  # Set LLM_BASE_URL in env
-                     env.get("LLM_API_KEY", ""),
-                     env.get("LLM_MODEL", "qwen2-5-72b-instruct"),
-                     args.dry_run,
-                 )
-    gnews_ok   = check_gnews(env.get("GNEWS_API_KEY", ""), args.dry_run)
-    profile_id = check_linkedin_token(env.get("LINKEDIN_ACCESS_TOKEN", ""), args.dry_run)
+    llm_ok       = check_llm_gateway(
+                       env.get("LLM_BASE_URL", ""),
+                       env.get("LLM_API_KEY", ""),
+                       env.get("LLM_MODEL", "qwen2-5-72b-instruct"),
+                       args.dry_run,
+                   )
+    gnews_ok     = check_gnews(env.get("GNEWS_API_KEY", ""), args.dry_run)
+    profile_id   = check_linkedin_token(env.get("LINKEDIN_ACCESS_TOKEN", ""), args.dry_run)
 
     news_url       = env.get("NEWS_MCP_URL",       "http://localhost:8101/mcp")
     pageindex_url  = env.get("PAGEINDEX_MCP_URL",  "http://localhost:8102/mcp")

@@ -1,0 +1,126 @@
+# =============================================================================
+# BuildConfigs + ImageStreams for all 5 services
+# Binary+Docker strategy — source pushed via: oc start-build <name> --from-dir=.
+# =============================================================================
+---
+# ── ImageStreams ──────────────────────────────────────────────────────────────
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: daily-news
+  namespace: aifeeders
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: news-mcp
+  namespace: aifeeders
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: pageindex-mcp
+  namespace: aifeeders
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: evaluation-mcp
+  namespace: aifeeders
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: linkedin-mcp
+  namespace: aifeeders
+---
+# ── BuildConfigs ──────────────────────────────────────────────────────────────
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: daily-news
+  namespace: aifeeders
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: daily-news:latest
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: news-mcp
+  namespace: aifeeders
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: mcp_servers/news_mcp/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: news-mcp:latest
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: pageindex-mcp
+  namespace: aifeeders
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: mcp_servers/pageindex_mcp/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: pageindex-mcp:latest
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: evaluation-mcp
+  namespace: aifeeders
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: mcp_servers/evaluation_mcp/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: evaluation-mcp:latest
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: linkedin-mcp
+  namespace: aifeeders
+spec:
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: mcp_servers/linkedin_mcp/Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: linkedin-mcp:latest

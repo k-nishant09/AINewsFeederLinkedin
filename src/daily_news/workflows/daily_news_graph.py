@@ -2,33 +2,45 @@
 LangGraph Daily News Workflow — with Jev System One decision nodes
 ==================================================================
 
-State machine:
+7-stage AI News Intelligence pipeline:
+
+  Stage 1 DISCOVER  → discover_news   GNews → raw articles
+  Stage 2 UNDERSTAND→ index_pageindex PageIndex → document tree + evidence
+  Stage 3 ANALYZE   → jev_prefilter   Jev → sentiment, emotion, impact, novelty, trend
+  Stage 4 EXPLAIN   → summarize       LLM → what happened, why it matters, who is affected
+  Stage 5 ANGLE     → find_angle      Jev → common narrative, missing angle, audience
+  Stage 6 CREATE    → generate_personas + publish  LinkedIn content per audience
+  Stage 7 LEARN     → (future) feedback loop
+
+LangGraph state machine:
 
   START
-    └─► discover_news         9 GNews queries (hours=24) → ~27 fresh articles
+    └─► discover_news         9 GNews queries → ~27 fresh articles
           └─► deduplicate     3-pass dedup: URL-hash + PublishedStore + title-similarity
                 └─► fetch_articles
-                      └─► index_pageindex
-                            └─► jev_prefilter         ← Jev Decision #1: scores all, picks top 1
-                                  └─► summarize             LLM → structured summary (≤350 chars)
-                                        └─► jev_router      ← Jev Decision #2: picks relevant personas
-                                              └─► generate_personas  (active subset only, parallel)
-                                                    └─► evaluate     ← Jev Decision #3: quality gating
-                                                          ├─► REGENERATE ─► summarize  (max 2 retries)
-                                                          ├─► BLOCK      ─► hard stop (PII / injection)
-                                                          ├─► HUMAN_REVIEW ─► approval gate
-                                                          └─► PASS
-                                                                └─► score_reach  ← reach optimiser
-                                                                      └─► publish  (3 dedup gates)
-                                                                            └─► END
+                      └─► index_pageindex     PageIndex document tree
+                            └─► jev_prefilter          ← Stage 3: full intelligence scoring
+                                  └─► summarize              ← Stage 4: LLM explanation
+                                        └─► find_angle        ← Stage 5: Jev content angle
+                                              └─► jev_router        ← route relevant personas
+                                                    └─► generate_personas  (parallel)
+                                                          └─► evaluate    ← Jev quality gate
+                                                                ├─► REGENERATE ─► summarize
+                                                                ├─► BLOCK      ─► hard stop
+                                                                ├─► HUMAN_REVIEW ─► approval
+                                                                └─► PASS
+                                                                      └─► score_reach
+                                                                            └─► publish
+                                                                                  └─► END
 
 Jev integration points
 ──────────────────────
-1. jev_prefilter   replaces blind [:2] article selection
-2. jev_router      replaces always-run-all-four persona generation
-3. EvaluationAgent uses JevClient.evaluate_content() → 9 quality questions
+1. jev_prefilter   Stage 3 ANALYZE — full intelligence (emotion/impact/novelty/trend)
+2. find_angle      Stage 5 ANGLE   — content_opportunity (missing angle, audience)
+3. jev_router      routes relevant personas from summary + content_opportunity
+4. EvaluationAgent uses JevClient.evaluate_content() → 9 quality questions
 
-All three fall back gracefully when JEV_ENABLED=false or on network error.
+All nodes fall back gracefully when JEV_ENABLED=false or on network error.
 """
 from __future__ import annotations
 
@@ -43,11 +55,12 @@ from daily_news.agents.published_store import published_store
 from langgraph.graph import END, START, StateGraph
 
 from daily_news.agents.evaluation_agent import EvaluationAgent
-from daily_news.agents.jev_agents import jev_prefilter_articles, jev_route_personas
+from daily_news.agents.jev_agents import jev_find_angle, jev_prefilter_articles, jev_route_personas
 from daily_news.agents.persona_agent import PersonaAgentFactory
 from daily_news.agents.publisher_agent import PublisherAgent
 from daily_news.agents.reach_score_agent import ReachScoreAgent, REACH_THRESHOLD
-from daily_news.agents.summary_agent import SummaryAgent
+from daily_news.agents.sentiment_resolver import resolve_sentiment
+from daily_news.agents.summary_agent import SummaryAgent, MediaStorytellerAgent
 from daily_news.mcp.news import NewsMCPClient
 from daily_news.mcp.pageindex import PageIndexMCPClient
 from daily_news.models.evaluation import EvaluationDecision
@@ -58,10 +71,10 @@ from daily_news.observability.tracing import langfuse_trace, flush_langfuse
 logger = logging.getLogger(__name__)
 
 MAX_RETRIES = 2
-# Queries issued against the News MCP server (GNews backend).
+# Queries issued against the News MCP server (GNews).
 # Each tuple: (query_string, NewsCategory)
 # 9 queries across distinct topic buckets — maximises variety in the daily article pool.
-# hours=24 (set in discover_news) ensures only today's articles are returned, not stale GNews cache.
+# hours=24 (set in discover_news) ensures only today's articles are returned.
 AI_SEARCH_QUERIES = [
     ("artificial intelligence LLM agentic AI model",              NewsCategory.AI_TECHNOLOGY),
     ("artificial intelligence finance investment funding fintech", NewsCategory.AI_BUSINESS),
@@ -138,8 +151,8 @@ async def discover_news(state: NewsWorkflowState) -> NewsWorkflowState:
         try:
             results = await client.search_latest(
                 query=query,
-                hours=24,   # 24h window — ensures today's articles, not stale GNews cache
-                limit=10,   # GNews free-tier cap is 10 results per query
+                hours=24,   # 24h window — ensures only today's articles
+                limit=10,   # 10 results per query (free-tier cap for both providers)
                 category=category.value,
             )
             found = results.get("articles", [])
@@ -329,10 +342,19 @@ async def jev_prefilter(state: NewsWorkflowState) -> NewsWorkflowState:
     return await jev_prefilter_articles(state)
 
 
+async def find_angle(state: NewsWorkflowState) -> NewsWorkflowState:
+    """
+    Graph node: Stage 5 — Jev identifies the content opportunity angle.
+    Runs after summarize, before jev_router.
+    Writes content_opportunity into jev_prefilter_scores for publisher.
+    """
+    return await jev_find_angle(state)
+
+
 async def jev_router(state: NewsWorkflowState) -> NewsWorkflowState:
     """
     Graph node: Jev decides which personas are relevant for this article.
-    Runs after summarize so it has access to structured NewsSummary fields.
+    Runs after find_angle so it has access to structured NewsSummary + content_opportunity.
     Populates state.jev_active_personas consumed by generate_personas.
     """
     return await jev_route_personas(state)
@@ -340,25 +362,64 @@ async def jev_router(state: NewsWorkflowState) -> NewsWorkflowState:
 
 async def summarize(state: NewsWorkflowState) -> NewsWorkflowState:
     run_id = state["run_id"]
+    storyteller = MediaStorytellerAgent()
     agent = SummaryAgent()
     pi_client = PageIndexMCPClient()
     summaries: list[dict] = []
 
+    all_jev_scores: dict = state.get("jev_prefilter_scores") or {}
+
     for article in state["selected_articles"]:
         try:
+            aid = article.get("article_id", "")
+            jev_scores = all_jev_scores.get(aid)
+
+            r_sentiment, r_stats, r_tag = resolve_sentiment(article, jev_scores)
+            logger.info(
+                "[%s] sentiment resolved article=%s provider=%s label=%s",
+                run_id, aid,
+                r_stats.get("provider", "unknown"),
+                r_sentiment,
+            )
+
             sections_resp = await pi_client.get_relevant_sections(
-                document_id=article["article_id"],
+                document_id=aid,
                 question="key business and technology facts",
             )
             sections_text = sections_resp.get("sections_text", "")
+
+            # ── Pass 1: Media Storyteller — extract the story before writing ──
+            story = await storyteller.extract_story(
+                article_id=aid,
+                title=article.get("title", ""),
+                source=article.get("source", ""),
+                source_url=article.get("url", ""),
+                content=article.get("content", ""),
+                pageindex_sections=sections_text,
+                jev_scores=jev_scores,
+                run_id=run_id,
+            )
+            logger.info(
+                "[%s] story extracted article=%s style=%s hook_len=%d",
+                run_id, aid,
+                story.narrative_style,
+                len(story.hook),
+            )
+
+            # ── Pass 2: Summary — structured facts, calibrated by the story ──
             summary = await agent.summarize(
-                article_id=article["article_id"],
+                article_id=aid,
                 title=article.get("title", ""),
                 source=article.get("source", ""),
                 source_url=article.get("url", ""),
                 content=article.get("content", ""),
                 pageindex_sections=sections_text,
                 run_id=run_id,
+                sentiment=r_sentiment,
+                sentiment_stats=r_stats,
+                ai_tag=r_tag,
+                jev_scores=jev_scores,
+                story=story,
             )
             summaries.append(summary.model_dump())
         except Exception as exc:  # noqa: BLE001
@@ -673,10 +734,11 @@ def build_daily_news_graph():
     graph.add_node("index_pageindex",   index_pageindex)
     graph.add_node("jev_prefilter",     jev_prefilter)
     graph.add_node("summarize",         summarize)
+    graph.add_node("find_angle",        find_angle)     # Stage 5: Jev content opportunity
     graph.add_node("jev_router",        jev_router)
     graph.add_node("generate_personas", generate_personas)
     graph.add_node("evaluate",          evaluate)
-    graph.add_node("score_reach",       score_reach)   # pre-publish reach optimiser
+    graph.add_node("score_reach",       score_reach)    # pre-publish reach optimiser
     graph.add_node("publish",           publish)
 
     graph.add_edge(START,               "discover_news")
@@ -685,7 +747,8 @@ def build_daily_news_graph():
     graph.add_edge("fetch_articles",    "index_pageindex")
     graph.add_edge("index_pageindex",   "jev_prefilter")
     graph.add_edge("jev_prefilter",     "summarize")
-    graph.add_edge("summarize",         "jev_router")
+    graph.add_edge("summarize",         "find_angle")   # Stage 5 after Stage 4
+    graph.add_edge("find_angle",        "jev_router")
     graph.add_edge("jev_router",        "generate_personas")
     graph.add_edge("generate_personas", "evaluate")
 
