@@ -40,7 +40,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -92,7 +92,7 @@ def _make_article_id(url: str) -> str:
 
 def _from_timestamp(hours: int) -> str:
     """Return ISO-8601 datetime string for 'now minus hours' (GNews `from` param)."""
-    dt = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+    dt = datetime.now(tz=UTC) - timedelta(hours=hours)
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -234,7 +234,7 @@ def _mock_articles(query: str) -> list[dict[str, Any]]:
             "url":             "https://example.com/mock-ai-tech-1",
             "source":          "Mock Tech Source",
             "source_url":      "https://example.com",
-            "published_at":    datetime.now(tz=timezone.utc).isoformat(),
+            "published_at":    datetime.now(tz=UTC).isoformat(),
             "content":         "Mock AI technology article for local development without API keys.",
             "description":     "Mock description for AI tech news.",
             "image":           "",
@@ -253,7 +253,7 @@ def _mock_articles(query: str) -> list[dict[str, Any]]:
             "url":             "https://example.com/mock-ai-finance-1",
             "source":          "Mock Finance Source",
             "source_url":      "https://example.com",
-            "published_at":    datetime.now(tz=timezone.utc).isoformat(),
+            "published_at":    datetime.now(tz=UTC).isoformat(),
             "content":         "Mock AI finance article for local development without API keys.",
             "description":     "Mock description for AI finance news.",
             "image":           "",

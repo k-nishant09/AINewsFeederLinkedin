@@ -13,14 +13,13 @@ from __future__ import annotations
 import pytest
 
 from daily_news.workflows.daily_news_graph import (
-    _normalise_url,
-    _normalise_title,
-    _title_similarity,
     _TITLE_SIMILARITY_THRESHOLD,
+    _normalise_title,
+    _normalise_url,
+    _title_similarity,
     deduplicate,
     make_initial_state,
 )
-
 
 # ── Helper: build a minimal article dict ─────────────────────────────────────
 

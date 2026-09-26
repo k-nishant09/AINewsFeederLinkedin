@@ -20,10 +20,10 @@ import pytest
 from daily_news.agents.reach_score_agent import (
     MAX_HASHTAGS,
     REACH_THRESHOLD,
-    ReachScore,
-    ReachScoreAgent,
     WORD_COUNT_MAX,
     WORD_COUNT_MIN,
+    ReachScore,
+    ReachScoreAgent,
 )
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

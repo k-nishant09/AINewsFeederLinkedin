@@ -31,8 +31,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-import string
-from datetime import date, timezone, datetime
+import re as _re
+from datetime import UTC, date, datetime
+from typing import Any
 
 from daily_news.agents.grammar_agent import GrammarAgent
 from daily_news.agents.guardrails import OutputGuardrail
@@ -294,7 +295,6 @@ def _build_cta(
     """
     is_controversial = controversy in ("high", "medium")
     subject = _extract_subject(headline)
-    audience = recommended_audience.strip() or "practitioners"
     angle = missing_angle.strip()
 
     # ── Regulation ────────────────────────────────────────────────────────────
@@ -408,11 +408,11 @@ def _build_context_line(
         if event_type == "product_launch":
             weight = f"One of the more meaningful AI capability releases this week{' from ' + src if src else ''}."
         elif event_type == "research":
-            weight = f"Research that warrants attention — this is the kind of finding that shapes production decisions in 12–18 months."
+            weight = "Research that warrants attention — this is the kind of finding that shapes production decisions in 12–18 months."
         elif event_type in ("funding", "acquisition"):
-            weight = f"A deal that concentrates AI capability — and changes the dependency picture for builders."
+            weight = "A deal that concentrates AI capability — and changes the dependency picture for builders."
         elif event_type == "regulation":
-            weight = f"A regulatory development with real teeth — worth understanding before it hits your compliance team."
+            weight = "A regulatory development with real teeth — worth understanding before it hits your compliance team."
         else:
             weight = f"One of the more significant AI developments this week{' via ' + src if src else ''}."
     elif significance >= 0.45 and relevance >= 0.65:
@@ -421,9 +421,9 @@ def _build_context_line(
         elif event_type == "research":
             weight = f"A research signal worth tracking{' from ' + src if src else ''} — early-stage but directionally important."
         elif event_type in ("funding", "acquisition"):
-            weight = f"Capital moving into AI in a way that shifts the ecosystem — worth understanding the implications."
+            weight = "Capital moving into AI in a way that shifts the ecosystem — worth understanding the implications."
         elif event_type == "regulation":
-            weight = f"A policy development that will land on engineering and product teams, not just legal."
+            weight = "A policy development that will land on engineering and product teams, not just legal."
         else:
             weight = f"Worth understanding if {subject} is on your radar."
     else:
@@ -443,7 +443,6 @@ def _build_context_line(
 
 # ── Engagement hook builder ───────────────────────────────────────────────────
 
-import hashlib as _hashlib
 
 
 def _build_hook_line(event_type: str, headline: str, source: str, sentiment: str = "neutral") -> str:
@@ -465,7 +464,7 @@ def _build_hook_line(event_type: str, headline: str, source: str, sentiment: str
         s = "neutral"
 
     subject = _extract_subject(headline, max_words=5)
-    src = source.strip() if source else ""
+    _src = source.strip() if source else ""
 
     # Hash the headline to pick a rotation slot — deterministic per article,
     # never repeats across different headlines on the same day.
@@ -478,7 +477,7 @@ def _build_hook_line(event_type: str, headline: str, source: str, sentiment: str
                 f"The AI policy development around {subject} is further along than most teams realise.",
                 f"A regulatory shift on {subject} — and this one actually has enforcement behind it.",
                 f"The compliance conversation around {subject} just changed.",
-                f"This is the AI governance update worth reading before it reaches your legal team.",
+                "This is the AI governance update worth reading before it reaches your legal team.",
                 f"AI policy on {subject} is moving. Here's what changed.",
             ],
             "negative": [
@@ -668,7 +667,7 @@ def _build_sentiment_signal_line(
     return None
 
 
-def _intel_get(intel: "Any | None", key: str, default: "Any" = 0.0) -> "Any":
+def _intel_get(intel: Any | None, key: str, default: Any = 0.0) -> Any:
     """Dict-safe accessor for NewsIntelligence (may be a Pydantic model or a plain dict after LangGraph serialization)."""
     if intel is None:
         return default
@@ -677,7 +676,7 @@ def _intel_get(intel: "Any | None", key: str, default: "Any" = 0.0) -> "Any":
     return getattr(intel, key, default)
 
 
-def _intel_sub(intel: "Any | None", key: str, subkey: str, default: "Any" = 0.0) -> "Any":
+def _intel_sub(intel: Any | None, key: str, subkey: str, default: Any = 0.0) -> Any:
     """Dict-safe nested accessor for NewsIntelligence sub-objects (emotion, impact, content_opportunity)."""
     sub = _intel_get(intel, key, None)
     if sub is None:
@@ -687,7 +686,7 @@ def _intel_sub(intel: "Any | None", key: str, subkey: str, default: "Any" = 0.0)
     return getattr(sub, subkey, default)
 
 
-def _build_intelligence_line(intel: "Any | None", headline: str = "") -> str | None:
+def _build_intelligence_line(intel: Any | None, headline: str = "") -> str | None:
     """
     Build a one-line intelligence note from the NewsIntelligence object.
     Only surfaced when novelty OR trend_velocity is unusually high (≥ 0.80).
@@ -707,7 +706,7 @@ def _build_intelligence_line(intel: "Any | None", headline: str = "") -> str | N
     return None
 
 
-def _build_content_angle_line(intel: "Any | None") -> tuple[str | None, str | None]:
+def _build_content_angle_line(intel: Any | None) -> tuple[str | None, str | None]:
     """
     Extract the content angle from the NewsIntelligence content_opportunity.
     Returns (missing_angle_line, recommended_audience_line) or (None, None).
@@ -800,7 +799,6 @@ _BANNED_INLINE_PHRASES: tuple[str, ...] = (
 # Regex that catches ALL "the real <noun/adj>" constructions.
 # Qwen endlessly generates new variants ("the real bottleneck", "the real shift",
 # "the real implication", etc.) — this one pattern covers all of them.
-import re as _re
 _REAL_PATTERN = _re.compile(
     r"\bthe real\s+\w+",   # "the real X" where X is any single word
     _re.IGNORECASE,
@@ -1084,7 +1082,7 @@ class PublisherAgent:
             "post_status":     post_status,
             "comments":        comment_results,
             "linkedin_result": post_result,
-            "published_at":    datetime.now(tz=timezone.utc).isoformat(),
+            "published_at":    datetime.now(tz=UTC).isoformat(),
         }
 
     # ── Post composition ──────────────────────────────────────────────────────
@@ -1092,7 +1090,7 @@ class PublisherAgent:
     def _compose_main_post(
         self,
         summary: NewsSummary,
-        personas: "PersonaSetOutput | None" = None,
+        personas: PersonaSetOutput | None = None,
         jev_scores: dict | None = None,
     ) -> str:
         """
@@ -1125,7 +1123,6 @@ class PublisherAgent:
         event_type   = str((jev_scores or {}).get("event_type", "other")).lower().strip()
         controversy  = str((jev_scores or {}).get("controversy_level", "low")).lower().strip()
         ps_scores    = (jev_scores or {}).get("persona_scores", {})
-        active_p     = (jev_scores or {}).get("active_personas", [])
 
         # ── Pull NewsIntelligence backbone and NewsStory objects ──────────────
         intel = getattr(summary, "intelligence", None)
@@ -1144,7 +1141,6 @@ class PublisherAgent:
 
         # ── Resolved sentiment ────────────────────────────────────────────────
         nd_sentiment       = getattr(summary, "sentiment",       None) or "neutral"
-        nd_sentiment_stats = getattr(summary, "sentiment_stats", None) or {}
 
         # ── Dynamic voice selection ───────────────────────────────────────────
         # Select 3 or 4 voices based on event_type + controversy + Jev persona scores.
@@ -1188,9 +1184,6 @@ class PublisherAgent:
 
         # Per-voice character limit: fewer voices → more room per voice
         voice_clip = 240 if len(ordered_keys) >= 4 else 300
-
-        top_persona = preferred_lead
-        subject = _extract_subject(summary.headline, max_words=4)
 
         # ── Build the post as a list of paragraphs ────────────────────────────
         parts: list[str] = []
@@ -1273,11 +1266,11 @@ class PublisherAgent:
             )
         else:
             cta_body = (
-                f"A) This genuinely changes how teams build.\n"
-                f"B) It just creates more software nobody governs.\n"
-                f"C) The real bottleneck shifts — creation is easy, accountability isn't.\n"
-                f"D) Nothing changes until the ops cost of AI matches the hype.\n\n"
-                f"👇 Pick ONE. Defend it."
+                "A) This genuinely changes how teams build.\n"
+                "B) It just creates more software nobody governs.\n"
+                "C) The real bottleneck shifts — creation is easy, accountability isn't.\n"
+                "D) Nothing changes until the ops cost of AI matches the hype.\n\n"
+                "👇 Pick ONE. Defend it."
             )
         parts.append(f"---\n\n💬 **YOUR TURN**\n\n{cta_body}")
 
@@ -1363,5 +1356,5 @@ class PublisherAgent:
             "skip_reason":     reason,
             "comments":        {},
             "linkedin_result": {"status": "skipped", "reason": reason},
-            "published_at":    datetime.now(tz=timezone.utc).isoformat(),
+            "published_at":    datetime.now(tz=UTC).isoformat(),
         }

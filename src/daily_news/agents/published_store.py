@@ -38,7 +38,7 @@ import json
 import logging
 import os
 import threading
-from datetime import date, datetime, timezone, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ class PublishedStore:
         self._ensure_loaded()
         key = _key(article_id)
         with self._lock:
-            self._cache[key] = datetime.now(tz=timezone.utc).isoformat()
+            self._cache[key] = datetime.now(tz=UTC).isoformat()
             self._flush_locked()
 
     def filter_unpublished(self, articles: list[dict]) -> list[dict]:

@@ -2,7 +2,6 @@
 import pytest
 
 from daily_news.agents.guardrails import InputGuardrail, OutputGuardrail
-from daily_news.agents.judgment_agent import JudgmentAgent
 from daily_news.models.intelligence import JudgmentAnalysis
 
 

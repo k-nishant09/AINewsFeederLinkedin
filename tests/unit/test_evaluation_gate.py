@@ -1,8 +1,6 @@
 """Unit tests — models and evaluation gate."""
 from __future__ import annotations
 
-import pytest
-
 from daily_news.agents.evaluation_agent import EvaluationAgent
 from daily_news.models.evaluation import EvaluationDecision, EvaluationResult
 

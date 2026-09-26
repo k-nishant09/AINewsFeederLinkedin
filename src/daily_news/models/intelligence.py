@@ -17,7 +17,7 @@ Pipeline enrichment order
 """
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -213,13 +213,13 @@ class NewsIntelligence(BaseModel):
     business_impact:    str  = ""
     job_impact:         str  = ""
     technology_impact:  str  = ""
-    policy_impact:      Optional[str] = None
+    policy_impact:      str | None = None
 
     # ── Stage 4b: Story (MediaStorytellerAgent) ───────────────────────────────
-    story: Optional["NewsStory"] = None
+    story: NewsStory | None = None
 
     # ── Judgment Analysis ─────────────────────────────────────────────────────
-    judgment: Optional[JudgmentAnalysis] = None
+    judgment: JudgmentAnalysis | None = None
 
     # ── Stage 5: Content angle (Jev router) ───────────────────────────────────
     content_opportunity: ContentOpportunity = Field(default_factory=ContentOpportunity)
@@ -228,4 +228,4 @@ class NewsIntelligence(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
 
     # ── Resolved ai_tag (from sentiment_resolver or Jev) ─────────────────────
-    ai_tag: Optional[str] = None
+    ai_tag: str | None = None

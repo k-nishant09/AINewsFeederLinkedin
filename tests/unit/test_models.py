@@ -1,12 +1,13 @@
 """Unit tests — Pydantic models."""
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 from pydantic import ValidationError
 
+from daily_news.models.evaluation import EvaluationDecision, EvaluationResult
 from daily_news.models.news import NewsArticle, NewsCategory
-from daily_news.models.evaluation import EvaluationResult, EvaluationDecision
-from datetime import datetime
 
 
 def test_news_article_valid():

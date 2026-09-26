@@ -1,14 +1,11 @@
 """Workflow tests — LangGraph state machine structure."""
 from __future__ import annotations
 
-import pytest
-
+from daily_news.models.evaluation import EvaluationDecision
 from daily_news.workflows.daily_news_graph import (
-    NewsWorkflowState,
     make_initial_state,
     route_evaluation,
 )
-from daily_news.models.evaluation import EvaluationDecision
 
 
 def test_initial_state_has_run_id():

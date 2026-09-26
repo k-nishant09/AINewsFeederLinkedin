@@ -5,7 +5,7 @@ import asyncio
 import logging
 import sys
 
-from daily_news.observability.tracing import setup_tracing, flush_langfuse
+from daily_news.observability.tracing import flush_langfuse, setup_tracing
 from daily_news.workflows.daily_news_graph import daily_news_graph, make_initial_state
 
 logging.basicConfig(

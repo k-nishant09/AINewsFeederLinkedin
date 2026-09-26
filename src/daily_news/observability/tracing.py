@@ -46,8 +46,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from functools import lru_cache, wraps
-from typing import Any, Callable, TypeVar
+from typing import Any, TypeVar
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource

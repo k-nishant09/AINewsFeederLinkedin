@@ -14,7 +14,6 @@ import pytest
 from daily_news.agents.guardrails import OutputGuardrail
 from daily_news.agents.publisher_agent import PublisherAgent, _check_persona_text
 
-
 # ── _check_persona_text: banned OPENER patterns ────────────────────────────────
 
 class TestBannedOpeners:
