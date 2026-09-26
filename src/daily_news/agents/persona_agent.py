@@ -248,13 +248,14 @@ class PersonaAgent:
         else:
             avoid_block = (
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "⛔ MOST COMMON REJECTION TRIGGERS\n"
+                "⛔ AUTOMATIC REJECTION TRIGGERS — avoid ALL of these\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "  ✗ 'the real challenge'  ✗ 'challenge lies in'  ✗ 'at the end of the day'\n"
-                "  ✗ 'sounds great'  ✗ 'sounds promising'  ✗ 'the real question'\n"
-                "  ✗ 'the real issue is'  ✗ 'the real problem is'  ✗ 'the real business metric'\n"
+                "  ✗ ANY phrase with 'the real <word>' — e.g. 'the real challenge', 'the real issue',\n"
+                "    'the real bottleneck', 'the real shift', 'the real concern', 'the real business'\n"
+                "  ✗ ANY phrase with 'in the end' — e.g. 'in the end,', 'in the end the', 'in the end this'\n"
+                "  ✗ 'sounds great'  ✗ 'sounds promising'  ✗ 'at the end of the day'\n"
                 "  ✗ 'it remains to be seen'  ✗ 'only time will tell'  ✗ 'what remains to be seen'\n\n"
-                "Open with a SPECIFIC fact, number, or implication directly from this article.\n\n"
+                "Every sentence must be SPECIFIC to this article. No abstract framing, no cliché closers.\n\n"
             )
 
         chain = self._prompt | self._llm | self._parser

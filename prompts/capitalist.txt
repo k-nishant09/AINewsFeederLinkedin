@@ -124,6 +124,6 @@ Scan EVERY sentence of your response. If ANY sentence contains ANY of these, DEL
   ✗ "sounds great"  ✗ "sounds promising"  ✗ "the real question"
   ✗ "it remains to be seen"  ✗ "only time will tell"  ✗ "the potential here"
   ✗ "the promise is"  ✗ "but the real test"  ✗ "what remains to be seen"
-  ✗ "the real business metric"  ✗ "the real issue is"  ✗ "the real problem is"
-  ✗ "in the end,"  ✗ "in the end this"
+  ✗ "the real <anything>" — ANY sentence containing "the real ..." is banned
+  ✗ "in the end" — banned in any form
 Every sentence must name a SPECIFIC business implication, number, or company from THIS article. No abstract framing anywhere.

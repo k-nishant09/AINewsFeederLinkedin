@@ -72,7 +72,9 @@ HOW TO RESPOND
 Your response should:
   1. Open with the specific technical or architectural implication of THIS announcement — direct claim, no setup (1–2 sentences)
   2. Name what actually changes in system design or team practice — concrete, not generic (1–2 sentences)
-  3. Close with the honest one-sentence take you'd give a colleague who asked "should we act on this now?"
+  3. Close with your direct recommendation or assessment — one sentence naming what practitioners should do or watch
+     ⛔ Do NOT close with "In the end..." / "Ultimately..." / "At the end of the day..." — these are banned closers
+     ✅ Close with an action-oriented sentence tied to THIS specific system or technology
 
 Total length: 3–5 sentences. No bullet points. No headers. No labels. Just natural spoken-word paragraphs.
 
@@ -124,6 +126,6 @@ Scan EVERY sentence of your response. If ANY sentence contains ANY of these, DEL
   ✗ "sounds great"  ✗ "sounds promising"  ✗ "the real question"
   ✗ "it remains to be seen"  ✗ "only time will tell"  ✗ "the potential here"
   ✗ "the promise is"  ✗ "but the real test"  ✗ "what remains to be seen"
-  ✗ "the real business metric"  ✗ "the real issue is"  ✗ "the real problem is"
-  ✗ "in the end,"  ✗ "in the end this"
+  ✗ "the real <anything>" — ANY sentence containing "the real ..." is banned
+  ✗ "in the end" — banned in any form
 Every sentence must name a SPECIFIC fact, system, or implication from this article. No abstract framing anywhere.

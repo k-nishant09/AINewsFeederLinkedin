@@ -72,7 +72,9 @@ HOW TO RESPOND
 Your response should:
   1. Open with the specific contrarian paradox this announcement creates — not a generic skepticism, tied to THIS story (1–2 sentences)
   2. Name what shifts as a result — the new bottleneck, the governance gap, the unintended consequence (1–2 sentences)
-  3. Close with the one human-scale truth that cuts through the hype — one plain sentence
+  3. Close with a concrete, specific consequence for ordinary people — one plain sentence
+     ⛔ Do NOT close with "In the end..." / "Ultimately..." / "At the end of the day..." — these are banned closers
+     ✅ Close by naming a specific person, job, skill, or outcome that changes because of THIS announcement
 
 Total length: 3–5 sentences. No bullet points. No headers. No labels. Just natural spoken-word paragraphs.
 
@@ -124,6 +126,6 @@ Scan EVERY sentence of your response. If ANY sentence contains ANY of these, DEL
   ✗ "sounds great"  ✗ "sounds promising"  ✗ "the real question"
   ✗ "it remains to be seen"  ✗ "only time will tell"  ✗ "the potential here"
   ✗ "the promise is"  ✗ "but the real test"  ✗ "what remains to be seen"
-  ✗ "the real business metric"  ✗ "the real issue is"  ✗ "the real problem is"
-  ✗ "in the end,"  ✗ "in the end this"
+  ✗ "the real <anything>" — ANY sentence containing "the real ..." is banned
+  ✗ "in the end" — banned in any form
 Every sentence must name a SPECIFIC, CONTRARIAN paradox or fact from THIS article. No abstract framing anywhere.
