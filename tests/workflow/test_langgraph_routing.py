@@ -34,7 +34,7 @@ def test_route_evaluation_regenerate_within_retries():
 
 def test_route_evaluation_regenerate_exceeds_retries():
     state = make_initial_state()
-    state["retry_count"] = 2  # MAX_RETRIES reached
+    state["retry_count"] = 3  # MAX_RETRIES (3) reached
     state["evaluation_results"] = [
         {"article_id": "x", "decision": EvaluationDecision.REGENERATE.value}
     ]
