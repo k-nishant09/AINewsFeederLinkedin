@@ -44,6 +44,10 @@ from daily_news.models.evaluation import EvaluationResult
 from daily_news.models.persona import PersonaSetOutput
 from daily_news.models.summary import NewsSummary
 
+# Comic generation — imported lazily inside publish() to keep startup fast
+# and to avoid hard-failing if cairosvg is not installed.
+_COMIC_ENABLED = True   # set False at runtime to skip comic generation
+
 logger = logging.getLogger(__name__)
 
 
@@ -764,6 +768,8 @@ _BANNED_INLINE_PHRASES: tuple[str, ...] = (
     "the key challenge is",
     "sounds great, but",
     "sounds promising, but",
+    "is a game-changer",
+    "is game-changing",
     "sounds revolutionary",
     "but the real test is",
     "but the real question",
@@ -796,15 +802,14 @@ _BANNED_INLINE_PHRASES: tuple[str, ...] = (
 )
 
 
-# Regex that catches ALL "the real <noun/adj>" constructions.
-# Qwen endlessly generates new variants ("the real bottleneck", "the real shift",
-# "the real implication", etc.) — this one pattern covers all of them.
-_REAL_PATTERN = _re.compile(
-    r"\bthe real\s+\w+",   # "the real X" where X is any single word
-    _re.IGNORECASE,
-)
-# "in the end" is a cliché filler regardless of what follows
+# Regex catch-alls for patterns Qwen produces as lazy boilerplate closers/openers.
+# NOTE: "the real" is NOT banned — "the real-world cost of X" is a legitimate sentence.
+# Only the lazy ABSTRACT forms are banned: "the real challenge is", "the real question is"
+# — these are already in _BANNED_INLINE_PHRASES above.
+# What we catch here: cliché closers that add no information.
 _IN_THE_END_PATTERN = _re.compile(r"\bin the end\b", _re.IGNORECASE)
+# Off-scope EU AI Act / GDPR drops — caught by judge, not pre-scanner
+# (article context determines relevance, which the pre-scanner can't know)
 
 
 def _check_persona_text(text: str) -> str | None:
@@ -841,12 +846,8 @@ def _check_persona_text(text: str) -> str | None:
     for phrase in _BANNED_INLINE_PHRASES:
         if phrase in lowered:
             return phrase
-    # Regex catch-alls — covers all "the real X" and "in the end" variants
-    m = _REAL_PATTERN.search(text)
-    if m:
-        return m.group(0).lower()
-    m = _IN_THE_END_PATTERN.search(text)
-    if m:
+    # Regex catch-all: "in the end" cliché closer
+    if _IN_THE_END_PATTERN.search(text):
         return "in the end"
     return None
 
@@ -993,7 +994,55 @@ class PublisherAgent:
         logger.info("[%s] POST TEXT START ---\n%s\n--- POST TEXT END", run_id, main_text)
         logger.info("[%s] publishing main post article=%s key=%s", run_id, summary.article_id, publication_key)
 
-        post_result = await self._client.create_post(text=main_text, publication_key=publication_key)
+        # ── Comic image generation + upload (best-effort, never blocks publish) ─
+        asset_urn   = ""
+        comic_path  = ""
+        if _COMIC_ENABLED:
+            try:
+                from daily_news.agents.comic_generator import (
+                    build_comic_script_from_summary,
+                    generate_comic_from_script,
+                )
+                comic_script = await build_comic_script_from_summary(
+                    summary, personas, run_id=run_id,
+                )
+                comic_file = generate_comic_from_script(comic_script, run_id=run_id)
+                comic_path = str(comic_file)
+                logger.info("[%s] comic generated: %s", run_id, comic_path)
+
+                # Upload PNG to LinkedIn — returns asset_urn on success
+                upload_result = await self._client.upload_image(
+                    image_path=comic_path,
+                    description=f"AIFeeders comic: {summary.headline[:80]}",
+                )
+                asset_urn = upload_result.get("asset_urn", "")
+                if asset_urn:
+                    logger.info("[%s] comic image uploaded asset_urn=%s", run_id, asset_urn)
+                else:
+                    logger.warning(
+                        "[%s] comic upload returned no asset_urn (status=%s) — "
+                        "falling back to text-only post",
+                        run_id, upload_result.get("status"),
+                    )
+            except Exception as comic_exc:  # noqa: BLE001
+                logger.warning(
+                    "[%s] comic generation/upload failed (non-blocking): %s",
+                    run_id, comic_exc,
+                )
+
+        # ── Publish: with image if we have an asset_urn, else text-only ──────
+        if asset_urn:
+            post_result = await self._client.create_post_with_image(
+                text=main_text,
+                asset_urn=asset_urn,
+                publication_key=publication_key,
+            )
+        else:
+            post_result = await self._client.create_post(
+                text=main_text,
+                publication_key=publication_key,
+            )
+
         post_urn    = post_result.get("post_urn", "")
         post_status = post_result.get("status", "error")
 
@@ -1011,7 +1060,10 @@ class PublisherAgent:
                 post_result.get("retry_eligible", False),
             )
         else:
-            logger.info("[%s] post published post_urn=%s status=%s", run_id, post_urn, post_status)
+            logger.info(
+                "[%s] post published post_urn=%s status=%s image_attached=%s",
+                run_id, post_urn, post_status, bool(asset_urn),
+            )
             published_store.mark_published(summary.article_id)
 
         # ── Persona comments — sequential, never gather() ─────────────────────
@@ -1082,6 +1134,8 @@ class PublisherAgent:
             "post_status":     post_status,
             "comments":        comment_results,
             "linkedin_result": post_result,
+            "image_attached":  bool(asset_urn),
+            "comic_path":      comic_path,
             "published_at":    datetime.now(tz=UTC).isoformat(),
         }
 

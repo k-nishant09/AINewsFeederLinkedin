@@ -1,5 +1,11 @@
 """LinkedIn MCP client — direct httpx calls to linkedin_* tools.
 
+Image upload flow (LinkedIn Asset API):
+  1. linkedin_upload_image(image_path, description)
+       → returns {"asset_urn": "urn:li:digitalmediaAsset:..."}
+  2. linkedin_create_post_with_image(text, asset_urn, publication_key)
+       → returns {"post_urn": "urn:li:share:...", "status": ...}
+
 Publishing architecture (AIFeeders):
   1. create_post(text, publication_key)
        → returns {"post_urn": "urn:li:share:...", "id": ..., "status": ...}
@@ -115,5 +121,60 @@ class LinkedInMCPClient:
                 "parent_comment_urn":  parent_comment_urn,
                 "text":                text,
                 "reply_key":           reply_key,
+            },
+        )
+
+    # ── Image / media ─────────────────────────────────────────────────────────
+
+    async def upload_image(
+        self,
+        image_path: str,
+        description: str = "AIFeeders comic strip",
+    ) -> dict[str, Any]:
+        """
+        Upload an image file to LinkedIn and return its asset URN.
+
+        image_path  — local filesystem path to the PNG (or SVG fallback).
+        Returns {"asset_urn": "urn:li:digitalmediaAsset:...", "status": str}.
+        On error returns {"asset_urn": "", "status": "error", ...}.
+
+        The LinkedIn MCP server reads the file from disk and calls:
+          POST /v2/assets?action=registerUpload  (register)
+          PUT  <upload_url>                       (binary upload)
+        """
+        try:
+            return await mcp_factory().linkedin.call(
+                "linkedin_upload_image",
+                {"image_path": image_path, "description": description},
+            )
+        except Exception as exc:
+            return {"asset_urn": "", "status": "error", "error": str(exc)}
+
+    async def create_post_with_image(
+        self,
+        text: str,
+        asset_urn: str,
+        publication_key: str,
+    ) -> dict[str, Any]:
+        """
+        Publish a LinkedIn post with an embedded image.
+
+        text            — post body text
+        asset_urn       — URN returned by upload_image()
+        publication_key — idempotency key (same as create_post)
+
+        Falls back to a text-only post if the asset_urn is empty.
+        Returns {"post_urn": ..., "status": ..., "image_attached": bool}.
+        """
+        if not asset_urn:
+            result = await self.create_post(text=text, publication_key=publication_key)
+            return {**result, "image_attached": False}
+
+        return await mcp_factory().linkedin.call(
+            "linkedin_create_post_with_image",
+            {
+                "text":            text,
+                "asset_urn":       asset_urn,
+                "publication_key": publication_key,
             },
         )

@@ -744,6 +744,8 @@ async def publish(state: NewsWorkflowState) -> NewsWorkflowState:
                     "publication_key":  result.get("publication_key"),
                     "post_urn":         result.get("post_urn"),
                     "post_status":      result.get("post_status"),
+                    "image_attached":   result.get("image_attached", False),
+                    "comic_path":       result.get("comic_path", ""),
                     "comments_posted":  sum(
                         1 for v in comments.values()
                         if v.get("status") in ("published", "mock")
