@@ -702,22 +702,21 @@ class PublisherAgent:
         ("genz",     "🎓  Generalist"),
     ]
 
-    # Base brand footer — only AIFeeders is hardcoded (it is the app identity).
-    # Dynamic hashtags are appended at compose time from article content.
+    # Base brand footer — clean, professional, understated (Technology/App at bottom)
     _FOOTER_BASE = (
-        "⚠️ Perspectives are AI-simulated — not professional advice.\n"
-        "🤖 AIFeeders  ·  Daily AI Intelligence  ·  Powered by Jev"
+        "🤖 AIFeeders · Daily AI Intelligence · Powered by Jev\n"
+        "*AI-simulated perspectives for discussion — not professional advice.*"
     )
 
-    # Core brand fallback hashtags if zero dynamic tags extracted
-    _BASE_HASHTAGS = "#AI #AINews #AIStrategy #Innovation"
+    # Core brand fallback hashtags (maximum 3-4 high relevance tags)
+    _BASE_HASHTAGS = "#AI #AIInfrastructure #Tech"
 
-    # Character labels for dialogue format
+    # Character labels for debate format with clear intellectual roles
     _CHAR_DIALOGUE: dict[str, tuple[str, str]] = {
-        "business": ("💼", "Founder"),
-        "policy":   ("🏛️",  "Policy Analyst"),
-        "linkedin": ("🧠", "Engineer"),
-        "genz":     ("🎓", "Generalist"),
+        "business": ("💼", "FOUNDER"),
+        "linkedin": ("🧠", "ENGINEER"),
+        "genz":     ("⚖️", "SKEPTIC"),
+        "policy":   ("🏛️", "POLICY"),
     }
 
     def __init__(self) -> None:
@@ -951,31 +950,37 @@ class PublisherAgent:
         ) if ps_scores else []
 
         top_persona = ranked[0][0] if ranked else (active_p[0] if active_p else "linkedin")
-        # Logical narrative flow: Policy (Rules) → Founder (Capital/Risk) → Engineer (Tech/Reality) → Generalist (Human/Trust)
-        ordered = ["policy", "business", "linkedin", "genz"]
+        # Logical narrative flow: Founder (Economic moat) → Engineer (Technical reality) → Skeptic/Policy (Counter-risk)
+        ordered = ["business", "linkedin", "genz", "policy"]
 
         subject = _extract_subject(summary.headline, max_words=4)
 
         # ── Build the post as a list of paragraphs ────────────────────────────
         parts: list[str] = []
 
-        # ── ① HOOK & SETUP — Media Host frames the live debate ────────────────
+        # ── Header: Brand Headline Show Identity ──────────────────────────────
+        parts.append("🧠 **AIFEEDERS — THE DAILY AI DEBATE**")
+
+        # ── ① HOOK — Immediate tension / curiosity gap (Zero throat-clearing) ──
         media_opening = _story("media_host_opening") or _story("hook")
         if not media_opening:
             media_opening = _build_hook_line(event_type, summary.headline, summary.source, sentiment=nd_sentiment)
-        parts.append(f"🎙️ Media Host:\n\"{_clip_at_sentence(media_opening, 220)}\"")
+        
+        # Clean quotes and strip generic throat-clearing
+        opening_clean = media_opening.strip().strip('"')
+        parts.append(f"🚨 **{opening_clean}**")
 
-        # ── ② SITUATION & GROUNDING — Dynamic setup generated per news story ───
+        # ── ② SITUATION & CORE TENSION — Concrete contrast ────────────────────
         media_setup = _story("media_host_setup")
         if not media_setup:
             situation = _story("what_actually_happened") or summary.why_it_matters.strip()
             analogy   = _story("human_analogy")
-            media_setup = _clip_at_sentence(situation, 280)
+            media_setup = _clip_at_sentence(situation, 320)
             if analogy:
-                media_setup += f"\n\nThink of it this way: {_clip_at_sentence(analogy, 240)}"
+                media_setup += f"\n\nThink of it this way:\n{_clip_at_sentence(analogy, 240)}"
         parts.append(media_setup)
 
-        # ── ③ CONVERSATIONAL DIALOGUE ROUND-TABLE ─────────────────────────────
+        # ── ③ 3-PERSPECTIVE DEBATE (Distinct intellectual jobs) ────────────────
         transitions_map = {}
         if isinstance(story, dict):
             transitions_map = story.get("media_transitions") or {}
@@ -984,10 +989,10 @@ class PublisherAgent:
 
         if personas is not None:
             persona_map = {
-                "policy":   personas.policy,
                 "business": personas.business,
                 "linkedin": personas.linkedin,
                 "genz":     personas.genz,
+                "policy":   personas.policy,
             }
 
             active_pm = [
@@ -1000,31 +1005,16 @@ class PublisherAgent:
             ]
 
             if active_pm:
-                parts.append("────────────────────")
-
                 for key, p in active_pm:
                     emoji, char_name = self._CHAR_DIALOGUE[key]
-                    # Dynamic generated transition for this specific case
-                    intro = transitions_map.get(key)
-                    if not intro:
-                        if key == "policy":
-                            intro = f"First, looking at the regulatory and accountability threshold:"
-                        elif key == "business":
-                            intro = f"The founder challenged the commercial premise:"
-                        elif key == "linkedin":
-                            intro = f"The engineer stepped in on the deployment reality:"
-                        else:
-                            intro = f"And the generalist brought it back to real human impact:"
                     
                     perspective_text = p.perspective.strip()
                     clipped = _clip_at_sentence(perspective_text, 450)
                     
-                    dialogue_entry = f"{intro}\n\n{emoji} {char_name}:\n\"{clipped}\""
+                    dialogue_entry = f"---\n\n{emoji} **{char_name}**\n\n\"{clipped}\""
                     parts.append(dialogue_entry)
 
-                parts.append("────────────────────")
-
-        # ── ④ MEDIA HOST SYNTHESIS & JUDGMENT CONCLUSION ───────────────────────
+        # ── ④ BIGGER QUESTION / SYNTHESIS — Central trade-off ──────────────────
         host_synthesis = _story("media_host_synthesis")
         if not host_synthesis:
             perspective  = _story("perspective")
@@ -1035,44 +1025,34 @@ class PublisherAgent:
             if second_order and second_order != perspective:
                 host_synthesis += f"{_clip_at_sentence(second_order, 200)}"
             if not host_synthesis:
-                host_synthesis = "The central question is no longer whether AI can scale, but who carries the liability when it fails."
+                host_synthesis = "Are investors moving from funding products people want toward dependencies the ecosystem cannot operate without?"
 
-        parts.append(f"🎙️ Media Host (Synthesis):\n\"{host_synthesis.strip()}\"")
+        parts.append(f"---\n\n🎙️ **THE BIGGER QUESTION**\n\n{host_synthesis.strip()}")
 
-        # ── ⑦ SOURCE LINK ─────────────────────────────────────────────────────
-        _SOURCE_LABELS = {
-            "product_launch": "Read the full release →",
-            "regulation":     "Read the full story →",
-            "funding":        "Read the full story →",
-            "acquisition":    "Read the full story →",
-            "research":       "Read the paper →",
-            "other":          "Full story →",
-        }
-        src_label = _SOURCE_LABELS.get(event_type, "Full story →")
-        parts.append(f"{src_label} {summary.source_url}")
-
-        # ── ⑧ AUDIENCE QUESTION — Dynamic Media Host Closing Dilemma ───────────
+        # ── ⑤ COMMENT TRIGGER — Forced-Choice (A / B / C / D) CTA ──────────────
         audience_cta = _story("media_host_audience_cta") or _story("future_question")
-        if audience_cta:
+        if audience_cta and any(marker in audience_cta for marker in ["A —", "A -", "A)", "1️⃣", "1."]):
+            cta = f"---\n\n💬 **YOUR TURN**\n\n{audience_cta.strip()}"
+        elif audience_cta:
             cta = (
-                f"🎙️ Media Host (To the Audience):\n"
-                f"\"{_clip_at_sentence(audience_cta, 240)}\"\n\n"
+                f"---\n\n💬 **YOUR TURN**\n\n"
+                f"{_clip_at_sentence(audience_cta, 280)}\n\n"
                 f"Where do you stand? Drop your take below 👇"
             )
         else:
-            cta_q = _build_cta(
-                headline             = summary.headline,
-                event_type           = event_type,
-                controversy          = controversy,
-                top_persona          = top_persona,
-                source               = summary.source,
-                missing_angle        = str(_intel_sub(intel, "content_opportunity", "missing_angle",        "") or ""),
-                recommended_audience = str(_intel_sub(intel, "content_opportunity", "recommended_audience", "") or ""),
-            )
             cta = (
-                f"🎙️ Media Host (To the Audience):\n"
-                f"{cta_q}"
+                f"---\n\n💬 **YOUR TURN**\n\n"
+                f"If you were allocating capital or engineering resources today, which would you prioritize?\n\n"
+                f"**A** — AI Application Layer\n"
+                f"**B** — Core Infrastructure Dependency\n"
+                f"**C** — Specialized Domain Model\n"
+                f"**D** — Security & Governance Layer\n\n"
+                f"Drop your pick (**A/B/C/D**) and 1-line reason below 👇"
             )
+        parts.append(cta)
+
+        # ── ⑥ SOURCE LINK (Clean at the bottom) ────────────────────────────────
+        parts.append(f"Source: {summary.source_url}")
 
         # ── ⑨ Dynamic SEO & AEO hashtags (100% news-derived) ───────────────────
         story_seo = []

@@ -264,15 +264,23 @@ To ensure trustworthiness, editorial excellence, and zero hallucination, AIFeede
 - Discovers the **Missing Angle** (the underreported tension that mainstream news missed).
 - Performs **Dynamic Persona Routing**, activating only the specific personas relevant to the event (e.g., routing Founder + Engineer for infrastructure funding).
 
-### 4.6 Media Storyteller & Live Dialogue Engine
-- The **Media Host** frames the debate with curiosity and sets the real-world tension with a relatable human analogy.
-- Four distinct personas debate live:
-  - **💼 Founder**: Revenue, cost reduction, market disruption, enterprise adoption, startup survivability.
-  - **🏛️ Policy Analyst**: EU AI Act, liability, data governance, safety standards, public trust.
-  - **🧠 Engineer**: Architectural trade-offs, security, deployment realities, failure modes, observability.
-  - **🎓 Generalist**: Daily human impact, career transitions, workforce trust, non-technical reality.
-- **Dynamic Bridge Phrases**: The Media Host introduces each speaker with context-specific transitions tailored to the debate.
-- **Synthesis & Audience CTA**: Host closes with second-order synthesis and poses a balanced dilemma to the audience.
+### 4.6 The Daily Intellectual Show: 7 Signature Content Formats
+Transforms AIFeeders from a generic news summarizer into a **daily debate show** built around 7 high-engagement formats:
+1. **The AI Debate**: Contrarian premise + 3-way asymmetric friction (Founder vs Engineer vs Skeptic).
+2. **You Are the Investor**: Capital allocation dilemma with forced-choice trade-offs ($10M / $100M decision).
+3. **The Uncomfortable AI Truth**: Exposing the gap between demo hype and production enterprise survival.
+4. **AI Architecture Battle**: Technical showdown comparing agentic graphs, MCP tools, and RAG pipelines.
+5. **The AI Postmortem**: Systems failure analysis explaining why a working model failed in production.
+6. **Prediction Without Predicting**: Long-term strategic bets asking readers to defend against their own pick.
+7. **One Diagram → One Question**: Clean architecture visual paired with an architectural vulnerability dilemma.
+
+**Persona Intellectual Roles**:
+- 💼 **FOUNDER**: Economic moats, CAC, unit margins, and commoditization risks.
+- 🧠 **ENGINEER**: Hidden integration debt, security SLAs, data pipelines, and operational latency.
+- ⚖️ **SKEPTIC**: Challenges the prevailing thesis, highlights heavy capex, and uncovers hidden risks.
+- 🏛️ **POLICY**: Legal liability, EU AI Act compliance, and regulatory enforcement thresholds.
+
+**Comment Architecture**: Forced-choice decision matrices (**A / B / C / D / E + 1-line reason**) that lower comment friction and create a community debate loop.
 
 ### 4.7 Dynamic SEO & AEO Hashtag Engine
 - Eliminates hardcoded dictionary lookups.

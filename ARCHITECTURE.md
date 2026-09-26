@@ -237,14 +237,24 @@ graph TB
 - **Input Guardrail**: Raw news articles are external, untrusted user data. Scans for adversarial prompt injections (`ignore previous instructions`, `<system>`, `jailbreak`), redacts accidentally scraped PII, and strips invisible control characters.
 - **Output Guardrail**: Validates generated posts prior to dispatch. Scans for fake direct quotes attributed to real individuals not present in the PageIndex evidence tree and ensures simulated persona disclaimers are present.
 
-### 5.5 Why Multi-Persona Live Roundtable Debate?
-- **Architectural Problem**: Monolithic summaries sound like corporate press releases and fail to engage diverse professional audiences on networks like LinkedIn.
-- **Why Roundtable Solves It**: Simulates a televised panel debate between 4 distinct archetypes:
-  - **💼 Founder**: Evaluates CAC, margin compression, unit economics, and platform lock-in.
-  - **🏛️ Policy Analyst**: Evaluates EU AI Act compliance, copyright liability, and cross-border data governance.
-  - **🧠 Engineer**: Evaluates latency, GPU memory footprint, architecture, and integration debt.
-  - **🎓 Generalist**: Evaluates workforce transitions, everyday usability, and organizational ergonomics.
-  - **Host Framing**: Opens with a high-curiosity hook and real-world analogy, closing with a practitioner dilemma.
+### 5.5 Why the Daily Intellectual Debate Show & The 7 Content Formats?
+- **Architectural Problem**: Monolithic summaries sound like corporate press releases and fail to trigger engagement. Readers consume passively and scroll past.
+- **Why the Intellectual Show Solves It**: Replaces passive reading with a **Position-Taking Loop** across 7 signature formats:
+  1. *The AI Debate*: Contrarian hook + asymmetric friction (Founder vs Engineer vs Skeptic).
+  2. *You Are the Investor*: $100M capital allocation dilemma on uncrowded bottlenecks.
+  3. *The Uncomfortable AI Truth*: Exposing the gap between demo benchmarks and enterprise survival.
+  4. *AI Architecture Battle*: Production architecture showdown (Graphs vs RAG vs MCP Tools).
+  5. *The AI Postmortem*: Systemic postmortem of why a working demo failed in enterprise production.
+  6. *Prediction Without Predicting*: Long-term strategic calls where commenters defend against their own pick.
+  7. *One Diagram → One Question*: Architecture flow paired with a single vulnerability dilemma.
+
+**Distinct Persona Intellectual Roles**:
+- 💼 **FOUNDER**: Focuses on economic moats, CAC, unit margins, and commoditization risks.
+- 🧠 **ENGINEER**: Exposes hidden integration debt, security SLAs, data pipelines, and operational latency.
+- ⚖️ **SKEPTIC**: Challenges consensus assumptions, capital intensity, and hidden dependency risks.
+- 🏛️ **POLICY**: Highlights legal liability, EU AI Act compliance, and regulatory enforcement thresholds.
+
+**Comment Architecture**: Forced-choice decision matrices (**A / B / C / D / E + 1-line reason**) that lower comment friction, driving 10x higher organic replies.
 
 ### 5.6 Why Deterministic Story Quality Evaluations & Back-Edge Routing?
 - **Architectural Problem**: LLMs cannot be trusted to self-police their own factual accuracy without deterministic constraints.
