@@ -67,63 +67,105 @@
 
 ## 2. Build — Container Images
 
+> **Docker or Podman?** Commands below use `docker`. Swap to `podman` everywhere if you prefer rootless builds — the CLI is fully compatible. Podman is required for OpenShift-local builds.
+
 ### 2.1 Prerequisites
 
 ```bash
-podman --version     # 4.x+ (or docker — swap all podman commands below)
+docker --version     # Docker 24+ recommended (or Podman 4.x+)
 python3 --version    # 3.11+
 cp .env.example .env
 # Edit .env — set at minimum: LLM_BASE_URL, LLM_API_KEY, GNEWS_API_KEY
+
+# Set a version tag — use git SHA in CI for traceability
+export IMAGE_TAG=$(git rev-parse --short HEAD)
+# Or a semantic version: export IMAGE_TAG=1.0.0
 ```
 
 ### 2.2 Build all 5 images
 
 ```bash
-# Main API — contains all LangGraph nodes, agents, prompts (baked at build time)
-podman build -t localhost/ainewsfeederlinkedin-daily-news-api:latest .
+# Main API — all LangGraph nodes, agents, prompts baked at build time
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/daily-news-api:${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/daily-news-api:latest \
+  .
 
 # MCP microservices
-podman build -t localhost/ainewsfeederlinkedin-news-mcp:latest       mcp_servers/news_mcp/
-podman build -t localhost/ainewsfeederlinkedin-pageindex-mcp:latest  mcp_servers/pageindex_mcp/
-podman build -t localhost/ainewsfeederlinkedin-evaluation-mcp:latest mcp_servers/evaluation_mcp/
-podman build -t localhost/ainewsfeederlinkedin-linkedin-mcp:latest   mcp_servers/linkedin_mcp/
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/news-mcp:${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/news-mcp:latest \
+  mcp_servers/news_mcp/
+
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/pageindex-mcp:${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/pageindex-mcp:latest \
+  mcp_servers/pageindex_mcp/
+
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/evaluation-mcp:${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/evaluation-mcp:latest \
+  mcp_servers/evaluation_mcp/
+
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/linkedin-mcp:${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/linkedin-mcp:latest \
+  mcp_servers/linkedin_mcp/
 ```
 
 > **Why 5 images?** Independent scaling + independent failure domains.
 > A GNews API quota spike forces `news-mcp` to restart — it never touches `linkedin-mcp`.
 > Prompts are baked at build time — immutable per release version.
 
-### 2.3 Run locally (Podman)
+> **Multi-platform builds (CI/CD):** For `linux/amd64` + `linux/arm64` in a single push:
+> ```bash
+> docker buildx create --use --name aifeeders-builder
+> docker buildx build --platform linux/amd64,linux/arm64 \
+>   --build-arg APP_VERSION=${IMAGE_TAG} \
+>   -t <REGISTRY>/aifeeders/daily-news-api:${IMAGE_TAG} --push .
+> # Repeat for each MCP service with its context path.
+> ```
+
+### 2.3 Run locally (Docker)
 
 ```bash
-podman network create ainews-net
+docker network create ainews-net
 
 # MCP services — start FIRST
-podman run -d --name news-mcp       --network ainews-net -p 8101:8101 --env-file .env \
-  localhost/ainewsfeederlinkedin-news-mcp:latest
+docker run -d --name news-mcp       --network ainews-net -p 8101:8101 --env-file .env \
+  ainewsfeederlinkedin/news-mcp:latest
 
-podman run -d --name pageindex-mcp  --network ainews-net -p 8102:8102 --env-file .env \
-  localhost/ainewsfeederlinkedin-pageindex-mcp:latest
+docker run -d --name pageindex-mcp  --network ainews-net -p 8102:8102 --env-file .env \
+  ainewsfeederlinkedin/pageindex-mcp:latest
 
-podman run -d --name evaluation-mcp --network ainews-net -p 8103:8103 --env-file .env \
-  localhost/ainewsfeederlinkedin-evaluation-mcp:latest
+docker run -d --name evaluation-mcp --network ainews-net -p 8103:8103 --env-file .env \
+  ainewsfeederlinkedin/evaluation-mcp:latest
 
-podman run -d --name linkedin-mcp   --network ainews-net -p 8104:8104 --env-file .env \
-  localhost/ainewsfeederlinkedin-linkedin-mcp:latest
+docker run -d --name linkedin-mcp   --network ainews-net -p 8104:8104 --env-file .env \
+  ainewsfeederlinkedin/linkedin-mcp:latest
 
 # Wait for MCP health
 sleep 5
 
 # Main API — start LAST
-podman run -d --name daily-news-api --network ainews-net -p 8000:8000 --env-file .env \
-  localhost/ainewsfeederlinkedin-daily-news-api:latest
+docker run -d --name daily-news-api --network ainews-net -p 8000:8000 --env-file .env \
+  ainewsfeederlinkedin/daily-news-api:latest
 ```
+
+> **Docker Compose shortcut:** `docker compose up -d` starts all 5 services with the correct network and `--env-file` automatically. Use `docker compose logs -f` to tail all logs and `docker compose down` to stop.
 
 ### 2.4 Verify all 5 healthy
 
 ```bash
 for port in 8101 8102 8103 8104 8000; do
-  status=$(curl -sf http://localhost:$port/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" 2>/dev/null || echo "UNREACHABLE")
+  status=$(curl -sf http://localhost:$port/health \
+    | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','?'))" \
+    2>/dev/null || echo "UNREACHABLE")
   echo "  :$port → $status"
 done
 # Expected: all → ok (or ready)
@@ -139,8 +181,8 @@ done
 │                                                                                │
 │  Developer           OpenShift Cluster              External APIs              │
 │  ─────────           ─────────────────              ──────────────             │
-│  oc login            BuildConfig (S2I)              IBM Qwen Gateway           │
-│  oc start-build ──►  Internal ImageStream      ◄──► IBM Jev System One         │
+│  docker build        BuildConfig (S2I)              IBM Qwen Gateway           │
+│  docker push    ──►  Internal ImageStream      ◄──► IBM Jev System One         │
 │  apply YAMLs    ──►  Deployment (2–10 pods)    ◄──► GNews API                 │
 │                      CronJob (08:00+16:00 UTC)  ◄──► LinkedIn Platform API     │
 │                      ClusterIP (MCP services)        Langfuse Tracing          │
@@ -152,6 +194,7 @@ done
 # ── STEP 1: Connect ───────────────────────────────────────────────────────────
 oc login --server=https://api.your-cluster.ibm.com:6443 --token=<your-token>
 oc new-project aifeeders 2>/dev/null || oc project aifeeders
+export IMAGE_TAG=$(git rev-parse --short HEAD)
 
 # ── STEP 2: Create namespace-level resources ──────────────────────────────────
 oc apply -f openshift/namespace.yaml     # namespace labels + annotations
@@ -186,10 +229,29 @@ oc apply -f openshift/pdb.yaml           # PodDisruptionBudget: min 1 always ava
 # ── STEP 8: Scheduled runs ────────────────────────────────────────────────────
 oc apply -f openshift/cronjob.yaml       # 08:00 UTC + 16:00 UTC
 
-# ── STEP 9: Build image inside OpenShift (uses internal S2I / binary build) ───
+# ── STEP 9: Build images and push to OpenShift internal registry ───────────────
+# Option A: S2I binary build (no local Docker needed)
 oc apply -f openshift/buildconfigs.yaml
 oc start-build daily-news-api --from-dir=. --follow
-# This pushes to the internal image registry — no DockerHub / ECR needed
+oc start-build news-mcp       --from-dir=mcp_servers/news_mcp/ --follow
+oc start-build pageindex-mcp  --from-dir=mcp_servers/pageindex_mcp/ --follow
+oc start-build evaluation-mcp --from-dir=mcp_servers/evaluation_mcp/ --follow
+oc start-build linkedin-mcp   --from-dir=mcp_servers/linkedin_mcp/ --follow
+
+# Option B: Build locally with Docker and push to internal registry
+oc registry login
+INTERNAL_REGISTRY=$(oc get route default-route -n openshift-image-registry \
+  --template='{{ .spec.host }}')
+
+for svc in daily-news-api news-mcp pageindex-mcp evaluation-mcp linkedin-mcp; do
+  docker build --build-arg APP_VERSION=${IMAGE_TAG} \
+    -t ainewsfeederlinkedin/${svc}:${IMAGE_TAG} \
+    $([ "$svc" = "daily-news-api" ] && echo "." || echo "mcp_servers/${svc/-/_}/")
+  docker tag ainewsfeederlinkedin/${svc}:${IMAGE_TAG} \
+    ${INTERNAL_REGISTRY}/aifeeders/${svc}:${IMAGE_TAG}
+  docker push ${INTERNAL_REGISTRY}/aifeeders/${svc}:${IMAGE_TAG}
+done
+# ImageStream triggers rolling rollout automatically on new push
 
 # ── STEP 10: Verify ───────────────────────────────────────────────────────────
 oc rollout status deployment/daily-news-api -n aifeeders
@@ -199,7 +261,18 @@ oc exec deployment/daily-news-api -n aifeeders -- curl -s http://localhost:8000/
 
 **Update an existing deployment (code change):**
 ```bash
+export IMAGE_TAG=$(git rev-parse --short HEAD)
+
+# Option A: re-run binary build
 oc start-build daily-news-api --from-dir=. --follow
+
+# Option B: rebuild locally and push
+docker build --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t ainewsfeederlinkedin/daily-news-api:${IMAGE_TAG} .
+docker tag ainewsfeederlinkedin/daily-news-api:${IMAGE_TAG} \
+  ${INTERNAL_REGISTRY}/aifeeders/daily-news-api:${IMAGE_TAG}
+docker push ${INTERNAL_REGISTRY}/aifeeders/daily-news-api:${IMAGE_TAG}
+
 oc rollout status deployment/daily-news-api -n aifeeders
 ```
 
@@ -215,8 +288,8 @@ oc rollout status deployment/daily-news-api -n aifeeders
 │  ─────────        ───                ───────────          ──────────           │
 │  docker build     Amazon ECR         aifeeders ns         IBM Qwen             │
 │  docker push ──►  Repository    ──►  Deployments (HPA)    GNews API            │
-│  kubectl apply    imagePullPolicy    CronJob              LinkedIn API          │
-│                   Always             ALB Ingress          Langfuse              │
+│  kubectl apply    scanOnPush=true    CronJob              LinkedIn API          │
+│                   versioned tags     ALB Ingress          Langfuse              │
 │                                      NetworkPolicy                             │
 │                                      Secrets Manager ESO  ◄── secrets          │
 └────────────────────────────────────────────────────────────────────────────────┘
@@ -228,26 +301,52 @@ export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output tex
 export AWS_REGION=us-east-1
 export ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 export CLUSTER_NAME=aifeeders-cluster
+export IMAGE_TAG=$(git rev-parse --short HEAD)
 
 # ── STEP 2: Login to ECR ─────────────────────────────────────────────────────
 aws ecr get-login-password --region $AWS_REGION \
   | docker login --username AWS --password-stdin $ECR_REGISTRY
 
-# ── STEP 3: Create ECR repos (idempotent) ────────────────────────────────────
+# ── STEP 3: Create ECR repos (idempotent, scan-on-push enabled) ───────────────
 for svc in daily-news-api news-mcp pageindex-mcp evaluation-mcp linkedin-mcp; do
   aws ecr create-repository --repository-name aifeeders/$svc \
     --image-scanning-configuration scanOnPush=true \
     --region $AWS_REGION 2>/dev/null || echo "  $svc: repo exists"
 done
 
-# ── STEP 4: Build + push all images ──────────────────────────────────────────
-docker build -t $ECR_REGISTRY/aifeeders/daily-news-api:latest .
-docker build -t $ECR_REGISTRY/aifeeders/news-mcp:latest       mcp_servers/news_mcp/
-docker build -t $ECR_REGISTRY/aifeeders/pageindex-mcp:latest  mcp_servers/pageindex_mcp/
-docker build -t $ECR_REGISTRY/aifeeders/evaluation-mcp:latest mcp_servers/evaluation_mcp/
-docker build -t $ECR_REGISTRY/aifeeders/linkedin-mcp:latest   mcp_servers/linkedin_mcp/
+# ── STEP 4: Build all images with versioned + latest tags ─────────────────────
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/daily-news-api:${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/daily-news-api:latest .
 
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/news-mcp:${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/news-mcp:latest \
+  mcp_servers/news_mcp/
+
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/pageindex-mcp:${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/pageindex-mcp:latest \
+  mcp_servers/pageindex_mcp/
+
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/evaluation-mcp:${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/evaluation-mcp:latest \
+  mcp_servers/evaluation_mcp/
+
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/linkedin-mcp:${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/linkedin-mcp:latest \
+  mcp_servers/linkedin_mcp/
+
+# Push both versioned and latest to ECR
 for svc in daily-news-api news-mcp pageindex-mcp evaluation-mcp linkedin-mcp; do
+  docker push $ECR_REGISTRY/aifeeders/$svc:${IMAGE_TAG}
   docker push $ECR_REGISTRY/aifeeders/$svc:latest
 done
 
@@ -256,25 +355,30 @@ aws eks update-kubeconfig --region $AWS_REGION --name $CLUSTER_NAME
 
 # ── STEP 6: Namespace + RBAC ─────────────────────────────────────────────────
 kubectl create namespace aifeeders --dry-run=client -o yaml | kubectl apply -f -
-# Apply RBAC separately since openshift/rbac.yaml may have OpenShift-specific kinds
 kubectl apply -n aifeeders -f openshift/rbac.yaml 2>/dev/null \
   || echo "  RBAC: apply manually if OpenShift CRDs missing"
 
 # ── STEP 7: Secrets ───────────────────────────────────────────────────────────
 # See Section 6. Recommended: AWS Secrets Manager + External Secrets Operator
-# Quick path (dev/staging only):
+# Quick path (dev/staging only — not for production):
 kubectl create secret generic daily-news-secrets \
   --from-literal=LLM_API_KEY="..." \
+  --from-literal=LLM_BASE_URL="https://your-gateway/v1" \
   --from-literal=GNEWS_API_KEY="..." \
+  --from-literal=GNEWS_BACKUP_API_KEY="..." \
   --from-literal=LINKEDIN_ACCESS_TOKEN="..." \
+  --from-literal=LINKEDIN_PERSON_URN="urn:li:person:XXXXX" \
+  --from-literal=LANGFUSE_PUBLIC_KEY="pk-lf-..." \
+  --from-literal=LANGFUSE_SECRET_KEY="sk-lf-..." \
   --namespace aifeeders --dry-run=client -o yaml | kubectl apply -f -
 
-# ── STEP 8: Deploy all services (image refs swapped to ECR) ──────────────────
+# ── STEP 8: Deploy all services (swap image refs to ECR) ──────────────────────
 for f in openshift/{news-mcp,pageindex-mcp,evaluation-mcp,linkedin-mcp,api}/*.yaml; do
-  sed "s|localhost/ainewsfeederlinkedin-|${ECR_REGISTRY}/aifeeders/|g" "$f" \
+  sed "s|ainewsfeederlinkedin/|${ECR_REGISTRY}/aifeeders/|g" "$f" \
   | kubectl apply -n aifeeders -f -
 done
 
+kubectl apply -n aifeeders -f openshift/configmap.yaml
 kubectl apply -n aifeeders -f openshift/networkpolicy.yaml
 kubectl apply -n aifeeders -f openshift/hpa.yaml
 kubectl apply -n aifeeders -f openshift/cronjob.yaml
@@ -287,10 +391,14 @@ kubectl exec deploy/daily-news-api -n aifeeders -- curl -s http://localhost:8000
 
 **Update (code change):**
 ```bash
-docker build -t $ECR_REGISTRY/aifeeders/daily-news-api:latest . && \
+export IMAGE_TAG=$(git rev-parse --short HEAD)
+docker build --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/daily-news-api:${IMAGE_TAG} \
+  -t $ECR_REGISTRY/aifeeders/daily-news-api:latest . && \
+docker push $ECR_REGISTRY/aifeeders/daily-news-api:${IMAGE_TAG} && \
 docker push $ECR_REGISTRY/aifeeders/daily-news-api:latest && \
 kubectl rollout restart deployment/daily-news-api -n aifeeders && \
-kubectl rollout status deployment/daily-news-api -n aifeeders
+kubectl rollout status  deployment/daily-news-api -n aifeeders
 ```
 
 ---
@@ -306,7 +414,7 @@ kubectl rollout status deployment/daily-news-api -n aifeeders
 │  docker build     Azure ACR          aifeeders ns         IBM Qwen             │
 │  docker push ──►  aifeedersregistry  Deployments (HPA)    GNews API            │
 │  kubectl apply    Managed Identity   CronJob              LinkedIn API          │
-│                   pull (no secret)   AGIC (HTTPS + WAF)   Langfuse              │
+│                   versioned tags     AGIC (HTTPS + WAF)   Langfuse              │
 │                                      Key Vault CSI        ◄── secrets          │
 └────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -317,22 +425,53 @@ export RESOURCE_GROUP=aifeeders-rg
 export ACR_NAME=aifeedersregistry
 export AKS_NAME=aifeeders-aks
 export ACR_REGISTRY="${ACR_NAME}.azurecr.io"
+export IMAGE_TAG=$(git rev-parse --short HEAD)
 
-# ── STEP 2: Attach ACR to AKS (one-time, enables pull via Managed Identity) ───
+# ── STEP 2: Attach ACR to AKS (one-time — enables pull via Managed Identity) ──
 az aks update --resource-group $RESOURCE_GROUP --name $AKS_NAME --attach-acr $ACR_NAME
 
-# ── STEP 3: Login + build + push ─────────────────────────────────────────────
+# ── STEP 3: Login to ACR + build + push all images ────────────────────────────
 az acr login --name $ACR_NAME
 
-docker build -t $ACR_REGISTRY/aifeeders/daily-news-api:latest .
-docker build -t $ACR_REGISTRY/aifeeders/news-mcp:latest       mcp_servers/news_mcp/
-docker build -t $ACR_REGISTRY/aifeeders/pageindex-mcp:latest  mcp_servers/pageindex_mcp/
-docker build -t $ACR_REGISTRY/aifeeders/evaluation-mcp:latest mcp_servers/evaluation_mcp/
-docker build -t $ACR_REGISTRY/aifeeders/linkedin-mcp:latest   mcp_servers/linkedin_mcp/
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/daily-news-api:${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/daily-news-api:latest .
 
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/news-mcp:${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/news-mcp:latest \
+  mcp_servers/news_mcp/
+
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/pageindex-mcp:${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/pageindex-mcp:latest \
+  mcp_servers/pageindex_mcp/
+
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/evaluation-mcp:${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/evaluation-mcp:latest \
+  mcp_servers/evaluation_mcp/
+
+docker build \
+  --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/linkedin-mcp:${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/linkedin-mcp:latest \
+  mcp_servers/linkedin_mcp/
+
+# Push versioned + latest tags to ACR
 for svc in daily-news-api news-mcp pageindex-mcp evaluation-mcp linkedin-mcp; do
+  docker push $ACR_REGISTRY/aifeeders/$svc:${IMAGE_TAG}
   docker push $ACR_REGISTRY/aifeeders/$svc:latest
 done
+
+# Alternative: in-cloud build via ACR Tasks (no local Docker required)
+# az acr build --registry $ACR_NAME \
+#   --image aifeeders/daily-news-api:${IMAGE_TAG} \
+#   --build-arg APP_VERSION=${IMAGE_TAG} .
 
 # ── STEP 4: Connect kubectl ───────────────────────────────────────────────────
 az aks get-credentials --resource-group $RESOURCE_GROUP --name $AKS_NAME
@@ -342,16 +481,22 @@ kubectl create namespace aifeeders --dry-run=client -o yaml | kubectl apply -f -
 # See Section 6 for full secret creation. Recommended: Azure Key Vault CSI Driver
 kubectl create secret generic daily-news-secrets \
   --from-literal=LLM_API_KEY="..." \
+  --from-literal=LLM_BASE_URL="https://your-gateway/v1" \
   --from-literal=GNEWS_API_KEY="..." \
+  --from-literal=GNEWS_BACKUP_API_KEY="..." \
   --from-literal=LINKEDIN_ACCESS_TOKEN="..." \
+  --from-literal=LINKEDIN_PERSON_URN="urn:li:person:XXXXX" \
+  --from-literal=LANGFUSE_PUBLIC_KEY="pk-lf-..." \
+  --from-literal=LANGFUSE_SECRET_KEY="sk-lf-..." \
   --namespace aifeeders --dry-run=client -o yaml | kubectl apply -f -
 
-# ── STEP 6: Deploy all services ───────────────────────────────────────────────
+# ── STEP 6: Deploy all services (swap image refs to ACR) ──────────────────────
 for f in openshift/{news-mcp,pageindex-mcp,evaluation-mcp,linkedin-mcp,api}/*.yaml; do
-  sed "s|localhost/ainewsfeederlinkedin-|${ACR_REGISTRY}/aifeeders/|g" "$f" \
+  sed "s|ainewsfeederlinkedin/|${ACR_REGISTRY}/aifeeders/|g" "$f" \
   | kubectl apply -n aifeeders -f -
 done
 
+kubectl apply -n aifeeders -f openshift/configmap.yaml
 kubectl apply -n aifeeders -f openshift/networkpolicy.yaml
 kubectl apply -n aifeeders -f openshift/hpa.yaml
 kubectl apply -n aifeeders -f openshift/cronjob.yaml
@@ -359,6 +504,18 @@ kubectl apply -n aifeeders -f openshift/cronjob.yaml
 # ── STEP 7: Verify ────────────────────────────────────────────────────────────
 kubectl rollout status deployment/daily-news-api -n aifeeders
 kubectl get pods -n aifeeders
+kubectl exec deploy/daily-news-api -n aifeeders -- curl -s http://localhost:8000/health
+
+# ── Rolling update (code change) ─────────────────────────────────────────────
+export IMAGE_TAG=$(git rev-parse --short HEAD)
+az acr login --name $ACR_NAME && \
+docker build --build-arg APP_VERSION=${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/daily-news-api:${IMAGE_TAG} \
+  -t $ACR_REGISTRY/aifeeders/daily-news-api:latest . && \
+docker push $ACR_REGISTRY/aifeeders/daily-news-api:${IMAGE_TAG} && \
+docker push $ACR_REGISTRY/aifeeders/daily-news-api:latest && \
+kubectl rollout restart deployment/daily-news-api -n aifeeders && \
+kubectl rollout status  deployment/daily-news-api -n aifeeders
 ```
 
 ---
@@ -367,12 +524,16 @@ kubectl get pods -n aifeeders
 
 **Never commit secrets to git.** Use Kubernetes Secrets for dev/staging, cloud-native vault for production.
 
+> **Complete secret list** — the same keys are required on all three platforms. Create them once per environment using the platform-specific method below.
+
 ### OpenShift
 ```bash
 oc create secret generic daily-news-secrets \
   --from-literal=LLM_API_KEY="your-key" \
   --from-literal=LLM_BASE_URL="https://your-gateway/v1" \
   --from-literal=LLM_MODEL="qwen2-5-72b-instruct" \
+  --from-literal=EVAL_LLM_BASE_URL="https://your-gateway/v1" \
+  --from-literal=EVAL_LLM_API_KEY="your-key" \
   --from-literal=EVAL_LLM_MODEL="qwen2-5-72b-instruct" \
   --from-literal=GNEWS_API_KEY="primary-gnews-key" \
   --from-literal=GNEWS_BACKUP_API_KEY="backup-gnews-key" \
@@ -382,36 +543,89 @@ oc create secret generic daily-news-secrets \
   --from-literal=LINKEDIN_PERSON_URN="urn:li:person:XXXXXXXX" \
   --from-literal=LANGFUSE_PUBLIC_KEY="pk-lf-..." \
   --from-literal=LANGFUSE_SECRET_KEY="sk-lf-..." \
+  --from-literal=PUBLISHING_ENABLED="true" \
+  --from-literal=APP_ENV="production" \
   -n aifeeders
 ```
 
-### EKS + AWS Secrets Manager (production)
+### EKS — plain K8s secret (dev/staging) or AWS Secrets Manager (production)
 ```bash
-# 1. Store in AWS Secrets Manager
+# ── Option A: Plain K8s secret (dev / staging) ────────────────────────────────
+kubectl create secret generic daily-news-secrets \
+  --from-literal=LLM_API_KEY="your-key" \
+  --from-literal=LLM_BASE_URL="https://your-gateway/v1" \
+  --from-literal=LLM_MODEL="qwen2-5-72b-instruct" \
+  --from-literal=EVAL_LLM_BASE_URL="https://your-gateway/v1" \
+  --from-literal=EVAL_LLM_API_KEY="your-key" \
+  --from-literal=EVAL_LLM_MODEL="qwen2-5-72b-instruct" \
+  --from-literal=GNEWS_API_KEY="primary-gnews-key" \
+  --from-literal=GNEWS_BACKUP_API_KEY="backup-gnews-key" \
+  --from-literal=JEV_BASE_URL="https://your-jev-gateway" \
+  --from-literal=JEV_API_KEY="your-jev-key" \
+  --from-literal=LINKEDIN_ACCESS_TOKEN="your-token" \
+  --from-literal=LINKEDIN_PERSON_URN="urn:li:person:XXXXXXXX" \
+  --from-literal=LANGFUSE_PUBLIC_KEY="pk-lf-..." \
+  --from-literal=LANGFUSE_SECRET_KEY="sk-lf-..." \
+  --from-literal=PUBLISHING_ENABLED="true" \
+  --from-literal=APP_ENV="production" \
+  --namespace aifeeders --dry-run=client -o yaml | kubectl apply -f -
+
+# ── Option B: AWS Secrets Manager + External Secrets Operator (production) ────
+# 1. Store all secrets in AWS Secrets Manager as a single JSON object
 aws secretsmanager create-secret --name aifeeders/prod \
-  --secret-string '{"LLM_API_KEY":"...","GNEWS_API_KEY":"...","LINKEDIN_ACCESS_TOKEN":"..."}'
+  --secret-string '{
+    "LLM_API_KEY":"...","LLM_BASE_URL":"...","LLM_MODEL":"qwen2-5-72b-instruct",
+    "GNEWS_API_KEY":"...","GNEWS_BACKUP_API_KEY":"...",
+    "JEV_BASE_URL":"...","JEV_API_KEY":"...",
+    "LINKEDIN_ACCESS_TOKEN":"...","LINKEDIN_PERSON_URN":"urn:li:person:XXXXXXXX",
+    "LANGFUSE_PUBLIC_KEY":"pk-lf-...","LANGFUSE_SECRET_KEY":"sk-lf-..."
+  }'
 
-# 2. Install External Secrets Operator
+# 2. Install External Secrets Operator via Helm
 helm repo add external-secrets https://charts.external-secrets.io
-helm install external-secrets external-secrets/external-secrets -n external-secrets --create-namespace
+helm install external-secrets external-secrets/external-secrets \
+  -n external-secrets --create-namespace
 
-# 3. Apply ExternalSecret manifest pointing to the SM ARN
+# 3. Apply ExternalSecret manifest — reads the SM ARN and creates the K8s secret
 kubectl apply -n aifeeders -f eks/external-secret.yaml
 ```
 
-### AKS + Azure Key Vault (production)
+### AKS — plain K8s secret (dev/staging) or Azure Key Vault (production)
 ```bash
-# 1. Enable Key Vault CSI driver addon
+# ── Option A: Plain K8s secret (dev / staging) ────────────────────────────────
+kubectl create secret generic daily-news-secrets \
+  --from-literal=LLM_API_KEY="your-key" \
+  --from-literal=LLM_BASE_URL="https://your-gateway/v1" \
+  --from-literal=LLM_MODEL="qwen2-5-72b-instruct" \
+  --from-literal=EVAL_LLM_BASE_URL="https://your-gateway/v1" \
+  --from-literal=EVAL_LLM_API_KEY="your-key" \
+  --from-literal=EVAL_LLM_MODEL="qwen2-5-72b-instruct" \
+  --from-literal=GNEWS_API_KEY="primary-gnews-key" \
+  --from-literal=GNEWS_BACKUP_API_KEY="backup-gnews-key" \
+  --from-literal=JEV_BASE_URL="https://your-jev-gateway" \
+  --from-literal=JEV_API_KEY="your-jev-key" \
+  --from-literal=LINKEDIN_ACCESS_TOKEN="your-token" \
+  --from-literal=LINKEDIN_PERSON_URN="urn:li:person:XXXXXXXX" \
+  --from-literal=LANGFUSE_PUBLIC_KEY="pk-lf-..." \
+  --from-literal=LANGFUSE_SECRET_KEY="sk-lf-..." \
+  --from-literal=PUBLISHING_ENABLED="true" \
+  --from-literal=APP_ENV="production" \
+  --namespace aifeeders --dry-run=client -o yaml | kubectl apply -f -
+
+# ── Option B: Azure Key Vault + CSI Driver (production) ───────────────────────
+# 1. Enable Key Vault CSI driver addon on the AKS cluster
 az aks enable-addons --addons azure-keyvault-secrets-provider \
   --resource-group $RESOURCE_GROUP --name $AKS_NAME
 
-# 2. Grant AKS Managed Identity access to Key Vault
+# 2. Grant AKS Managed Identity GET + LIST on Key Vault
 az keyvault set-policy --name aifeeders-kv \
-  --object-id <aks-managed-identity-object-id> \
+  --object-id $(az aks show --resource-group $RESOURCE_GROUP --name $AKS_NAME \
+    --query "identityProfile.kubeletidentity.objectId" -o tsv) \
   --secret-permissions get list
 
-# 3. Apply SecretProviderClass manifest
+# 3. Apply SecretProviderClass manifest — mounts secrets as files in pods
 kubectl apply -n aifeeders -f aks/keyvault-secret-provider.yaml
+# Secrets are auto-rotated by the CSI driver without requiring a pod restart
 ```
 
 ---
