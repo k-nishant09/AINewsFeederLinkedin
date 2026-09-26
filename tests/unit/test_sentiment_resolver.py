@@ -24,7 +24,6 @@ from daily_news.agents.sentiment_resolver import (
     resolve_sentiment,
 )
 
-
 # ── _count_polarity ───────────────────────────────────────────────────────────
 
 class TestCountPolarity:

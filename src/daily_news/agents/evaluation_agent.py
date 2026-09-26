@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+
 import httpx
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
@@ -325,7 +326,7 @@ def _enrich_source(raw_source: str, summary: NewsSummary) -> str:
 
 
 def _pre_scan_personas(
-    personas: "PersonaSetOutput",
+    personas: PersonaSetOutput,
     run_id: str | None,
     article_id: str,
 ) -> list[str]:

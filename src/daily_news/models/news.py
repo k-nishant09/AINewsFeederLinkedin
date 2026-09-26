@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -33,10 +33,10 @@ class NewsArticle(BaseModel):
     url: str
     published_at: datetime
     category: NewsCategory = NewsCategory.UNCATEGORIZED
-    author: Optional[str] = None
+    author: str | None = None
     content: str
     content_hash: str
-    credibility_score: Optional[float] = None
+    credibility_score: float | None = None
     language: str = "en"
 
     # ── Sentiment / analysis fields ───────────────────────────────────────────
@@ -48,23 +48,23 @@ class NewsArticle(BaseModel):
     # sentiment_stats: per-class probability distribution
     # ai_region:       AI-classified geographic region (future)
     # ai_org:          AI-extracted organisation name  (future)
-    ai_tag: Optional[str] = None
-    sentiment: Optional[NewsSentiment] = None
-    sentiment_stats: Optional[dict[str, Any]] = None
-    ai_region: Optional[str] = None
-    ai_org: Optional[str] = None
+    ai_tag: str | None = None
+    sentiment: NewsSentiment | None = None
+    sentiment_stats: dict[str, Any] | None = None
+    ai_region: str | None = None
+    ai_org: str | None = None
 
     # ── Source provider ───────────────────────────────────────────────────────
     # "gnews" | "mock"
-    provider: Optional[str] = None
+    provider: str | None = None
 
 
 class NewsSearchRequest(BaseModel):
     query: str
-    published_after: Optional[str] = None
+    published_after: str | None = None
     language: str = "en"
     limit: int = Field(default=20, ge=1, le=100)
-    category: Optional[NewsCategory] = None
+    category: NewsCategory | None = None
 
 
 class NewsSearchResponse(BaseModel):

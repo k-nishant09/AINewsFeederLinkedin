@@ -50,20 +50,19 @@ import re
 import uuid
 from typing import Literal, TypedDict
 
-from daily_news.agents.published_store import published_store
-
 from langgraph.graph import END, START, StateGraph
 
 from daily_news.agents.content_optimizer import ContentOptimizerAgent
 from daily_news.agents.evaluation_agent import EvaluationAgent
-from daily_news.agents.guardrails import InputGuardrail, OutputGuardrail
+from daily_news.agents.guardrails import InputGuardrail
 from daily_news.agents.jev_agents import jev_find_angle, jev_prefilter_articles, jev_route_personas
 from daily_news.agents.judgment_agent import JudgmentAgent
 from daily_news.agents.persona_agent import PersonaAgentFactory
+from daily_news.agents.published_store import published_store
 from daily_news.agents.publisher_agent import PublisherAgent
-from daily_news.agents.reach_score_agent import ReachScoreAgent, REACH_THRESHOLD
+from daily_news.agents.reach_score_agent import REACH_THRESHOLD, ReachScoreAgent
 from daily_news.agents.sentiment_resolver import resolve_sentiment
-from daily_news.agents.summary_agent import SummaryAgent, MediaStorytellerAgent
+from daily_news.agents.summary_agent import MediaStorytellerAgent, SummaryAgent
 from daily_news.mcp.linkedin import LinkedInMCPClient
 from daily_news.mcp.news import NewsMCPClient
 from daily_news.mcp.pageindex import PageIndexMCPClient
@@ -71,7 +70,7 @@ from daily_news.models.evaluation import EvaluationDecision
 from daily_news.models.intelligence import EngagementMetrics
 from daily_news.models.news import NewsCategory
 from daily_news.models.persona import PersonaType
-from daily_news.observability.tracing import langfuse_trace, flush_langfuse
+from daily_news.observability.tracing import flush_langfuse, langfuse_trace
 
 logger = logging.getLogger(__name__)
 
@@ -603,7 +602,6 @@ async def score_reach(state: NewsWorkflowState) -> NewsWorkflowState:
     Stores scoring metadata in state["reach_scores"] for observability.
     Does NOT call LinkedIn — purely deterministic text analysis.
     """
-    from daily_news.models.evaluation import EvaluationResult
     from daily_news.models.persona import PersonaSetOutput
     from daily_news.models.summary import NewsSummary
 

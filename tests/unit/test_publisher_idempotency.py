@@ -1,7 +1,6 @@
 """Unit tests — publisher idempotency and post composition."""
 from __future__ import annotations
 
-import hashlib
 from datetime import date
 
 from daily_news.agents.publisher_agent import PublisherAgent

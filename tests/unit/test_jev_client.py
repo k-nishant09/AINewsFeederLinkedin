@@ -21,17 +21,13 @@ import pytest
 from daily_news.mcp.jev_client import (
     JevClient,
     JevPrefilterResult,
+    _article_to_state,
     _as_bool,
     _as_float,
-    _article_to_state,
-    _noul_val,
-    _choice_val,
-    _score_val,
     _summary_to_state,
 )
 from daily_news.models.evaluation import EvaluationDecision
 from daily_news.models.persona import PersonaType
-
 
 # ── _as_float / _as_bool ─────────────────────────────────────────────────────
 

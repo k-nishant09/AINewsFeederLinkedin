@@ -367,7 +367,7 @@ class PersonaAgentFactory:
         )
 
 
-def _stub_persona(persona: PersonaType, article_id: str) -> "PersonaOutput":
+def _stub_persona(persona: PersonaType, article_id: str) -> PersonaOutput:
     """
     Returns an empty PersonaOutput for a persona that was skipped by Jev routing.
     The publisher agent checks for empty perspective strings and omits them.

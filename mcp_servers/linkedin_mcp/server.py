@@ -87,7 +87,7 @@ import os
 import secrets
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -198,7 +198,7 @@ def _token_expiry_iso() -> str | None:
     expires_at = _token_store.get("expires_at", 0.0)
     if expires_at == 0.0:
         return None
-    return datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
+    return datetime.fromtimestamp(expires_at, tz=UTC).isoformat()
 
 
 def _store_token_response(data: dict[str, Any]) -> None:
@@ -405,7 +405,7 @@ def _audit(
 ) -> None:
     """Append one entry to the audit log. Never logs the access token."""
     _audit_log.append({
-        "timestamp":    datetime.now(tz=timezone.utc).isoformat(),
+        "timestamp":    datetime.now(tz=UTC).isoformat(),
         "tool":         tool,
         "actor_urn":    actor_urn,
         "post_urn":     post_urn,
@@ -831,11 +831,17 @@ async def linkedin_delete_post(post_urn: str) -> dict:
             resp.raise_for_status()
             return {"post_urn": post_urn, "status": "deleted", "http_status": resp.status_code}
     except httpx.HTTPStatusError as exc:
-        err = _classify_http_error(exc, actor_urn="", endpoint=f"{LINKEDIN_REST_BASE}/posts/{post_id}", attempt=1, tool="linkedin_delete_post")
+        err = _classify_http_error(
+            exc, actor_urn="", endpoint=f"{LINKEDIN_REST_BASE}/posts/{encoded_urn}",
+            attempt=1, tool="linkedin_delete_post",
+        )
         logger.error("LinkedIn delete failed for %s: %s", post_urn, err)
         return err
     except (httpx.RequestError, OSError) as exc:
-        err = _classify_network_error(exc, actor_urn="", endpoint=f"{LINKEDIN_REST_BASE}/posts/{post_id}", attempt=1, tool="linkedin_delete_post")
+        err = _classify_network_error(
+            exc, actor_urn="", endpoint=f"{LINKEDIN_REST_BASE}/posts/{encoded_urn}",
+            attempt=1, tool="linkedin_delete_post",
+        )
         return err
 
 

@@ -19,13 +19,10 @@ Covers:
 """
 from __future__ import annotations
 
-import hashlib
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, patch
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -135,6 +132,7 @@ def test_mock_articles_have_null_sentiment_fields():
 async def test_news_search_latest_returns_mock_when_no_keys(monkeypatch):
     monkeypatch.setenv("GNEWS_API_KEY", "")
     import importlib
+
     import mcp_servers.news_mcp.server as srv
     importlib.reload(srv)
 
@@ -153,6 +151,7 @@ async def test_news_search_latest_returns_mock_when_no_keys(monkeypatch):
 async def test_news_search_ai_tech_returns_mock_when_no_keys(monkeypatch):
     monkeypatch.setenv("GNEWS_API_KEY", "")
     import importlib
+
     import mcp_servers.news_mcp.server as srv
     importlib.reload(srv)
 
@@ -166,6 +165,7 @@ async def test_news_search_ai_tech_returns_mock_when_no_keys(monkeypatch):
 async def test_news_search_ai_finance_returns_mock_when_no_keys(monkeypatch):
     monkeypatch.setenv("GNEWS_API_KEY", "")
     import importlib
+
     import mcp_servers.news_mcp.server as srv
     importlib.reload(srv)
 
@@ -179,6 +179,7 @@ async def test_news_search_ai_finance_returns_mock_when_no_keys(monkeypatch):
 async def test_news_search_by_category_ai_finance(monkeypatch):
     monkeypatch.setenv("GNEWS_API_KEY", "")
     import importlib
+
     import mcp_servers.news_mcp.server as srv
     importlib.reload(srv)
 
@@ -194,6 +195,7 @@ async def test_news_search_by_category_ai_finance(monkeypatch):
 async def test_news_search_by_category_unknown_falls_back(monkeypatch):
     monkeypatch.setenv("GNEWS_API_KEY", "")
     import importlib
+
     import mcp_servers.news_mcp.server as srv
     importlib.reload(srv)
 
@@ -205,6 +207,7 @@ async def test_news_search_by_category_unknown_falls_back(monkeypatch):
 async def test_news_top_headlines_technology_mock(monkeypatch):
     monkeypatch.setenv("GNEWS_API_KEY", "")
     import importlib
+
     import mcp_servers.news_mcp.server as srv
     importlib.reload(srv)
 

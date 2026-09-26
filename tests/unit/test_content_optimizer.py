@@ -1,9 +1,7 @@
 """Unit tests for ContentOptimizerAgent and Story Mutation Engine."""
 import pytest
 
-from daily_news.agents.content_optimizer import ContentOptimizerAgent
 from daily_news.models.intelligence import EngagementMetrics, PerformanceDiagnosis, StoryMutation
-from daily_news.models.summary import NewsSummary
 
 
 @pytest.mark.asyncio

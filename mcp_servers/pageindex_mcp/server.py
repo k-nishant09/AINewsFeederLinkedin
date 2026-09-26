@@ -141,6 +141,7 @@ def health():
 async def call_tool(request: dict):
     """Simple REST tool dispatcher. Body: {"tool": "<name>", "arguments": {...}}"""
     import inspect
+
     from fastapi import HTTPException
     tool_name = request.get("tool", "")
     fn = _TOOLS.get(tool_name)

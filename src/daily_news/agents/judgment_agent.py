@@ -9,7 +9,6 @@ claims with verified facts.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import httpx
 from langchain_core.output_parsers import PydanticOutputParser

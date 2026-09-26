@@ -24,7 +24,6 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture()
@@ -201,7 +200,9 @@ def test_restli_protocol_version_header():
 def test_correct_api_base_urls():
     """Verify the correct base URLs are used per the official docs."""
     from mcp_servers.linkedin_mcp.server import (
-        LINKEDIN_REST_BASE, LINKEDIN_V2_BASE, LINKEDIN_OIDC_BASE
+        LINKEDIN_OIDC_BASE,
+        LINKEDIN_REST_BASE,
+        LINKEDIN_V2_BASE,
     )
     # REST API (Posts, UGC)
     assert LINKEDIN_REST_BASE  == "https://api.linkedin.com/rest"
@@ -269,6 +270,7 @@ async def test_validate_token_env_token_present():
 async def test_validate_token_oauth_token_expired():
     """An OAuth token with a past expires_at is reported as expired."""
     import time
+
     import mcp_servers.linkedin_mcp.server as srv
     original = srv._token_store.copy()
     srv._token_store["access_token"] = "expired-oauth-token"
@@ -384,6 +386,7 @@ def test_build_auth_url_contains_required_params():
 def test_store_token_response_sets_expiry():
     """_store_token_response must calculate expires_at from expires_in."""
     import time
+
     import mcp_servers.linkedin_mcp.server as srv
     original = srv._token_store.copy()
     before = time.time()
