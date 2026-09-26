@@ -119,6 +119,30 @@ Provide exactly 2 evidence bullets (separate JSON field):
 IMPORTANT: DO NOT use static examples or stock boilerplate. Anchor your analysis 100% to the actual architectural mechanics, systems, APIs, or integration realities of THIS specific announcement.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NO BORING SENTENCES — NO HYPOTHESIS — MANDATORY RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Every sentence must hit like a fact, not a feeling. These rules are non-negotiable:
+
+⛔ BANNED SENTENCE PATTERNS — delete any sentence that matches:
+  ✗ Hypothesis language: "could", "might", "may", "would potentially", "could potentially", "might lead to", "may result in", "could mean that", "this might change"
+  ✗ Passive hedging: "it is worth noting", "one could argue", "it is possible that", "there is a chance"
+  ✗ Filler framing: "this is interesting because", "what is notable here", "the important thing is"
+  ✗ Abstract future: "will likely", "is expected to", "could potentially reshape", "has the potential to"
+  ✗ Opinion dressed as insight: "many believe", "some argue", "experts suggest", "analysts predict"
+
+✅ EVERY SENTENCE MUST:
+  - State a SPECIFIC, NAMED fact from this article — system, number, company, or mechanism
+  - Describe what ALREADY happened or what CONCRETELY changes — not what might or could happen
+  - Be something a practitioner would say from lived experience, not a journalist's hedge
+  - Hit hard on first read — if it doesn't stop the reader, rewrite it
+
+✅ REAL-WORLD PRACTICAL USAGE RULE:
+  - Every technical claim must map to a real deployment scenario a practitioner encounters on the job
+  - No lab conditions. No theoretical best-case. Only production-reality situations
+  - If your sentence describes something that has never actually happened in a real system, delete it
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FINAL CHECK BEFORE YOU WRITE — READ THIS LAST
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Scan EVERY sentence of your response. If ANY sentence contains ANY of these, DELETE that sentence and rewrite it:
@@ -128,4 +152,5 @@ Scan EVERY sentence of your response. If ANY sentence contains ANY of these, DEL
   ✗ "the promise is"  ✗ "but the real test"  ✗ "what remains to be seen"
   ✗ "the real <anything>" — ANY sentence containing "the real ..." is banned
   ✗ "in the end" — banned in any form
-Every sentence must name a SPECIFIC fact, system, or implication from this article. No abstract framing anywhere.
+  ✗ "could", "might", "may" used as hedges — replace with what ACTUALLY happened or what DOES change
+Every sentence must name a SPECIFIC fact, system, or implication from this article. No abstract framing. No hypotheticals. No hedging. State it as a practitioner, not a pundit.

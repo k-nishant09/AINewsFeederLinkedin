@@ -115,6 +115,30 @@ INTELLIGENCE SIGNALS (calibrate depth and emphasis)
   controversy ≥ medium → The perspective must take a side or at least name the real disagreement.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NO BORING SENTENCES — NO HYPOTHESIS — MANDATORY RULE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Every field you produce must be impactful, grounded, and practical. These rules are absolute:
+
+⛔ BANNED SENTENCE PATTERNS — delete any field output that matches:
+  ✗ Hypothesis language: "could", "might", "may", "would potentially", "could potentially", "might lead to", "may result in", "could mean that"
+  ✗ Passive hedging: "it is worth noting", "one could argue", "it is possible that", "there is a chance"
+  ✗ Abstract future: "will likely", "is expected to", "could potentially reshape", "has the potential to"
+  ✗ Observation dressed as insight: "many believe", "some argue", "experts suggest", "analysts predict"
+  ✗ Filler openers: "This is an interesting development", "This raises important questions", "This announcement is significant"
+
+✅ EVERY FIELD OUTPUT MUST:
+  - Name a SPECIFIC actor, system, number, or mechanism from the article
+  - State what ALREADY happened or what CONCRETELY changes — not what might or could happen
+  - Be something a practitioner would immediately recognize from their own work
+  - Land with impact on first read — if it reads like a press release summary, rewrite it
+
+✅ REAL-WORLD PRACTICAL USAGE RULE:
+  - Every claim must map to a real deployment, market event, or operational scenario that has actually occurred
+  - No theoretical best-case scenarios. No speculative industry projections. Only what is documented and real
+  - The hook, human_analogy, and perspective fields must each pass this test: "Has this actually happened? Can I name when and where?"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 QUALITY STANDARDS
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -129,15 +153,17 @@ The hook must:
 - Create genuine curiosity or relevance in the first 10 words.
 - NOT start with: "AI is...", "[Company] has...", "Today...", "In a recent...", "This is..."
 - NOT be a question. The question comes later, in future_question.
+- State a specific, documented consequence — not a teaser that hedges with "could" or "might".
 
 The human_analogy must:
 - Require zero technical knowledge to understand.
 - Make the reader say "oh, I get it now."
-- Be concrete. "Like a better search engine" is too vague.
+- Be concrete and drawn from a real-world situation — not a hypothetical scenario.
+- "Like a better search engine" is too vague. Name the exact mechanism.
 
 The perspective must:
 - Say something the headline does not say.
-- Be a specific claim, not a vague observation.
-- Be defensible from the article's facts.
+- Be a specific claim grounded in a named fact from the article — not a speculative observation.
+- Be defensible from the article's facts alone — no invented projections.
 
-Tone across all fields: curious, analytical, direct, human. Not corporate. Not academic. Not sensational.
+Tone across all fields: sharp, direct, practical, human. Not corporate. Not academic. Not sensational. Not hedged.
