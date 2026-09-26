@@ -995,17 +995,33 @@ class PublisherAgent:
         logger.info("[%s] publishing main post article=%s key=%s", run_id, summary.article_id, publication_key)
 
         # ── Comic image generation + upload (best-effort, never blocks publish) ─
-        asset_urn   = ""
-        comic_path  = ""
+        asset_urn        = ""
+        comic_path       = ""
+        comic_post_text  = ""   # outside-image text built from comic script
         if _COMIC_ENABLED:
             try:
                 from daily_news.agents.comic_generator import (
                     build_comic_script_from_summary,
+                    build_outside_post,
                     generate_comic_from_script,
                 )
                 comic_script = await build_comic_script_from_summary(
                     summary, personas, run_id=run_id,
                 )
+                # Build the outside-image post text from the comic script.
+                # Format:
+                #   📰 Source: <name>   (when available)
+                #   🔗 <url>            (when available)
+                #   ⚠️ Perspectives are AI-simulated — not professional advice.
+                #   🤖 AIFeeders · Daily AI Intelligence · Powered by Jev
+                #
+                #   #Dynamic #Hashtags
+                comic_post_text = build_outside_post(comic_script)
+                logger.info(
+                    "[%s] comic outside-post text built (%d chars)",
+                    run_id, len(comic_post_text),
+                )
+
                 comic_file = generate_comic_from_script(comic_script, run_id=run_id)
                 comic_path = str(comic_file)
                 logger.info("[%s] comic generated: %s", run_id, comic_path)
@@ -1030,16 +1046,29 @@ class PublisherAgent:
                     run_id, comic_exc,
                 )
 
-        # ── Publish: with image if we have an asset_urn, else text-only ──────
+        # ── Publish: comic image + outside-post text when available ───────────
+        # When the comic image was uploaded successfully we use comic_post_text
+        # (source ref + audience question + disclaimer + hashtags) as the post
+        # body — this is the clean outside-image format designed for LinkedIn.
+        # If the comic failed for any reason, fall back to main_text (the full
+        # dialogue post built by _compose_main_post).
+        if asset_urn and comic_post_text:
+            publish_text = comic_post_text
+            logger.info("[%s] using comic outside-post text (%d chars)", run_id, len(publish_text))
+        else:
+            publish_text = main_text
+
+        publication_key = self._make_publication_key(summary.article_id, summary.headline, publish_text)
+
         if asset_urn:
             post_result = await self._client.create_post_with_image(
-                text=main_text,
+                text=publish_text,
                 asset_urn=asset_urn,
                 publication_key=publication_key,
             )
         else:
             post_result = await self._client.create_post(
-                text=main_text,
+                text=publish_text,
                 publication_key=publication_key,
             )
 
