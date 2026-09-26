@@ -39,3 +39,4 @@ class EvaluationResult(BaseModel):
     guardrail_failures: list[str] = []
     publish_eligible: bool = False
     layer_results: dict[str, Any] = {}
+    failure_reasons: list[str] = Field(default_factory=list)

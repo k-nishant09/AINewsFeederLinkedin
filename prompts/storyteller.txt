@@ -67,21 +67,12 @@ Work through these questions in sequence before writing any output:
     It should be the question a thoughtful person would still be wrestling with after reading.
 
 14. MEDIA HOST DIALOGUE ORCHESTRATION (Generate fresh for this news case — NO hardcoded templates!):
-    - media_host_opening: A scroll-stopping 1-2 line HOOK that immediately creates tension or challenges an assumption. DO NOT use generic greetings ("Welcome to our debate..."). Example: "VC may be changing what it considers a 'great startup' — and it's not another AI application."
-    - media_host_setup: 2-3 crisp lines presenting the concrete situation and central trade-off before introducing the panel (e.g., comparing application hype vs critical infrastructure dependencies).
-    - media_transitions: A JSON map of dynamic transitions for each persona responding to the specific news topic. Keys: "policy", "business", "linkedin", "genz".
-      Example:
-      {{
-        "business": "The founder on the economic moat:",
-        "linkedin": "The engineer on the hidden integration debt:",
-        "policy": "The policy analyst on the compliance risk:",
-        "genz": "The skeptic on what everyone is ignoring:"
-      }}
-    - media_host_synthesis: The central thesis/trade-off synthesized in 1-2 bold sentences. Example: "Are investors moving from funding products people want... toward infrastructure businesses the ecosystem cannot operate without?"
-    - media_host_audience_cta: A forced-choice comment trigger (A/B/C/D) designed to generate high-volume comments easily.
-      Example:
-      "If you had $10M to invest in AI today, which would you back first?\n\nA — AI Application Layer\nB — Core Infrastructure Dependency\nC — Specialized Domain Model\nD — Security & Governance Layer\n\nDrop your choice (A/B/C/D) and your 1-line reason below 👇"
-    - dynamic_seo_hashtags: List of exactly 3-4 high-relevance hashtags (e.g., #VentureCapital, #AI, #AIInfrastructure, #Startups). Never exceed 4 tags.
+    - media_host_opening: A scroll-stopping 1-2 line HOOK that immediately creates tension, exposes a counter-intuitive truth, or challenges an assumption directly. DO NOT use generic phrases like "X just made a big move...", "X just announced...", "is it too good to be true?", or "promises are exciting". Focus on the structural conflict (e.g., "Building software is getting 10x cheaper — but governing it isn't.").
+    - media_host_setup: 2-3 crisp lines presenting the concrete technical/business shift and the central dilemma before introducing the panel (contrasting promises with operational reality). NEVER use preamble filler like "Let's dive into the details and hear from our panel of experts." State the tension directly.
+    - media_transitions: A JSON map of dynamic transitions tailored to the specific personas responding to this topic. Keys: "policy", "business", "linkedin", "genz".
+    - media_host_synthesis: The central thesis/trade-off synthesized dynamically in 1-2 bold, memorable, quotable sentences framing the core dilemma for THIS news topic (e.g., "The next productivity battle isn't Human vs AI. It is Creation vs Control.").
+    - media_host_audience_cta: A forced-choice, high-friction decision trigger (A/B/C/D/E) generated dynamically from this story's central tension. The options must be sharply oppositional (so choosing one means rejecting the others) and end by challenging the reader: "Pick ONE. Then answer: What makes you think the other options won't become the bigger problem?"
+    - dynamic_seo_hashtags: List of exactly 3-4 high-relevance hashtags dynamically extracted from the news entity, topic, and source (e.g., #Entity, #Topic, #Domain). Never exceed 4 tags.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NARRATIVE STYLE SELECTION — THE 7 VIRAL INTELLECTUAL FORMATS

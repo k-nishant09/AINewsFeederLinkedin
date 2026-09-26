@@ -46,6 +46,37 @@ from daily_news.models.summary import NewsSummary
 logger = logging.getLogger(__name__)
 
 
+# ── LinkedIn Unicode Bold Formatter ──────────────────────────────────────────
+
+def _to_unicode_bold(text: str) -> str:
+    """
+    Convert ASCII alphanumeric characters to Unicode Mathematical Bold characters.
+    LinkedIn API does NOT parse Markdown (e.g. **bold** or *italic*); it renders
+    them as literal asterisk characters. Converting to Unicode Bold Mathematical
+    alphanumeric characters renders native bold on LinkedIn feed across mobile & desktop.
+    """
+    result = []
+    for ch in text:
+        code = ord(ch)
+        if 0x41 <= code <= 0x5A:      # 'A'-'Z'
+            result.append(chr(0x1D400 + (code - 0x41)))
+        elif 0x61 <= code <= 0x7A:    # 'a'-'z'
+            result.append(chr(0x1D41A + (code - 0x61)))
+        elif 0x30 <= code <= 0x39:    # '0'-'9'
+            result.append(chr(0x1D7CE + (code - 0x30)))
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def _convert_markdown_bold_to_unicode(text: str) -> str:
+    """
+    Finds all **text** patterns in text and replaces them with Unicode bold characters,
+    stripping the markdown asterisks.
+    """
+    return re.sub(r"\*\*(.+?)\*\*", lambda m: _to_unicode_bold(m.group(1)), text)
+
+
 # ── LinkedIn character counting ───────────────────────────────────────────────
 
 def _linkedin_len(text: str) -> int:
@@ -692,31 +723,175 @@ def _build_content_angle_line(intel: "Any | None") -> tuple[str | None, str | No
 
 # ── Main Publisher Agent ──────────────────────────────────────────────────────
 
+# ── Banned opener patterns (deterministic pre-publish scanner) ────────────────
+# These are the throat-clearing / anecdote openers that the LLM judge should
+# catch, but which we also block deterministically BEFORE the post is assembled.
+# Any persona text that begins with one of these triggers a hard REGENERATE
+# by injecting a sentinel that the OutputGuardrail blocks.
+_BANNED_OPENERS: tuple[str, ...] = (
+    "when i was scaling",
+    "when i was running",
+    "when i was building",
+    "when i was at",
+    "when we deployed",
+    "when we rolled out",
+    "when we launched",
+    "when we built",
+    "when we were",
+    "imagine you are",
+    "imagine you're",
+    "imagine a startup",
+    "imagine running",
+    "imagine you had",
+    "consider a scenario",
+    "let me paint a picture",
+    "let me be clear",
+    "let's dive in",
+    "let us dive in",
+    "i've been in",
+    "i have been in",
+    "i was recently",
+    "i recently",
+    "sounds great on paper",
+    "sounds promising on paper",
+)
+
+_BANNED_INLINE_PHRASES: tuple[str, ...] = (
+    "the real question is whether",
+    "the real question is,",
+    "the real challenge lies in",
+    "the real challenge is",
+    "the challenge lies in",
+    "the key challenge is",
+    "sounds great, but",
+    "sounds promising, but",
+    "sounds revolutionary",
+    "but the real test is",
+    "but the real question",
+    "at the end of the day",
+    "it remains to be seen",
+    "only time will tell",
+    "the potential is there",
+    "the potential here is",
+    "the promise is great",
+    "what remains to be seen",
+    "in the end, more tools",
+    "in the end, this",
+    "in the end,",
+    "more tools do not always",
+    "my advice to",
+    "the key metric is",
+    # metric/business variants Qwen gravitates to
+    "the real business metric",
+    "the key business metric",
+    "the real test is whether",
+    "the real issue is",
+    "the real problem is",
+    "the real risk is whether",
+    "the real opportunity is",
+)
+
+
+def _check_persona_text(text: str) -> str | None:
+    """
+    Deterministic banned-phrase scanner.
+
+    Returns the offending phrase if found, else None.
+    Checks:
+      1. Opening-line openers (anecdote / hypothetical / throat-clearing)
+      2. Inline phrases that are banned from all personas
+
+    Called before post assembly so a contaminated persona triggers
+    REGENERATE via OutputGuardrail BANNED_CONTENT sentinel, never
+    making it to LinkedIn.
+    """
+    lowered = text.lower().strip()
+    # Check banned openers (first 120 chars only — opener check)
+    opening = lowered[:120]
+    for phrase in _BANNED_OPENERS:
+        if opening.startswith(phrase):
+            return phrase
+    # Also check if the opener appears after a very short preamble (e.g. a comma)
+    # by scanning the first sentence only
+    first_sentence_end = min(
+        next((i for i, c in enumerate(lowered) if c in ".!?\n"), len(lowered)),
+        200,
+    )
+    first_sentence = lowered[:first_sentence_end]
+    for phrase in _BANNED_OPENERS:
+        if phrase in first_sentence:
+            return phrase
+    # Inline banned phrases — scan full text
+    for phrase in _BANNED_INLINE_PHRASES:
+        if phrase in lowered:
+            return phrase
+    return None
+
+
 class PublisherAgent:
 
-    # Persona display order and labels — fixed structure, names are the brand identity
-    _PERSONA_ORDER = [
-        ("business", "💼  Founder"),
-        ("policy",   "🏛️  Policy Analyst"),
-        ("linkedin", "🧠  Engineer"),
-        ("genz",     "🎓  Generalist"),
-    ]
-
-    # Base brand footer — clean, professional, understated (Technology/App at bottom)
+    # Base brand footer
     _FOOTER_BASE = (
         "🤖 AIFeeders · Daily AI Intelligence · Powered by Jev\n"
         "*AI-simulated perspectives for discussion — not professional advice.*"
     )
 
-    # Core brand fallback hashtags (maximum 3-4 high relevance tags)
+    # Core brand fallback hashtags
     _BASE_HASHTAGS = "#AI #AIInfrastructure #Tech"
 
-    # Character labels for debate format with clear intellectual roles
+    # Character labels + emoji per persona key
     _CHAR_DIALOGUE: dict[str, tuple[str, str]] = {
         "business": ("💼", "FOUNDER"),
-        "linkedin": ("🧠", "ENGINEER"),
+        "linkedin": ("🧑‍💻", "ENGINEER"),
         "genz":     ("⚖️", "SKEPTIC"),
         "policy":   ("🏛️", "POLICY"),
+    }
+
+    # Ordered persona sequence for LinkedIn Comments API (sequential, not gather)
+    # Same ordering as preferred_lead in _EVENT_COMPOSITION for consistency.
+    _PERSONA_ORDER: list[tuple[str, str]] = [
+        ("business", "💼 FOUNDER"),
+        ("linkedin", "🧑‍💻 ENGINEER"),
+        ("genz",     "⚖️ SKEPTIC"),
+        ("policy",   "🏛️ POLICY"),
+    ]
+
+    # ── Dynamic composition rules ─────────────────────────────────────────────
+    # Maps event_type → (preferred_lead, must_include, optional_drop)
+    # preferred_lead  : persona that opens the debate (highest credibility for this event)
+    # must_include    : always present regardless of Jev score
+    # optional_drop   : dropped when going to 3 voices (lowest topical relevance)
+    _EVENT_COMPOSITION: dict[str, dict] = {
+        "product_launch": {
+            "preferred_lead": "linkedin",   # Engineer leads — it's a shipping story
+            "must_include":   ["linkedin", "genz"],
+            "optional_drop":  "policy",     # policy least urgent for new tools
+        },
+        "funding": {
+            "preferred_lead": "business",   # Founder leads — it's a capital story
+            "must_include":   ["business", "genz"],
+            "optional_drop":  "policy",
+        },
+        "acquisition": {
+            "preferred_lead": "business",
+            "must_include":   ["business", "genz"],
+            "optional_drop":  "linkedin",
+        },
+        "regulation": {
+            "preferred_lead": "policy",     # Policy leads — it's a governance story
+            "must_include":   ["policy", "linkedin"],
+            "optional_drop":  "genz",
+        },
+        "research": {
+            "preferred_lead": "linkedin",   # Engineer leads — it's a technical paper
+            "must_include":   ["linkedin", "business"],
+            "optional_drop":  "policy",
+        },
+        "other": {
+            "preferred_lead": "business",
+            "must_include":   ["business", "linkedin"],
+            "optional_drop":  "policy",
+        },
     }
 
     def __init__(self) -> None:
@@ -781,6 +956,9 @@ class PublisherAgent:
                 run_id, summary.article_id, out_guard.violations,
             )
             return self._skipped_result(summary, f"output_guardrail_block:{','.join(out_guard.violations)}")
+
+        # Convert **bold** markdown to native Unicode bold before publishing to LinkedIn
+        main_text = _convert_markdown_bold_to_unicode(main_text)
 
         publication_key = self._make_publication_key(summary.article_id, summary.headline, main_text)
 
@@ -916,7 +1094,7 @@ class PublisherAgent:
         Story fields from MediaStorytellerAgent are used first.
         Fallback to legacy NewsSummary fields when story is not available.
         """
-        POST_LIMIT = 3000   # LinkedIn hard limit is 3000 UTF-16 units for posts
+        POST_LIMIT = 2800   # Stay well inside the 3000 UTF-16 unit hard limit
 
         # ── Extract Jev signals ───────────────────────────────────────────────
         event_type   = str((jev_scores or {}).get("event_type", "other")).lower().strip()
@@ -943,23 +1121,57 @@ class PublisherAgent:
         nd_sentiment       = getattr(summary, "sentiment",       None) or "neutral"
         nd_sentiment_stats = getattr(summary, "sentiment_stats", None) or {}
 
-        # ── Persona ranking ───────────────────────────────────────────────────
-        ranked: list[tuple[str, float]] = sorted(
-            [(p, ps_scores.get(p, 0.0)) for p in active_p if p in self._CHAR_DIALOGUE],
-            key=lambda x: x[1], reverse=True,
-        ) if ps_scores else []
+        # ── Dynamic voice selection ───────────────────────────────────────────
+        # Select 3 or 4 voices based on event_type + controversy + Jev persona scores.
+        # Composition (lead order + count) adapts to the story — not fixed.
+        comp = self._EVENT_COMPOSITION.get(event_type, self._EVENT_COMPOSITION["other"])
+        preferred_lead = comp["preferred_lead"]
+        must_include   = set(comp["must_include"])
+        optional_drop  = comp["optional_drop"]
 
-        top_persona = ranked[0][0] if ranked else (active_p[0] if active_p else "linkedin")
-        # Logical narrative flow: Founder (Economic moat) → Engineer (Technical reality) → Skeptic/Policy (Counter-risk)
-        ordered = ["business", "linkedin", "genz", "policy"]
+        # Always start with all 4 candidates; filter to those with real content
+        all_keys = ["business", "linkedin", "genz", "policy"]
 
+        # Use Jev persona scores to rank when available; else equal weight
+        def _jev_score(key: str) -> float:
+            return float(ps_scores.get(key, 0.0)) if ps_scores else 0.0
+
+        # High controversy → keep skeptic (genz) regardless of score
+        is_controversial = controversy in ("high", "medium")
+        if is_controversial:
+            must_include.add("genz")
+
+        # Decide voice count: 4 if controversial OR all 4 personas scored above 0.4;
+        # else 3 (drop optional_drop unless it's in must_include)
+        all_scored_high = ps_scores and all(_jev_score(k) >= 0.4 for k in all_keys)
+        use_four = is_controversial or bool(all_scored_high)
+
+        if use_four:
+            ordered_keys = all_keys[:]
+        else:
+            ordered_keys = [k for k in all_keys if k != optional_drop or k in must_include]
+
+        # Re-order: preferred_lead first, then must_include, then the rest by Jev score
+        def _sort_key(key: str) -> tuple:
+            lead_priority   = 0 if key == preferred_lead else 1
+            must_priority   = 0 if key in must_include else 1
+            score_desc      = -_jev_score(key)
+            natural_order   = all_keys.index(key)
+            return (lead_priority, must_priority, score_desc, natural_order)
+
+        ordered_keys.sort(key=_sort_key)
+
+        # Per-voice character limit: fewer voices → more room per voice
+        voice_clip = 240 if len(ordered_keys) >= 4 else 300
+
+        top_persona = preferred_lead
         subject = _extract_subject(summary.headline, max_words=4)
 
         # ── Build the post as a list of paragraphs ────────────────────────────
         parts: list[str] = []
 
         # ── Header: Brand Headline Show Identity ──────────────────────────────
-        parts.append("🧠 **AIFEEDERS — THE DAILY AI DEBATE**")
+        parts.append("🧠 **AIFEEDERS | THE DAILY AI DEBATE**")
 
         # ── ① HOOK — Immediate tension / curiosity gap (Zero throat-clearing) ──
         media_opening = _story("media_host_opening") or _story("hook")
@@ -970,23 +1182,13 @@ class PublisherAgent:
         opening_clean = media_opening.strip().strip('"')
         parts.append(f"🚨 **{opening_clean}**")
 
-        # ── ② SITUATION & CORE TENSION — Concrete contrast ────────────────────
+        # ── ② SITUATION & CORE TENSION — one tight paragraph, no analogy block ─
         media_setup = _story("media_host_setup")
         if not media_setup:
-            situation = _story("what_actually_happened") or summary.why_it_matters.strip()
-            analogy   = _story("human_analogy")
-            media_setup = _clip_at_sentence(situation, 320)
-            if analogy:
-                media_setup += f"\n\nThink of it this way:\n{_clip_at_sentence(analogy, 240)}"
-        parts.append(media_setup)
+            media_setup = _story("what_actually_happened") or summary.why_it_matters.strip()
+        parts.append(_clip_at_sentence(media_setup, 240))
 
-        # ── ③ 3-PERSPECTIVE DEBATE (Distinct intellectual jobs) ────────────────
-        transitions_map = {}
-        if isinstance(story, dict):
-            transitions_map = story.get("media_transitions") or {}
-        elif story:
-            transitions_map = getattr(story, "media_transitions", {}) or {}
-
+        # ── ③ DYNAMIC DEBATE — voices ordered + clipped by composition rules ──
         if personas is not None:
             persona_map = {
                 "business": personas.business,
@@ -997,64 +1199,67 @@ class PublisherAgent:
 
             active_pm = [
                 (key, persona_map[key])
-                for key in ordered
+                for key in ordered_keys
                 if key in persona_map
                 and persona_map[key] is not None
                 and persona_map[key].perspective
                 and persona_map[key].perspective.strip()
             ]
 
-            if active_pm:
-                for key, p in active_pm:
-                    emoji, char_name = self._CHAR_DIALOGUE[key]
-                    
-                    perspective_text = p.perspective.strip()
-                    clipped = _clip_at_sentence(perspective_text, 450)
-                    
-                    dialogue_entry = f"---\n\n{emoji} **{char_name}**\n\n\"{clipped}\""
-                    parts.append(dialogue_entry)
+            for key, p in active_pm:
+                emoji, char_name = self._CHAR_DIALOGUE[key]
+                raw_perspective = p.perspective.strip()
 
-        # ── ④ BIGGER QUESTION / SYNTHESIS — Central trade-off ──────────────────
-        host_synthesis = _story("media_host_synthesis")
+                # ── Deterministic banned-phrase gate ─────────────────────────
+                # If the LLM produced a throat-clearing opener or banned inline
+                # phrase, inject the BANNED_CONTENT sentinel.  OutputGuardrail
+                # will block the post and the graph returns REGENERATE.
+                banned_hit = _check_persona_text(raw_perspective)
+                if banned_hit:
+                    logger.warning(
+                        "banned_phrase_detected persona=%s phrase='%s' — "
+                        "injecting sentinel to force REGENERATE",
+                        key, banned_hit,
+                    )
+                    # Sentinel is recognised by OutputGuardrail as BANNED_CONTENT
+                    parts.append(
+                        f"---\n\n{emoji} **{char_name}**\n\n"
+                        f"[BANNED_CONTENT: persona={key} phrase='{banned_hit}']"
+                    )
+                    continue
+
+                clipped = _clip_at_sentence(raw_perspective, voice_clip)
+                parts.append(f"---\n\n{emoji} **{char_name}**\n\n\"{clipped}\"")
+
+        # ── ④ SYNTHESIS — one punchy sentence, no fallback rambling ───────────
+        host_synthesis = _story("media_host_synthesis") or _story("perspective")
         if not host_synthesis:
-            perspective  = _story("perspective")
-            second_order = _story("second_order_effect")
-            host_synthesis = ""
-            if perspective:
-                host_synthesis += f"{_clip_at_sentence(perspective, 220)} "
-            if second_order and second_order != perspective:
-                host_synthesis += f"{_clip_at_sentence(second_order, 200)}"
-            if not host_synthesis:
-                host_synthesis = "Are investors moving from funding products people want toward dependencies the ecosystem cannot operate without?"
+            host_synthesis = "The race to build AI faster is outpacing the ability to govern what gets built."
+        parts.append(f"---\n\n🎙️ **THE AIFEEDERS QUESTION**\n\n{_clip_at_sentence(host_synthesis, 180)}")
 
-        parts.append(f"---\n\n🎙️ **THE BIGGER QUESTION**\n\n{host_synthesis.strip()}")
-
-        # ── ⑤ COMMENT TRIGGER — Forced-Choice (A / B / C / D) CTA ──────────────
+        # ── ⑤ COMMENT TRIGGER — Forced-choice, forced-disagreement ───────────
         audience_cta = _story("media_host_audience_cta") or _story("future_question")
-        if audience_cta and any(marker in audience_cta for marker in ["A —", "A -", "A)", "1️⃣", "1."]):
-            cta = f"---\n\n💬 **YOUR TURN**\n\n{audience_cta.strip()}"
+        if audience_cta and any(marker in audience_cta for marker in ["A —", "A -", "A)", "1️⃣", "1.", "🅰️"]):
+            cta_body = audience_cta.strip()
         elif audience_cta:
-            cta = (
-                f"---\n\n💬 **YOUR TURN**\n\n"
-                f"{_clip_at_sentence(audience_cta, 280)}\n\n"
-                f"Where do you stand? Drop your take below 👇"
+            cta_body = (
+                f"{_clip_at_sentence(audience_cta, 200)}\n\n"
+                f"👇 Pick ONE. Then defend it against the strongest objection."
             )
         else:
-            cta = (
-                f"---\n\n💬 **YOUR TURN**\n\n"
-                f"If you were allocating capital or engineering resources today, which would you prioritize?\n\n"
-                f"**A** — AI Application Layer\n"
-                f"**B** — Core Infrastructure Dependency\n"
-                f"**C** — Specialized Domain Model\n"
-                f"**D** — Security & Governance Layer\n\n"
-                f"Drop your pick (**A/B/C/D**) and 1-line reason below 👇"
+            cta_body = (
+                f"A) This genuinely changes how teams build.\n"
+                f"B) It just creates more software nobody governs.\n"
+                f"C) The real bottleneck shifts — creation is easy, accountability isn't.\n"
+                f"D) Nothing changes until the ops cost of AI matches the hype.\n\n"
+                f"👇 Pick ONE. Defend it."
             )
-        parts.append(cta)
+        parts.append(f"---\n\n💬 **YOUR TURN**\n\n{cta_body}")
 
-        # ── ⑥ SOURCE LINK (Clean at the bottom) ────────────────────────────────
-        parts.append(f"Source: {summary.source_url}")
+        # ── ⑥ SOURCE LINK ────────────────────────────────────────────────────
+        parts.append(f"Source → {summary.source_url}")
 
-        # ── ⑨ Dynamic SEO & AEO hashtags (100% news-derived) ───────────────────
+        # ── ⑦ HASHTAGS — appended last inside parts so they survive any clipping ─
         story_seo = []
         if isinstance(story, dict):
             story_seo = story.get("dynamic_seo_hashtags") or []
@@ -1068,30 +1273,26 @@ class PublisherAgent:
             key_points     = summary.key_points,
             event_type     = event_type,
             story_seo_tags = story_seo,
-            max_tags       = 7,
+            max_tags       = 4,
         )
-        tag_line = " ".join(dynamic_tags)
-        hashtag_block = tag_line if tag_line else self._BASE_HASHTAGS
+        tag_line = " ".join(dynamic_tags) if dynamic_tags else self._BASE_HASHTAGS
+        parts.append(tag_line)
 
-        # ── Footer assembly ────────────────────────────────────────────────────
-        footer_block = "\n".join([
-            cta,
-            "",
-            self._FOOTER_BASE,
-            "",
-            hashtag_block,
-        ])
-
-        # Join paragraphs with double newlines (LinkedIn paragraph spacing)
+        # ── Footer (brand + attribution — no hashtags here) ───────────────────
+        # Join body (including hashtags) first, then append the small footer.
         body = "\n\n".join(p for p in parts if p)
-        separator = "\n\n"
-        max_body  = POST_LIMIT - _linkedin_len(separator) - _linkedin_len(footer_block)
-        if _linkedin_len(body) > max_body:
-            body = _clip_at_sentence(body, max_body)
+        footer_block = self._FOOTER_BASE
 
+        separator = "\n\n"
         full_post = body + separator + footer_block
+
+        # Single clip pass — body already short enough that footer is always safe
         if _linkedin_len(full_post) > POST_LIMIT:
-            full_post = _clip_at_sentence(full_post, POST_LIMIT)
+            # Clip the body only, keep footer intact
+            max_body = POST_LIMIT - _linkedin_len(separator) - _linkedin_len(footer_block)
+            body = _clip_at_sentence(body, max_body)
+            full_post = body + separator + footer_block
+
         return full_post
 
     # ── Comment composition ───────────────────────────────────────────────────

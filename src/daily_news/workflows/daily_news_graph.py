@@ -75,7 +75,7 @@ from daily_news.observability.tracing import langfuse_trace, flush_langfuse
 
 logger = logging.getLogger(__name__)
 
-MAX_RETRIES = 2
+MAX_RETRIES = 3
 # Queries issued against the News MCP server (GNews).
 # Each tuple: (query_string, NewsCategory)
 # 9 queries across distinct topic buckets — maximises variety in the daily article pool.
@@ -160,7 +160,7 @@ async def discover_news(state: NewsWorkflowState) -> NewsWorkflowState:
         try:
             results = await client.search_latest(
                 query=query,
-                hours=24,   # 24h window — ensures only today's articles
+                hours=72,   # 72h window — wider net for free-tier GNews (12h delay)
                 limit=10,   # 10 results per query (free-tier cap for both providers)
                 category=category.value,
             )
@@ -481,6 +481,10 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
     """
     Runs persona LLM agents only for the Jev-selected active personas.
     Falls back to all five if jev_active_personas is empty.
+
+    On retry cycles (retry_count > 0), extracts failure_reasons from the
+    previous evaluation_results and injects them into the persona prompt as
+    avoid_phrases so the LLM has an explicit signal about what to change.
     """
     from daily_news.models.summary import NewsSummary
 
@@ -500,6 +504,21 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
     else:
         active_personas = list(PersonaType)
 
+    # On retry: collect all failure_reasons from the previous eval cycle so the
+    # generator can see exactly which phrases were banned and avoid them.
+    avoid_phrases: list[str] = []
+    if state.get("retry_count", 0) > 0:
+        for r in state.get("evaluation_results", []):
+            for reason in r.get("failure_reasons", []):
+                # Extract the quoted phrase from e.g. "deterministic_scanner: persona=genz phrase='at the end of the day'"
+                # or "llm_judge: Stock boilerplate detected — 'sounds great, but'"
+                avoid_phrases.append(reason)
+        if avoid_phrases:
+            logger.info(
+                "[%s] generate_personas retry=%d — injecting %d avoid_phrases into prompts",
+                run_id, state["retry_count"], len(avoid_phrases),
+            )
+
     logger.info("[%s] generate_personas: running %s", run_id, [p.value for p in active_personas])
 
     for summary_dict in state["summaries"]:
@@ -511,7 +530,8 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
             )
             evidence = sections_resp.get("sections_text", "")
             persona_set = await factory.generate_all(
-                summary, evidence, run_id=run_id, personas=active_personas
+                summary, evidence, run_id=run_id, personas=active_personas,
+                avoid_phrases=avoid_phrases or None,
             )
             persona_outputs.append(persona_set.model_dump())
         except Exception as exc:  # noqa: BLE001
@@ -545,7 +565,7 @@ async def evaluate(state: NewsWorkflowState) -> NewsWorkflowState:
             metadata={"run_id": run_id},
         )
         try:
-            result = await agent.evaluate(summary, personas, source_text)
+            result = await agent.evaluate(summary, personas, source_text, run_id=run_id)
             if trace:
                 trace.update(output={
                     "decision":      result.decision.value,
@@ -838,23 +858,23 @@ def build_daily_news_graph():
     graph.add_node("fetch_articles",    fetch_articles)
     graph.add_node("index_pageindex",   index_pageindex)
     graph.add_node("jev_prefilter",     jev_prefilter)
-    graph.add_node("summarize",         summarize)
-    graph.add_node("find_angle",        find_angle)     # Stage 5: Jev content opportunity
-    graph.add_node("jev_router",        jev_router)
+    graph.add_node("find_angle",        find_angle)     # Stage 5: Jev Context DNA & Missing Angle
+    graph.add_node("summarize",         summarize)      # Stage 4: Judgment Analysis + Storyteller
+    graph.add_node("jev_router",        jev_router)     # Dynamic Persona Routing based on Context DNA
     graph.add_node("generate_personas", generate_personas)
-    graph.add_node("evaluate",          evaluate)
-    graph.add_node("score_reach",       score_reach)    # pre-publish reach optimiser
-    graph.add_node("publish",           publish)
-    graph.add_node("optimize_content",  optimize_content) # Closed-loop feedback optimizer
+    graph.add_node("evaluate",          evaluate)       # Judge gate: MCP scores + Qwen critic @ 0.1
+    graph.add_node("score_reach",       score_reach)    # Pre-publish Reach Optimizer & Unicode Bold Formatter
+    graph.add_node("publish",           publish)        # Safe LinkedIn Distribution
+    graph.add_node("optimize_content",  optimize_content) # Closed-loop Strategy Memory & Mutation Feedback
 
     graph.add_edge(START,               "discover_news")
     graph.add_edge("discover_news",     "deduplicate")
     graph.add_edge("deduplicate",       "fetch_articles")
     graph.add_edge("fetch_articles",    "index_pageindex")
     graph.add_edge("index_pageindex",   "jev_prefilter")
-    graph.add_edge("jev_prefilter",     "summarize")
-    graph.add_edge("summarize",         "find_angle")   # Stage 5 after Stage 4
-    graph.add_edge("find_angle",        "jev_router")
+    graph.add_edge("jev_prefilter",     "find_angle")
+    graph.add_edge("find_angle",        "summarize")
+    graph.add_edge("summarize",         "jev_router")
     graph.add_edge("jev_router",        "generate_personas")
     graph.add_edge("generate_personas", "evaluate")
 
@@ -863,7 +883,7 @@ def build_daily_news_graph():
         route_evaluation,
         {
             "publish":   "score_reach",   # route through reach scorer before publish
-            "summarize": "summarize",
+            "summarize": "find_angle",    # re-derive Jev Context DNA & Judgment on regeneration
             "__end__":   END,
         },
     )

@@ -172,14 +172,32 @@ class JevClient:
 
     def __init__(self) -> None:
         s = get_settings()
-        self._base_url = s.jev_base_url.rstrip("/")
+        raw = (s.jev_base_url or "").strip().rstrip("/")
+        # Raise immediately at construction time — not inside an async call —
+        # so callers get a clear ConfigurationError instead of UnsupportedProtocol.
+        if raw and not raw.startswith(("http://", "https://")):
+            raise ValueError(
+                f"JEV_BASE_URL must start with http:// or https://, got: {raw!r}. "
+                "Set a valid URL or leave JEV_BASE_URL empty to disable Jev."
+            )
+        self._base_url = raw          # empty string = Jev disabled
+        self._enabled  = bool(raw)
         self._headers = {
             "Authorization": f"Bearer {s.jev_api_key}",
             "Content-Type": "application/json",
         }
 
+    def _require_enabled(self) -> None:
+        """Raise a clear error when called without a configured base URL."""
+        if not self._enabled:
+            raise RuntimeError(
+                "Jev is not configured — set JEV_BASE_URL=https://... in .env "
+                "or set JEV_ENABLED=false to suppress this path entirely."
+            )
+
     async def health(self) -> dict[str, Any]:
         """GET /health — no authentication required."""
+        self._require_enabled()
         async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
             resp = await client.get(f"{self._base_url}{_HEALTH_PATH}")
             resp.raise_for_status()
@@ -196,6 +214,7 @@ class JevClient:
         Each value is already the typed answer (string / float) not the full block —
         use _unwrap() for raw block access if needed.
         """
+        self._require_enabled()
         payload = {"state": state, "questions": questions}
         async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
             resp = await client.post(

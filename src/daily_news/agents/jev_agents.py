@@ -78,14 +78,18 @@ async def jev_prefilter_articles(state: dict) -> dict:
         logger.info("[%s] jev_prefilter: JEV_ENABLED=false — keeping [:1]", run_id)
         return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
 
-    client = JevClient()
-    sem = asyncio.Semaphore(5)
-
-    async def _score(article: dict) -> JevPrefilterResult:
-        async with sem:
-            return await client.prefilter_article(article)
+    if not s.jev_base_url:
+        logger.info("[%s] jev_prefilter: JEV_BASE_URL not set — keeping [:1]", run_id)
+        return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
 
     try:
+        client = JevClient()
+        sem = asyncio.Semaphore(5)
+
+        async def _score(article: dict) -> JevPrefilterResult:
+            async with sem:
+                return await client.prefilter_article(article)
+
         results: list[JevPrefilterResult] = await asyncio.gather(
             *[_score(a) for a in articles],
             return_exceptions=True,
@@ -210,6 +214,10 @@ async def jev_find_angle(state: dict) -> dict:
         logger.info("[%s] jev_find_angle: JEV_ENABLED=false — skipping", run_id)
         return {**state, "workflow_status": "JEV_ANGLE_FOUND"}
 
+    if not s.jev_base_url:
+        logger.info("[%s] jev_find_angle: JEV_BASE_URL not set — skipping", run_id)
+        return {**state, "workflow_status": "JEV_ANGLE_FOUND"}
+
     client = JevClient()
     updated_scores = dict(all_jev)
 
@@ -288,6 +296,10 @@ async def jev_route_personas(state: dict) -> dict:
 
     if not s.jev_enabled:
         logger.info("[%s] jev_route_personas: JEV_ENABLED=false — running all personas", run_id)
+        return {**state, "jev_active_personas": all_personas, "workflow_status": "JEV_ROUTED"}
+
+    if not s.jev_base_url:
+        logger.info("[%s] jev_route_personas: JEV_BASE_URL not set — running all personas", run_id)
         return {**state, "jev_active_personas": all_personas, "workflow_status": "JEV_ROUTED"}
 
     if not summaries:

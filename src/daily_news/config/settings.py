@@ -30,6 +30,18 @@ class Settings(BaseSettings):
     )
     llm_model: str = Field("qwen2-5-72b-instruct", alias="LLM_MODEL")
 
+    # ── LLM-as-a-Judge Reviewer Gateway ───────────────────────────────────────
+    # Same model as generator (only Qwen is available on this gateway).
+    # Separation is enforced via independent chain invocations at different
+    # temperatures: generator at 0.7, judge at 0.1 (set in EvaluationAgent).
+    # When a second model becomes available, set EVAL_LLM_MODEL to its name.
+    eval_llm_model: str = Field("qwen2-5-72b-instruct", alias="EVAL_LLM_MODEL")
+    eval_llm_base_url: str = Field(
+        "",
+        alias="EVAL_LLM_BASE_URL",
+    )
+    eval_llm_api_key: str = Field("", alias="EVAL_LLM_API_KEY")
+
     # ── Jev System One Gateway ────────────────────────────────────────────────
     # System One model for fast structured decisions: article scoring,
     # persona routing, and content evaluation.
