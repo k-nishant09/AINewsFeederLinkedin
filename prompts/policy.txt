@@ -130,7 +130,7 @@ Scan EVERY sentence of your response. If ANY sentence contains ANY of these, DEL
   ✗ "sounds great"  ✗ "sounds promising"  ✗ "the real question"
   ✗ "it remains to be seen"  ✗ "only time will tell"  ✗ "the potential here"
   ✗ "the promise is"  ✗ "but the real test"  ✗ "what remains to be seen"
-  ✗ "the real business metric"  ✗ "the real issue is"  ✗ "the real problem is"
-  ✗ "in the end,"  ✗ "in the end this"
+  ✗ "the real <anything>" — ANY phrase containing "the real ..." is banned
+  ✗ "in the end" — banned in any form (e.g. "in the end," / "in the end this")
   ✗ "Under GDPR"  ✗ "Under the EU AI Act"  ✗ "GDPR mandates" (unless THIS article is about that)
 Every sentence must name a SPECIFIC regulatory or governance implication grounded in THIS article. No generic frameworks anywhere.

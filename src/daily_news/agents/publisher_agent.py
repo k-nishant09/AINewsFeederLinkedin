@@ -778,6 +778,11 @@ _BANNED_INLINE_PHRASES: tuple[str, ...] = (
     "in the end, more tools",
     "in the end, this",
     "in the end,",
+    "the real bottleneck",
+    "the real implication",
+    "the real business implication",
+    "the real shift here",
+    "the real concern",
     "more tools do not always",
     "my advice to",
     "the key metric is",
@@ -792,6 +797,18 @@ _BANNED_INLINE_PHRASES: tuple[str, ...] = (
 )
 
 
+# Regex that catches ALL "the real <noun/adj>" constructions.
+# Qwen endlessly generates new variants ("the real bottleneck", "the real shift",
+# "the real implication", etc.) — this one pattern covers all of them.
+import re as _re
+_REAL_PATTERN = _re.compile(
+    r"\bthe real\s+\w+",   # "the real X" where X is any single word
+    _re.IGNORECASE,
+)
+# "in the end" is a cliché filler regardless of what follows
+_IN_THE_END_PATTERN = _re.compile(r"\bin the end\b", _re.IGNORECASE)
+
+
 def _check_persona_text(text: str) -> str | None:
     """
     Deterministic banned-phrase scanner.
@@ -800,6 +817,7 @@ def _check_persona_text(text: str) -> str | None:
     Checks:
       1. Opening-line openers (anecdote / hypothetical / throat-clearing)
       2. Inline phrases that are banned from all personas
+      3. Regex catch-alls: "the real <X>" and "in the end"
 
     Called before post assembly so a contaminated persona triggers
     REGENERATE via OutputGuardrail BANNED_CONTENT sentinel, never
@@ -825,6 +843,13 @@ def _check_persona_text(text: str) -> str | None:
     for phrase in _BANNED_INLINE_PHRASES:
         if phrase in lowered:
             return phrase
+    # Regex catch-alls — covers all "the real X" and "in the end" variants
+    m = _REAL_PATTERN.search(text)
+    if m:
+        return m.group(0).lower()
+    m = _IN_THE_END_PATTERN.search(text)
+    if m:
+        return "in the end"
     return None
 
 
