@@ -135,6 +135,7 @@ class PersonaAgent:
                     "Key Points:\n{key_points}\n\n"
                     "Business Impact: {business_impact}\n\n"
                     "Relevant Evidence:\n{evidence_sections}\n\n"
+                    "{avoid_phrases_block}"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     "STORY CONTEXT (use this as your analytical foundation)\n"
                     "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -179,6 +180,7 @@ class PersonaAgent:
         summary: NewsSummary,
         evidence_sections: str,
         run_id: str | None = None,
+        avoid_phrases: list[str] | None = None,
     ) -> PersonaOutput:
         handler, _trace_id = get_langfuse_callback(
             run_id=f"{run_id}:{self._persona.value}" if run_id else None,
@@ -229,10 +231,37 @@ class PersonaAgent:
                 return str(st.get(k) or "not available")
             return str(getattr(st, k, None) or "not available")
 
+        # Build avoid_phrases block.
+        # On retry (avoid_phrases passed in): show the exact rejected phrases from the last cycle.
+        # On first pass: show a compact static reminder of the top offenders so the model
+        # starts clean without needing a failure to learn from.
+        if avoid_phrases:
+            avoid_lines = "\n".join(f"  ✗ {p}" for p in avoid_phrases)
+            avoid_block = (
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⛔ RETRY — PREVIOUS ATTEMPT REJECTED\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "These EXACT phrases caused rejection — do NOT use them or any variant:\n"
+                f"{avoid_lines}\n\n"
+                "Open with a SPECIFIC, article-grounded claim. No abstract framing.\n\n"
+            )
+        else:
+            avoid_block = (
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "⛔ MOST COMMON REJECTION TRIGGERS\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "  ✗ 'the real challenge'  ✗ 'challenge lies in'  ✗ 'at the end of the day'\n"
+                "  ✗ 'sounds great'  ✗ 'sounds promising'  ✗ 'the real question'\n"
+                "  ✗ 'the real issue is'  ✗ 'the real problem is'  ✗ 'the real business metric'\n"
+                "  ✗ 'it remains to be seen'  ✗ 'only time will tell'  ✗ 'what remains to be seen'\n\n"
+                "Open with a SPECIFIC fact, number, or implication directly from this article.\n\n"
+            )
+
         chain = self._prompt | self._llm | self._parser
         raw: _PersonaOutputRaw = await chain.ainvoke(
             {
                 "article_id":              summary.article_id,
+                "avoid_phrases_block":     avoid_block,
                 "headline":                summary.headline,
                 "summary":                 summary.summary,
                 "key_points":              "\n".join(f"- {p}" for p in summary.key_points),
@@ -297,11 +326,14 @@ class PersonaAgentFactory:
         evidence_sections: str,
         run_id: str | None = None,
         personas: list[PersonaType] | None = None,
+        avoid_phrases: list[str] | None = None,
     ) -> PersonaSetOutput:
         """
         Generate perspectives for the given personas in parallel.
 
-        personas — subset to run (from jev_route_personas). Defaults to all four.
+        personas      — subset to run (from jev_route_personas). Defaults to all four.
+        avoid_phrases — banned phrases from the previous evaluation cycle, injected
+                        into the prompt so the LLM knows exactly what to avoid on retry.
         Any persona not in the active subset receives a stub output so that
         PersonaSetOutput (which requires all four fields) can always be constructed.
         """
@@ -310,7 +342,10 @@ class PersonaAgentFactory:
         # Run only the active personas in parallel
         outputs = await asyncio.gather(
             *[
-                self._agents[p].generate(summary, evidence_sections, run_id=run_id)
+                self._agents[p].generate(
+                    summary, evidence_sections,
+                    run_id=run_id, avoid_phrases=avoid_phrases,
+                )
                 for p in PersonaType
                 if p in active
             ]

@@ -298,7 +298,6 @@ def setup_tracing() -> None:
     s = get_settings()
 
     # ── OpenTelemetry ─────────────────────────────────────────────────────────
-    # Skip entirely when no endpoint is configured (no otel-collector deployed)
     if s.otel_exporter_otlp_endpoint:
         try:
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -312,7 +311,12 @@ def setup_tracing() -> None:
         except Exception as exc:  # noqa: BLE001
             logger.warning("OTLP tracing setup skipped: %s", exc)
     else:
-        logger.info("OTLP tracing disabled — OTEL_EXPORTER_OTLP_ENDPOINT not set")
+        # No collector configured — install a no-op provider so the SDK never
+        # attempts connections and never emits retry/connection-refused warnings.
+        from opentelemetry.sdk.trace import TracerProvider as _TP
+        _noop = _TP()   # provider with no exporters → all spans are dropped silently
+        trace.set_tracer_provider(_noop)
+        logger.info("OTLP tracing disabled — no endpoint configured")
 
     # ── Langfuse — warm the client singleton (auth check at startup) ──────────
     get_langfuse_client()

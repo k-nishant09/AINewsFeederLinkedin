@@ -108,9 +108,22 @@ class OutputGuardrail:
         violations: list[str] = []
         pii_found = False
         fake_quote_risk = False
+        banned_content = False
 
         if not post_text:
             return GuardrailCheckResult(is_safe=True)
+
+        # 0. Banned-content sentinel injected by PublisherAgent._compose_main_post
+        # when the deterministic banned-phrase scanner catches a throat-clearing
+        # opener or a hardcoded inline phrase.  This sentinel is NEVER publishable
+        # and forces the graph to REGENERATE.
+        if "[BANNED_CONTENT:" in post_text:
+            banned_content = True
+            # Extract persona/phrase for the violation log
+            match = re.search(r"\[BANNED_CONTENT: ([^\]]+)\]", post_text)
+            detail = match.group(1) if match else "unknown"
+            violations.append(f"banned_phrase_in_persona_output: {detail}")
+            logger.warning("OutputGuardrail: BANNED_CONTENT sentinel detected — %s", detail)
 
         # 1. PII Checks
         if re.search(_SSN_PATTERN, post_text):
@@ -132,7 +145,7 @@ class OutputGuardrail:
                     # Soft warning or verification
                     logger.debug("Quote in output not found verbatim in evidence: %s", q[:40])
 
-        is_safe = not pii_found and not fake_quote_risk
+        is_safe = not pii_found and not fake_quote_risk and not banned_content
         return GuardrailCheckResult(
             is_safe=is_safe,
             pii_detected=pii_found,
