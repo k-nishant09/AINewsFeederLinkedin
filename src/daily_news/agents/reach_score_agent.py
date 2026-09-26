@@ -75,9 +75,13 @@ _BAIT_PATTERNS = [
 
 # Strong hook openers — phrases that correlate with high dwell time
 _HOOK_STRENGTH_SIGNALS = [
-    r'\beveryone\s+is\s+talking\b',
+    r'\beveryone\s+is\s+(?:talking|building|hyping)\b',
+    r'\beveryone\s+wants\s+to\s+build\b',
     r'\bhere.s\s+the\s+(?:real|hard|honest|production|uncomfortable)',
     r'\bthe\s+(?:real|hard|honest|uncomfortable|inconvenient)\s+truth',
+    r'\bthe\s+hardest\s+part\s+isn.t\b',
+    r'\bthe\s+ai\s+demo\s+worked\b',
+    r'\byou\s+have\s+\$\d+[MmBb]\b',
     r'\bno\s+one\s+is\s+asking\b',
     r'\bnobody\s+is\s+asking\b',
     r'\bstop\s+me\s+if\b',
@@ -86,6 +90,8 @@ _HOOK_STRENGTH_SIGNALS = [
     r'\bhere.s\s+what\s+(?:nobody|no\s+one)\b',
     r'\bdifferent\s+question\b',
     r'\bproduction\s+(?:question|reality|problem|challenge)\b',
+    r'\barchitecture\s+battle\b',
+    r'\bthe\s+ai\s+bet\b',
 ]
 
 # Weak hook patterns — generic throat-clearing
@@ -97,13 +103,15 @@ _WEAK_HOOK_PATTERNS = [
     r'^it\s+(?:has\s+)?(?:been\s+)?(?:announced|reported)\s+that',
 ]
 
-# Closing question signals — markers of a high-quality CTA
+# Closing question signals — markers of a high-quality CTA (A/B/C/D forced choices rewarded)
 _GOOD_QUESTION_SIGNALS = [
     r'\b(?:1️⃣|2️⃣|3️⃣|4️⃣|5️⃣|6️⃣)',  # numbered-choice format
-    r'\bdrop\s+(?:the\s+number|your|it|a\s+comment)',
+    r'\b(?:A\s*—|B\s*—|C\s*—|D\s*—|\*\*A\*\*|\*\*B\*\*|\*\*C\*\*|\*\*D\*\*)',  # forced-choice letters
+    r'\bdrop\s+(?:the\s+number|your|it|a\s+comment|your\s+pick|your\s+choice)',
     r'\bwhat.s\s+(?:your|the)\s+(?:biggest|main|top|real)',
     r'\bfor\s+those\s+(?:already\s+)?(?:working|building|deploying|using)',
-    r'\bif\s+you\s+(?:were|are)\s+(?:evaluating|building|deploying)',
+    r'\bif\s+you\s+(?:were|are|had)\s+(?:evaluating|building|deploying|allocating|investing)',
+    r'\bwhich\s+would\s+you\b',
     r'\bgenuinely\s+curious\b',
     r'\bwhere\s+do\s+you\s+land\b',
     r'\bdrop\s+(?:your|a|the)',
