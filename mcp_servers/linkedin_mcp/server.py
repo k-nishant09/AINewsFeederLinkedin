@@ -1079,37 +1079,368 @@ async def linkedin_get_audit() -> dict:
     }
 
 
+@mcp.tool()
+async def linkedin_upload_image(
+    image_path: str,
+    description: str = "AIFeeders comic strip",
+) -> dict:
+    """
+    Upload an image to LinkedIn using the Assets API (registerUpload flow).
+
+    Steps:
+      1. POST /v2/assets?action=registerUpload  → get upload_url + asset URN
+      2. PUT  <upload_url>                       → binary upload of the image file
+      3. Return {"asset_urn": "urn:li:digitalmediaAsset:...", "status": "ok"}
+
+    image_path  — absolute filesystem path to a PNG or JPEG file.
+    On any failure returns {"asset_urn": "", "status": "error", "error": str}.
+
+    Ref: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api
+    """
+    import mimetypes
+    from pathlib import Path
+
+    author_urn = await _get_profile_urn()
+
+    if not _is_token_present():
+        mock_urn = "urn:li:digitalmediaAsset:mock-" + hashlib.md5(image_path.encode()).hexdigest()[:12]
+        logger.info("[MOCK] LinkedIn image upload: %s → %s", image_path, mock_urn)
+        return {"asset_urn": mock_urn, "status": "mock"}
+
+    img_path = Path(image_path)
+    if not img_path.exists():
+        logger.error("linkedin_upload_image: file not found: %s", image_path)
+        return {"asset_urn": "", "status": "error", "error": f"File not found: {image_path}"}
+
+    # Step 1 — register upload, get upload URL + asset URN
+    register_url = f"{LINKEDIN_V2_BASE}/assets?action=registerUpload"
+    register_payload = {
+        "registerUploadRequest": {
+            "owner":  author_urn,
+            "recipes": ["urn:li:digitalmediaRecipe:feedshare-image"],
+            "serviceRelationships": [
+                {
+                    "identifier":        "urn:li:userGeneratedContent",
+                    "relationshipType":  "OWNER",
+                }
+            ],
+            "supportedUploadMechanism": ["SYNCHRONOUS_UPLOAD"],
+        }
+    }
+    reg_headers = {
+        "Authorization":             f"Bearer {_get_access_token()}",
+        "Content-Type":              "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            reg_resp = await client.post(register_url, headers=reg_headers, json=register_payload)
+        if reg_resp.status_code not in (200, 201):
+            reg_resp.raise_for_status()
+
+        reg_data   = reg_resp.json()
+        upload_url = (
+            reg_data.get("value", {})
+                    .get("uploadMechanism", {})
+                    .get("com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest", {})
+                    .get("uploadUrl", "")
+        )
+        asset_urn  = reg_data.get("value", {}).get("asset", "")
+
+        if not upload_url or not asset_urn:
+            logger.error(
+                "linkedin_upload_image: registerUpload response missing upload_url or asset_urn: %s",
+                reg_data,
+            )
+            return {"asset_urn": "", "status": "error", "error": "registerUpload missing upload_url/asset_urn"}
+
+        logger.info("linkedin_upload_image: registered asset_urn=%s upload_url=%s…", asset_urn, upload_url[:60])
+
+    except httpx.HTTPStatusError as exc:
+        err = _classify_http_error(
+            exc, actor_urn=author_urn, endpoint=register_url,
+            attempt=1, tool="linkedin_upload_image",
+        )
+        return {"asset_urn": "", **err}
+    except (httpx.RequestError, OSError) as exc:
+        logger.error("linkedin_upload_image register network error: %s", exc)
+        return {"asset_urn": "", "status": "error", "error": str(exc)}
+
+    # Step 2 — binary PUT upload
+    mime_type = mimetypes.guess_type(str(img_path))[0] or "image/png"
+    image_bytes = img_path.read_bytes()
+    upload_headers = {
+        "Authorization":  f"Bearer {_get_access_token()}",
+        "Content-Type":   mime_type,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            put_resp = await client.put(upload_url, headers=upload_headers, content=image_bytes)
+        if put_resp.status_code not in (200, 201):
+            put_resp.raise_for_status()
+
+        logger.info(
+            "linkedin_upload_image: PUT succeeded HTTP %s asset_urn=%s size=%d bytes",
+            put_resp.status_code, asset_urn, len(image_bytes),
+        )
+        _audit(tool="linkedin_upload_image", actor_urn=author_urn, post_urn=asset_urn,
+               status="ok", http_status=put_resp.status_code, attempt=1)
+        return {"asset_urn": asset_urn, "status": "ok"}
+
+    except httpx.HTTPStatusError as exc:
+        err = _classify_http_error(
+            exc, actor_urn=author_urn, endpoint=upload_url[:80],
+            attempt=1, tool="linkedin_upload_image",
+        )
+        return {"asset_urn": "", **err}
+    except (httpx.RequestError, OSError) as exc:
+        logger.error("linkedin_upload_image PUT network error: %s", exc)
+        return {"asset_urn": "", "status": "error", "error": str(exc)}
+
+
+@mcp.tool()
+async def linkedin_create_post_with_image(
+    text: str,
+    asset_urn: str,
+    publication_key: str,
+) -> dict:
+    """
+    Publish a LinkedIn ugcPost with an embedded image.
+
+    Uses the ugcPosts API (same as linkedin_create_post) with shareMediaCategory=IMAGE
+    and a media array referencing the uploaded asset_urn.
+
+    text            — post commentary text (max 3000 LinkedIn UTF-16 units)
+    asset_urn       — URN returned by linkedin_upload_image (urn:li:digitalmediaAsset:...)
+    publication_key — idempotency key (same semantics as linkedin_create_post)
+
+    Returns {"post_urn": str, "status": "published"|"mock", "image_attached": bool}.
+    Falls back to text-only post if asset_urn is empty.
+
+    Ref: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/ugc-posts
+    """
+    if not asset_urn:
+        # Graceful degradation — publish text-only if image unavailable
+        result = await linkedin_create_post(text=text, publication_key=publication_key)
+        return {**result, "image_attached": False}
+
+    if publication_key in _published_posts:
+        logger.info("Duplicate post (with image) suppressed: %s", publication_key)
+        return {**_published_posts[publication_key], "idempotent": True, "image_attached": True}
+
+    li_len = sum(2 if ord(c) > 0xFFFF else 1 for c in text)
+    logger.info(
+        "linkedin_create_post_with_image: key=%s asset_urn=%s python_len=%d linkedin_utf16_len=%d",
+        publication_key, asset_urn, len(text), li_len,
+    )
+
+    if li_len > POST_MAX_CHARS:
+        units, cut = 0, 0
+        for i, c in enumerate(text):
+            units += 2 if ord(c) > 0xFFFF else 1
+            if units >= POST_MAX_CHARS:
+                cut = i
+                break
+        text = text[:cut]
+        logger.warning("Post text truncated to %d UTF-16 units (limit %d)", POST_MAX_CHARS, POST_MAX_CHARS)
+
+    author_urn = await _get_profile_urn()
+
+    if not _is_token_present():
+        mock_id  = "mock-post-img-" + hashlib.md5(text.encode()).hexdigest()[:8]
+        mock_urn = f"urn:li:share:{mock_id}"
+        logger.info("[MOCK] LinkedIn image post created: %s asset_urn=%s", mock_urn, asset_urn)
+        _published_posts[publication_key] = {
+            "post_urn":        mock_urn,
+            "id":              mock_id,
+            "status":          "mock",
+            "image_attached":  True,
+            "publication_key": publication_key,
+        }
+        return _published_posts[publication_key]
+
+    # ugcPosts payload with IMAGE media
+    payload = {
+        "author": author_urn,
+        "lifecycleState": "PUBLISHED",
+        "specificContent": {
+            "com.linkedin.ugc.ShareContent": {
+                "shareCommentary": {"text": text},
+                "shareMediaCategory": "IMAGE",
+                "media": [
+                    {
+                        "status":      "READY",
+                        "media":       asset_urn,
+                        "description": {"text": "AIFeeders AI News Comic"},
+                    }
+                ],
+            }
+        },
+        "visibility": {
+            "com.linkedin.ugc.MemberNetworkVisibility": "PUBLIC",
+        },
+    }
+    endpoint = f"{LINKEDIN_V2_BASE}/ugcPosts"
+    headers = {
+        "Authorization":             f"Bearer {_get_access_token()}",
+        "Content-Type":              "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(endpoint, headers=headers, json=payload)
+        if resp.status_code not in (200, 201):
+            resp.raise_for_status()
+
+        raw_id   = resp.headers.get("x-restli-id", "") or (resp.json().get("id", "") if resp.text else "")
+        post_urn = raw_id if raw_id.startswith("urn:") else (f"urn:li:share:{raw_id}" if raw_id else "")
+
+        logger.info(
+            "LinkedIn image post published: %s asset_urn=%s (HTTP %s)",
+            post_urn, asset_urn, resp.status_code,
+        )
+        _audit(tool="linkedin_create_post_with_image", actor_urn=author_urn, post_urn=post_urn,
+               status="published", http_status=resp.status_code, attempt=1)
+
+        result = {
+            "post_urn":        post_urn,
+            "id":              raw_id,
+            "status":          "published",
+            "image_attached":  True,
+            "publication_key": publication_key,
+            "author_urn":      author_urn,
+        }
+        _published_posts[publication_key] = result
+        return result
+
+    except httpx.HTTPStatusError as exc:
+        err = _classify_http_error(
+            exc, actor_urn=author_urn, endpoint=endpoint,
+            attempt=1, tool="linkedin_create_post_with_image",
+        )
+        _audit(
+            tool="linkedin_create_post_with_image", actor_urn=author_urn, post_urn="",
+            status="error", error_class=err["error_class"],
+            http_status=err["http_status"], li_message=err["li_message"],
+            li_request_id=err["li_request_id"], attempt=1,
+        )
+        return {**err, "image_attached": False}
+    except (httpx.RequestError, OSError) as exc:
+        err = _classify_network_error(
+            exc, actor_urn=author_urn, endpoint=endpoint,
+            attempt=1, tool="linkedin_create_post_with_image",
+        )
+        return {**err, "image_attached": False}
+
+
+@mcp.tool()
+async def linkedin_get_post_analytics(post_urn: str) -> dict:
+    """
+    Fetch engagement metrics for a published post.
+    GET /rest/organizationalEntityShareStatistics or /rest/memberNetworkFeed
+    Uses the Share Statistics API.
+
+    Returns {"impressions": int, "reactions": int, "comments": int,
+             "reposts": int, "engagement_rate": float, "status": str}.
+    Returns zeroed metrics on any error (non-blocking).
+
+    Ref: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/share-statistics-api
+    """
+    if not _is_token_present() or not post_urn:
+        return {"post_urn": post_urn, "impressions": 0, "reactions": 0,
+                "comments": 0, "reposts": 0, "engagement_rate": 0.0, "status": "mock"}
+
+    from urllib.parse import quote as _quote
+    author_urn = await _get_profile_urn()
+    encoded_urn = _quote(post_urn, safe="")
+
+    # Member share statistics endpoint
+    stats_url = (
+        f"{LINKEDIN_REST_BASE}/memberNetworkFeed?"
+        f"q=memberNetworkFeedByMember&memberUrn={_quote(author_urn, safe='')}"
+        f"&count=10"
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(stats_url, headers=_rest_headers())
+        if resp.status_code not in (200, 201):
+            resp.raise_for_status()
+
+        data     = resp.json()
+        elements = data.get("elements", [])
+        # Find the matching post
+        for el in elements:
+            activity = el.get("activity", el)
+            if post_urn in str(activity.get("entityUrn", "")) or post_urn in str(activity.get("id", "")):
+                stats = activity.get("socialDetail", {}).get("totalSocialActivityCounts", {})
+                impressions = stats.get("numImpressions", 0)
+                reactions   = stats.get("numLikes", 0)
+                comments    = stats.get("numComments", 0)
+                reposts     = stats.get("numReposts", 0)
+                total_eng   = reactions + comments + reposts
+                eng_rate    = round(total_eng / max(impressions, 1) * 100, 2)
+                return {
+                    "post_urn":        post_urn,
+                    "impressions":     impressions,
+                    "reactions":       reactions,
+                    "comments":        comments,
+                    "reposts":         reposts,
+                    "engagement_rate": eng_rate,
+                    "status":          "ok",
+                }
+        # Post not found in feed — return zeros
+        return {"post_urn": post_urn, "impressions": 0, "reactions": 0,
+                "comments": 0, "reposts": 0, "engagement_rate": 0.0, "status": "ok"}
+
+    except Exception as exc:
+        logger.warning("linkedin_get_post_analytics failed for %s: %s", post_urn, exc)
+        return {"post_urn": post_urn, "impressions": 0, "reactions": 0,
+                "comments": 0, "reposts": 0, "engagement_rate": 0.0, "status": "error", "error": str(exc)}
+
+
 # ── Tool registry ─────────────────────────────────────────────────────────────
 _TOOLS = {
     # Token / profile
-    "linkedin_validate_token":       linkedin_validate_token,
-    "linkedin_get_profile":          linkedin_get_profile,
-    "linkedin_get_profile_posts":    linkedin_get_profile_posts,
+    "linkedin_validate_token":              linkedin_validate_token,
+    "linkedin_get_profile":                 linkedin_get_profile,
+    "linkedin_get_profile_posts":           linkedin_get_profile_posts,
     # Posts
-    "linkedin_create_post":          linkedin_create_post,
-    "linkedin_delete_post":          linkedin_delete_post,
-    "linkedin_get_post":             linkedin_get_post,
-    "linkedin_get_publish_status":   linkedin_get_publish_status,
+    "linkedin_create_post":                 linkedin_create_post,
+    "linkedin_delete_post":                 linkedin_delete_post,
+    "linkedin_get_post":                    linkedin_get_post,
+    "linkedin_get_publish_status":          linkedin_get_publish_status,
+    # Image upload + image post
+    "linkedin_upload_image":                linkedin_upload_image,
+    "linkedin_create_post_with_image":      linkedin_create_post_with_image,
     # Comments
-    "linkedin_create_comment":       linkedin_create_comment,
-    "linkedin_get_comments":         linkedin_get_comments,
-    "linkedin_create_comment_reply": linkedin_create_comment_reply,
+    "linkedin_create_comment":              linkedin_create_comment,
+    "linkedin_get_comments":                linkedin_get_comments,
+    "linkedin_create_comment_reply":        linkedin_create_comment_reply,
     # Comment controls
-    "linkedin_enable_comments":      linkedin_enable_comments,
-    "linkedin_disable_comments":     linkedin_disable_comments,
+    "linkedin_enable_comments":             linkedin_enable_comments,
+    "linkedin_disable_comments":            linkedin_disable_comments,
+    # Analytics
+    "linkedin_get_post_analytics":          linkedin_get_post_analytics,
     # Audit
-    "linkedin_get_audit":            linkedin_get_audit,
-    # dot-notation aliases for ergonomic use from agents
-    "linkedin.validate_token":       linkedin_validate_token,
-    "linkedin.get_profile":          linkedin_get_profile,
-    "linkedin.create_post":          linkedin_create_post,
-    "linkedin.delete_post":          linkedin_delete_post,
-    "linkedin.get_post":             linkedin_get_post,
-    "linkedin.get_publish_status":   linkedin_get_publish_status,
-    "linkedin.create_comment":       linkedin_create_comment,
-    "linkedin.get_comments":         linkedin_get_comments,
-    "linkedin.create_comment_reply": linkedin_create_comment_reply,
-    "linkedin.get_audit":            linkedin_get_audit,
+    "linkedin_get_audit":                   linkedin_get_audit,
+    # dot-notation aliases
+    "linkedin.validate_token":              linkedin_validate_token,
+    "linkedin.get_profile":                 linkedin_get_profile,
+    "linkedin.create_post":                 linkedin_create_post,
+    "linkedin.delete_post":                 linkedin_delete_post,
+    "linkedin.get_post":                    linkedin_get_post,
+    "linkedin.get_publish_status":          linkedin_get_publish_status,
+    "linkedin.upload_image":                linkedin_upload_image,
+    "linkedin.create_post_with_image":      linkedin_create_post_with_image,
+    "linkedin.create_comment":              linkedin_create_comment,
+    "linkedin.get_comments":                linkedin_get_comments,
+    "linkedin.create_comment_reply":        linkedin_create_comment_reply,
+    "linkedin.get_post_analytics":          linkedin_get_post_analytics,
+    "linkedin.get_audit":                   linkedin_get_audit,
 }
 
 

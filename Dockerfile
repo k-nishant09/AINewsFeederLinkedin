@@ -11,7 +11,10 @@ FROM python:3.11
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=off \
-    PYTHONPATH=/app/src
+    PYTHONPATH=/app/src \
+    # Suppress fontconfig "No writable cache directories" noise from cairosvg/pango
+    FONTCONFIG_PATH=/etc/fonts \
+    FC_CACHEDIR=/tmp/fontconfig-cache
 
 WORKDIR /app
 

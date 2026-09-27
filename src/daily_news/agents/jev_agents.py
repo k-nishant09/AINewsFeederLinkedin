@@ -116,13 +116,15 @@ async def jev_prefilter_articles(state: dict) -> dict:
         logger.warning("[%s] jev_prefilter: no AI articles passed — keeping [:1]", run_id)
         return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
 
-    # Pick the single best article by composite score
+    # Pick the top-3 articles by composite score.
+    # Processing top-3 gives the eval/retry loop 2 fallback articles if the best
+    # one keeps triggering banned phrases — eliminates the single-article deadlock.
     scored.sort(key=lambda t: t[0], reverse=True)
-    top1 = scored[:1]
+    top_n = scored[:3]
 
-    best_score, best_article, best_result = top1[0]
+    best_score, best_article, best_result = top_n[0]
 
-    for rank, (score, article, result) in enumerate(top1, start=1):
+    for rank, (score, article, result) in enumerate(top_n, start=1):
         logger.info(
             "[%s] jev_prefilter: #%d article_id=%s relevance=%.2f engagement=%.2f "
             "composite=%.2f novelty=%.2f trend=%.2f emotion=C%.2f/E%.2f/W%.2f/U%.2f",
@@ -142,7 +144,7 @@ async def jev_prefilter_articles(state: dict) -> dict:
     # jev_prefilter_scores carries the FULL Stage 3 intelligence signals.
     # Shape: { "<article_id>": { ...all intelligence fields... } }
     prefilter_scores: dict[str, dict] = {}
-    for _, article, result in top1:
+    for _, article, result in top_n:
         aid = article.get("article_id", result.article_id)
         prefilter_scores[aid] = {
             # Core selection
@@ -178,7 +180,7 @@ async def jev_prefilter_articles(state: dict) -> dict:
 
     return {
         **state,
-        "selected_articles":    [article for _, article, _ in top1],
+        "selected_articles":    [article for _, article, _ in top_n],
         "jev_persona_hints":    best_result.persona_fit,
         "jev_prefilter_scores": prefilter_scores,
         "workflow_status":      "JEV_PREFILTERED",
