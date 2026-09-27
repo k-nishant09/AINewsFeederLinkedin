@@ -4,7 +4,9 @@
 # =============================================================================
 # Local Podman / CI — use public slim image
 # OpenShift deployment uses: image-registry.openshift-image-registry.svc:5000/openshift/python:3.11-ubi9
-FROM python:3.11-slim
+# python:3.11 (full Debian trixie) ships libcairo2t64 in the base layer —
+# no apt-get needed, cairosvg works out of the box for SVG→PNG comic rendering.
+FROM python:3.11
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -12,15 +14,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app/src
 
 WORKDIR /app
-
-# ── System libs for cairosvg — Debian trixie (python:3.11-slim base) ─────────
-# libcairo2t64 is the correct trixie package name (libcairo2 was renamed).
-# Mirrors may be unreachable from build pods; || true ensures build never fails
-# here — cairosvg will warn at runtime if the .so is missing and fall back.
-RUN apt-get update -qq 2>/dev/null \
-    && apt-get install -y --no-install-recommends libcairo2t64 2>/dev/null \
-    || true \
-    ; rm -rf /var/lib/apt/lists/*
 
 # ── Python deps ──────────────────────────────────────────────────────────────
 COPY pyproject.toml README.md ./
