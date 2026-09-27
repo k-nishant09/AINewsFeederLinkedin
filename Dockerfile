@@ -13,6 +13,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# ── System deps for cairosvg (SVG → PNG for comic strip rendering) ────────────
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends \
+        libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
+        libgdk-pixbuf2.0-0 libffi-dev shared-mime-info \
+    && rm -rf /var/lib/apt/lists/*
+
 # ── Python deps ──────────────────────────────────────────────────────────────
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
@@ -28,7 +35,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         opentelemetry-api opentelemetry-sdk \
         opentelemetry-exporter-otlp-proto-http \
         opentelemetry-instrumentation-fastapi prometheus-client \
-        langfuse python-dotenv structlog anyio
+        langfuse python-dotenv structlog anyio \
+        cairosvg
 
 EXPOSE 8000
 
