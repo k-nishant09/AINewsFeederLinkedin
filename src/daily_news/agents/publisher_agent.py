@@ -994,91 +994,103 @@ class PublisherAgent:
         logger.info("[%s] POST TEXT START ---\n%s\n--- POST TEXT END", run_id, main_text)
         logger.info("[%s] publishing main post article=%s key=%s", run_id, summary.article_id, publication_key)
 
-        # ── Comic image generation + upload (best-effort, never blocks publish) ─
-        asset_urn        = ""
-        comic_path       = ""
-        comic_post_text  = ""   # outside-image text built from comic script
-        if _COMIC_ENABLED:
-            try:
-                from daily_news.agents.comic_generator import (
-                    build_comic_script_from_summary,
-                    build_outside_post,
-                    generate_comic_from_script,
-                )
-                comic_script = await build_comic_script_from_summary(
-                    summary, personas, run_id=run_id,
-                )
-                # Build the outside-image post text from the comic script.
-                # Format:
-                #   📰 Source: <name>   (when available)
-                #   🔗 <url>            (when available)
-                #   ⚠️ Perspectives are AI-simulated — not professional advice.
-                #   🤖 AIFeeders · Daily AI Intelligence · Powered by Jev
-                #
-                #   #Dynamic #Hashtags
-                comic_post_text = build_outside_post(comic_script)
-                logger.info(
-                    "[%s] comic outside-post text built (%d chars)",
-                    run_id, len(comic_post_text),
-                )
+        # ── Comic: generate → encode → upload → publish (image-only, no text fallback) ──
+        # Policy: we ONLY publish when the comic image is successfully uploaded.
+        # A text-only post is never acceptable — the story lives in the image.
+        # If the comic fails for any reason, we skip this article entirely.
+        asset_urn       = ""
+        comic_path      = ""
+        comic_post_text = ""
 
-                comic_file = generate_comic_from_script(comic_script, run_id=run_id)
-                comic_path = str(comic_file)
-                logger.info("[%s] comic generated: %s", run_id, comic_path)
+        if not _COMIC_ENABLED:
+            logger.warning("[%s] _COMIC_ENABLED=False — skipping publish (no text-only posts)", run_id)
+            return {
+                "article_id":    summary.article_id,
+                "post_urn":      "",
+                "post_status":   "skipped",
+                "image_attached": False,
+                "skip_reason":   "comic_disabled",
+            }
 
-                # Read PNG bytes and base64-encode for cross-pod transfer.
-                # The linkedin-mcp server runs in a separate pod — passing a
-                # filesystem path would be a file-not-found on arrival.
-                import base64
-                from pathlib import Path as _Path
-                img_b64 = base64.b64encode(_Path(comic_path).read_bytes()).decode()
-                logger.info("[%s] comic encoded %d b64 chars", run_id, len(img_b64))
+        try:
+            from daily_news.agents.comic_generator import (
+                build_comic_script_from_summary,
+                build_outside_post,
+                generate_comic_from_script,
+            )
+            import base64
+            from pathlib import Path as _Path
 
-                # Upload PNG to LinkedIn — returns asset_urn on success
-                upload_result = await self._client.upload_image(
-                    image_data=img_b64,
-                    description=f"AIFeeders comic: {summary.headline[:80]}",
+            # 1. Build comic script from pipeline data
+            comic_script    = await build_comic_script_from_summary(summary, personas, run_id=run_id)
+            # 2. Build clean outside-image post text (source + CTA + disclaimer + hashtags)
+            comic_post_text = build_outside_post(comic_script)
+            logger.info("[%s] comic outside-post text built (%d chars)", run_id, len(comic_post_text))
+
+            # 3. Render SVG→PNG comic strip
+            comic_file = generate_comic_from_script(comic_script, run_id=run_id)
+            comic_path = str(comic_file)
+            logger.info("[%s] comic generated: %s (%d bytes)", run_id, comic_path,
+                        _Path(comic_path).stat().st_size)
+
+            # 4. Base64-encode for cross-pod transfer (linkedin-mcp is a separate pod,
+            #    /tmp is not shared — never pass a filesystem path across pods)
+            img_b64 = base64.b64encode(_Path(comic_path).read_bytes()).decode()
+            logger.info("[%s] comic encoded: %d b64 chars", run_id, len(img_b64))
+
+            # 5. Upload to LinkedIn Assets API
+            upload_result = await self._client.upload_image(
+                image_data=img_b64,
+                description=f"AIFeeders comic: {summary.headline[:80]}",
+            )
+            asset_urn = upload_result.get("asset_urn", "")
+            if asset_urn:
+                logger.info("[%s] comic uploaded: asset_urn=%s", run_id, asset_urn)
+            else:
+                logger.error(
+                    "[%s] comic upload FAILED (status=%s error=%s) — skipping publish "
+                    "(policy: no text-only posts)",
+                    run_id, upload_result.get("status"), upload_result.get("error", ""),
                 )
-                asset_urn = upload_result.get("asset_urn", "")
-                if asset_urn:
-                    logger.info("[%s] comic image uploaded asset_urn=%s", run_id, asset_urn)
-                else:
-                    logger.warning(
-                        "[%s] comic upload returned no asset_urn (status=%s) — "
-                        "falling back to text-only post",
-                        run_id, upload_result.get("status"),
-                    )
-            except Exception as comic_exc:  # noqa: BLE001
-                logger.warning(
-                    "[%s] comic generation/upload failed (non-blocking): %s",
-                    run_id, comic_exc,
-                )
+                return {
+                    "article_id":    summary.article_id,
+                    "post_urn":      "",
+                    "post_status":   "skipped",
+                    "image_attached": False,
+                    "skip_reason":   "upload_failed",
+                    "upload_error":  upload_result.get("error", ""),
+                }
 
-        # ── Publish: comic image + outside-post text when available ───────────
-        # When the comic image was uploaded successfully we use comic_post_text
-        # (source ref + audience question + disclaimer + hashtags) as the post
-        # body — this is the clean outside-image format designed for LinkedIn.
-        # If the comic failed for any reason, fall back to main_text (the full
-        # dialogue post built by _compose_main_post).
-        if asset_urn and comic_post_text:
-            publish_text = comic_post_text
-            logger.info("[%s] using comic outside-post text (%d chars)", run_id, len(publish_text))
-        else:
-            publish_text = main_text
+        except Exception as comic_exc:  # noqa: BLE001
+            logger.error(
+                "[%s] comic generation/upload raised exception — skipping publish "
+                "(policy: no text-only posts): %s",
+                run_id, comic_exc,
+            )
+            return {
+                "article_id":    summary.article_id,
+                "post_urn":      "",
+                "post_status":   "skipped",
+                "image_attached": False,
+                "skip_reason":   "comic_exception",
+                "error":         str(comic_exc),
+            }
 
+        # ── Publish: comic image + clean outside-post text ONLY ───────────────
+        # At this point asset_urn is guaranteed non-empty.
+        # publish_text = outside-image text (source + CTA + disclaimer + hashtags).
+        # The full persona dialogue lives inside the comic image — not in the post body.
+        publish_text    = comic_post_text
         publication_key = self._make_publication_key(summary.article_id, summary.headline, publish_text)
 
-        if asset_urn:
-            post_result = await self._client.create_post_with_image(
-                text=publish_text,
-                asset_urn=asset_urn,
-                publication_key=publication_key,
-            )
-        else:
-            post_result = await self._client.create_post(
-                text=publish_text,
-                publication_key=publication_key,
-            )
+        logger.info("[%s] publishing comic post article=%s outside_text_len=%d",
+                    run_id, summary.article_id, len(publish_text))
+
+        post_result = await self._client.create_post_with_image(
+            text=publish_text,
+            asset_urn=asset_urn,
+            publication_key=publication_key,
+        )
 
         post_urn    = post_result.get("post_urn", "")
         post_status = post_result.get("status", "error")
