@@ -13,6 +13,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# ── System libs for cairosvg — Debian trixie (python:3.11-slim base) ─────────
+# libcairo2t64 is the correct trixie package name (libcairo2 was renamed).
+# Mirrors may be unreachable from build pods; || true ensures build never fails
+# here — cairosvg will warn at runtime if the .so is missing and fall back.
+RUN apt-get update -qq 2>/dev/null \
+    && apt-get install -y --no-install-recommends libcairo2t64 2>/dev/null \
+    || true \
+    ; rm -rf /var/lib/apt/lists/*
+
 # ── Python deps ──────────────────────────────────────────────────────────────
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
