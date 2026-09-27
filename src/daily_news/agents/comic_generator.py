@@ -794,27 +794,35 @@ def build_scenes(script: ComicScript) -> list[ComicScene]:
 
 def build_outside_post(script: ComicScript) -> str:
     """
-    Build the text block that goes OUTSIDE the image in the LinkedIn post.
+    Build the ONLY text that accompanies the comic image on LinkedIn.
 
-    Format:
-      📰 Source: <name>          (always shown when available, skipped silently if missing)
-      🔗 <url>                   (always shown when available)
-                                  (blank line only if either source field was shown)
+    The full persona debate lives inside the comic image strip — this text
+    must be minimal, clean, and drive engagement without duplicating the image.
+
+    Exact format (each section separated by a blank line):
+    ─────────────────────────────────────────────────────
+      📰 Source: <name>         ← always shown when source_name is present
+      🔗 <url>                  ← always shown when source_url is present
+                                  (blank line follows if either was shown)
 
       🎙️ <HostName> — To the Audience:
 
       <audience_question>
 
-      Where do you stand? Drop your take below 👇   (appended if not already in question)
+      Where do you stand? Drop your take below 👇
+          (appended only if not already in audience_question text)
 
       ⚠️ Perspectives are AI-simulated — not professional advice.
       🤖 AIFeeders  ·  Daily AI Intelligence  ·  Powered by Jev
 
-      #Hashtag1 #Hashtag2 …
+      #Hashtag1 #Hashtag2 … (dynamic, up to 7 — never hardcoded)
+    ─────────────────────────────────────────────────────
+    This function is the SINGLE source of truth for outside-image post text.
+    publisher_agent.publish() MUST use this and not _compose_main_post().
     """
     lines: list[str] = []
 
-    # Source block — always include whatever is available
+    # ── Source block ──────────────────────────────────────────────────────────
     source_shown = False
     if script.source_name:
         lines.append(f"📰 Source: {script.source_name}")
@@ -825,25 +833,29 @@ def build_outside_post(script: ComicScript) -> str:
     if source_shown:
         lines.append("")
 
-    # Host CTA
+    # ── Host CTA ──────────────────────────────────────────────────────────────
     lines.append(f"🎙️ {script.host_name} — To the Audience:")
     lines.append("")
-    lines.append(script.audience_question)
+    lines.append(script.audience_question.strip())
 
-    # Always append the engagement CTA if it's not already in the question text
+    # Append engagement CTA only if not already in the question text
     cta_lower = script.audience_question.lower()
     if "where do you stand" not in cta_lower and "drop your" not in cta_lower:
         lines += ["", "Where do you stand? Drop your take below 👇"]
 
-    # Always include the disclaimer + branding footer
+    # ── Disclaimer + brand footer (always present, never skipped) ─────────────
     lines += [
         "",
         "⚠️ Perspectives are AI-simulated — not professional advice.",
         "🤖 AIFeeders  ·  Daily AI Intelligence  ·  Powered by Jev",
     ]
 
+    # ── Dynamic hashtags (always present) ────────────────────────────────────
     if script.hashtags:
-        lines += ["", " ".join(script.hashtags)]
+        lines += ["", " ".join(h if h.startswith("#") else f"#{h}" for h in script.hashtags)]
+    else:
+        # Fallback only when the script has zero hashtags (should never happen in production)
+        lines += ["", "#AI #GenerativeAI #AIFeeders"]
 
     return "\n".join(lines)
 
@@ -1033,19 +1045,34 @@ async def build_comic_script_from_summary(
 
     # ── Dynamic hashtags from the existing engine — no hardcoded list ──────────
     intel = getattr(summary, "intelligence", None)
+
+    # event_type lives in the NewsIntelligence backbone, NOT on NewsSummary directly.
+    # Correct lookup: summary.intelligence.event_type (Pydantic) or dict key.
+    def _intel_val(key: str, default: str = "") -> str:
+        if intel is None:
+            return default
+        if isinstance(intel, dict):
+            return str(intel.get(key, default) or default)
+        return str(getattr(intel, key, default) or default)
+
+    event_type_for_tags = _intel_val("event_type", "other").lower().strip() or "other"
+
     story_seo_tags: list[str] = []
     if intel is not None:
-        raw_tags = (intel.get("seo_hashtags") if isinstance(intel, dict)
-                    else getattr(intel, "seo_hashtags", None))
-        if raw_tags:
-            story_seo_tags = list(raw_tags)
+        # dynamic_seo_hashtags is on NewsStory, nested under intelligence.story
+        story_obj = (intel.get("story") if isinstance(intel, dict) else getattr(intel, "story", None))
+        if story_obj is not None:
+            raw_tags = (story_obj.get("dynamic_seo_hashtags") if isinstance(story_obj, dict)
+                        else getattr(story_obj, "dynamic_seo_hashtags", None))
+            if raw_tags:
+                story_seo_tags = list(raw_tags)
 
     hashtags = _extract_dynamic_tags(
         headline       = summary.headline,
         summary        = summary.summary or "",
         source         = getattr(summary, "source", "") or "",
         key_points     = list(summary.key_points or []),
-        event_type     = getattr(summary, "event_type", "other") or "other",
+        event_type     = event_type_for_tags,
         story_seo_tags = story_seo_tags,
         max_tags       = 7,
     )

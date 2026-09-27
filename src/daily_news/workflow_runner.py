@@ -5,6 +5,8 @@ import asyncio
 import logging
 import sys
 
+from daily_news.mcp.client import mcp_factory
+from daily_news.mcp.jev_client import JevClient
 from daily_news.observability.tracing import flush_langfuse, setup_tracing
 from daily_news.workflows.daily_news_graph import daily_news_graph, make_initial_state
 
@@ -28,6 +30,16 @@ async def run():
     finally:
         # Always flush Langfuse so traces are delivered even on error/SIGTERM
         flush_langfuse()
+        # Drain all persistent HTTP connection pools — prevents ResourceWarning
+        # and ensures in-flight keep-alive sockets are closed cleanly on pod shutdown.
+        await mcp_factory().aclose()
+        # Close the Jev client pool if Jev was enabled this run
+        from daily_news.config.settings import get_settings
+        if get_settings().jev_base_url:
+            try:
+                await JevClient().aclose()
+            except Exception:  # noqa: BLE001
+                pass  # not critical — OS will reclaim sockets at process exit anyway
 
     errors = final.get("errors", [])
     published = len(final.get("linkedin_results", []))

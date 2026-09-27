@@ -29,7 +29,10 @@ def test_route_evaluation_regenerate_within_retries():
     state["evaluation_results"] = [
         {"article_id": "x", "decision": EvaluationDecision.REGENERATE.value}
     ]
-    assert route_evaluation(state) == "summarize"
+    # Architecture fix: retry loop now goes back to generate_personas only,
+    # not all the way to find_angle + summarize (those are deterministic for
+    # a given article and would produce identical output on retry).
+    assert route_evaluation(state) == "generate_personas"
 
 
 def test_route_evaluation_regenerate_exceeds_retries():

@@ -73,6 +73,15 @@ logger = logging.getLogger(__name__)
 _SYSTEMONE_PATH = "/v1/systemone"
 _HEALTH_PATH    = "/health"
 
+# Shared connection pool for Jev gateway — same rationale as MCPHTTPClient.
+# Jev calls are fired in parallel (asyncio.gather over all articles) so pooling
+# prevents 30+ simultaneous TCP handshakes to the same host.
+_JEV_POOL_LIMITS = httpx.Limits(
+    max_connections=30,
+    max_keepalive_connections=10,
+    keepalive_expiry=30.0,
+)
+
 
 # ── Question schema builders ──────────────────────────────────────────────────
 
@@ -167,7 +176,10 @@ class JevPrefilterResult(BaseModel):
 class JevClient:
     """
     Async client for the IBM Jev System One gateway.
-    Each method creates its own httpx.AsyncClient — safe for asyncio.gather.
+
+    A single persistent httpx.AsyncClient is shared across all calls on this
+    instance.  asyncio.gather calls are safe because httpx handles per-request
+    concurrency internally via the connection pool.
     """
 
     def __init__(self) -> None:
@@ -186,6 +198,12 @@ class JevClient:
             "Authorization": f"Bearer {s.jev_api_key}",
             "Content-Type": "application/json",
         }
+        # Persistent client — reused for every systemone() call on this instance.
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, connect=5.0),
+            verify=False,
+            limits=_JEV_POOL_LIMITS,
+        )
 
     def _require_enabled(self) -> None:
         """Raise a clear error when called without a configured base URL."""
@@ -198,10 +216,9 @@ class JevClient:
     async def health(self) -> dict[str, Any]:
         """GET /health — no authentication required."""
         self._require_enabled()
-        async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
-            resp = await client.get(f"{self._base_url}{_HEALTH_PATH}")
-            resp.raise_for_status()
-            return resp.json()
+        resp = await self._client.get(f"{self._base_url}{_HEALTH_PATH}")
+        resp.raise_for_status()
+        return resp.json()
 
     async def systemone(
         self,
@@ -216,16 +233,19 @@ class JevClient:
         """
         self._require_enabled()
         payload = {"state": state, "questions": questions}
-        async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
-            resp = await client.post(
-                f"{self._base_url}{_SYSTEMONE_PATH}",
-                headers=self._headers,
-                json=payload,
-            )
-            resp.raise_for_status()
-            body = resp.json()
+        resp = await self._client.post(
+            f"{self._base_url}{_SYSTEMONE_PATH}",
+            headers=self._headers,
+            json=payload,
+        )
+        resp.raise_for_status()
+        body = resp.json()
         # Gateway wraps answers under {"answers": {...}}
         return body.get("answers", body)
+
+    async def aclose(self) -> None:
+        """Drain the connection pool. Call at process shutdown."""
+        await self._client.aclose()
 
     # ── prefilter_article ─────────────────────────────────────────────────────
 

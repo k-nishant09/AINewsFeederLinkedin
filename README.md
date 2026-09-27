@@ -190,7 +190,7 @@ cp .env.example .env      # Edit with your actual keys
 
 ```bash
 # ── Build with versioned + latest tags ────────────────────────────────────────
-# Main API (LangGraph engine + all agents + prompts baked in)
+# Main API (LangGraph engine + agents + prompts + CairoSVG for comic rendering)
 docker build \
   --build-arg APP_VERSION=${IMAGE_TAG} \
   -t ainewsfeederlinkedin/daily-news-api:${IMAGE_TAG} \
@@ -222,6 +222,22 @@ docker build \
   -t ainewsfeederlinkedin/linkedin-mcp:latest \
   mcp_servers/linkedin_mcp/
 ```
+
+> **Direct Push to Container Registries (Docker / Podman):**
+> Target registry variables by platform:
+> - **OpenShift**: `REGISTRY="image-registry.openshift-image-registry.svc:5000/aifeeders"` (or external route)
+> - **AWS EKS (ECR)**: `REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/aifeeders"`
+> - **Azure AKS (ACR)**: `REGISTRY="${ACR_NAME}.azurecr.io/aifeeders"`
+>
+> Tag & push loop:
+> ```bash
+> for svc in daily-news-api news-mcp pageindex-mcp evaluation-mcp linkedin-mcp; do
+>   docker tag ainewsfeederlinkedin/${svc}:${IMAGE_TAG} ${REGISTRY}/${svc}:${IMAGE_TAG}
+>   docker tag ainewsfeederlinkedin/${svc}:${IMAGE_TAG} ${REGISTRY}/${svc}:latest
+>   docker push ${REGISTRY}/${svc}:${IMAGE_TAG}
+>   docker push ${REGISTRY}/${svc}:latest
+> done
+> ```
 
 > **Why separate images?** Each MCP service scales independently. A GNews quota spike doesn't restart the LinkedIn service. Independent failure domains.
 

@@ -85,7 +85,7 @@ export IMAGE_TAG=$(git rev-parse --short HEAD)
 ### 2.2 Build all 5 images
 
 ```bash
-# Main API — all LangGraph nodes, agents, prompts baked at build time
+# Main API — all LangGraph nodes, agents, prompts + CairoSVG for comic generation
 docker build \
   --build-arg APP_VERSION=${IMAGE_TAG} \
   -t ainewsfeederlinkedin/daily-news-api:${IMAGE_TAG} \
@@ -116,6 +116,30 @@ docker build \
   -t ainewsfeederlinkedin/linkedin-mcp:${IMAGE_TAG} \
   -t ainewsfeederlinkedin/linkedin-mcp:latest \
   mcp_servers/linkedin_mcp/
+```
+
+### 2.2.1 Tag & Push to Target Registry (OpenShift / EKS / AKS)
+
+Authenticate and push images to your cloud container registry:
+
+```bash
+# ── Define Target Registry Variable ──────────────────────────────────────────
+# OpenShift internal registry (via default route):
+# export REGISTRY=$(oc get route default-route -n openshift-image-registry --template='{{ .spec.host }}')/aifeeders
+
+# AWS EKS (Amazon ECR):
+# export REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/aifeeders"
+
+# Azure AKS (Azure Container Registry):
+# export REGISTRY="${ACR_NAME}.azurecr.io/aifeeders"
+
+# ── Tag and Push All 5 Images ────────────────────────────────────────────────
+for svc in daily-news-api news-mcp pageindex-mcp evaluation-mcp linkedin-mcp; do
+  docker tag ainewsfeederlinkedin/${svc}:${IMAGE_TAG} ${REGISTRY}/${svc}:${IMAGE_TAG}
+  docker tag ainewsfeederlinkedin/${svc}:${IMAGE_TAG} ${REGISTRY}/${svc}:latest
+  docker push ${REGISTRY}/${svc}:${IMAGE_TAG}
+  docker push ${REGISTRY}/${svc}:latest
+done
 ```
 
 > **Why 5 images?** Independent scaling + independent failure domains.

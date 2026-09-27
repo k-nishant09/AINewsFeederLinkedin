@@ -994,10 +994,13 @@ class PublisherAgent:
         logger.info("[%s] POST TEXT START ---\n%s\n--- POST TEXT END", run_id, main_text)
         logger.info("[%s] publishing main post article=%s key=%s", run_id, summary.article_id, publication_key)
 
-        # ── Comic: generate → encode → upload → publish (image-only, no text fallback) ──
-        # Policy: we ONLY publish when the comic image is successfully uploaded.
-        # A text-only post is never acceptable — the story lives in the image.
-        # If the comic fails for any reason, we skip this article entirely.
+        # ── Comic: image-only publish path ───────────────────────────────────
+        # Architecture rule:
+        #   The full persona debate lives INSIDE the comic image strip.
+        #   The LinkedIn post body = Source + CTA + footer + dynamic hashtags ONLY.
+        #   _compose_main_post() text format is NEVER published.
+        #   If the comic fails at any stage, the article is skipped entirely.
+        #   No text-only fallback exists by design.
         asset_urn       = ""
         comic_path      = ""
         comic_post_text = ""
@@ -1013,42 +1016,53 @@ class PublisherAgent:
             }
 
         try:
+            import base64
+            from pathlib import Path as _Path
+
             from daily_news.agents.comic_generator import (
                 build_comic_script_from_summary,
                 build_outside_post,
                 generate_comic_from_script,
             )
-            import base64
-            from pathlib import Path as _Path
 
-            # 1. Build comic script from pipeline data
-            comic_script    = await build_comic_script_from_summary(summary, personas, run_id=run_id)
-            # 2. Build clean outside-image post text (source + CTA + disclaimer + hashtags)
+            # Step 1 — Build ComicScript from pipeline objects (no LLM calls)
+            comic_script = await build_comic_script_from_summary(summary, personas, run_id=run_id)
+
+            # Step 2 — Build the outside-image post text:
+            #           📰 Source + 🔗 URL + 🎙️ CTA + ⚠️ footer + #hashtags
+            #           This is the ONLY text that appears in the LinkedIn post body.
             comic_post_text = build_outside_post(comic_script)
-            logger.info("[%s] comic outside-post text built (%d chars)", run_id, len(comic_post_text))
+            logger.info(
+                "[%s] comic outside-post: source=%r url=%r hashtags=%r (%d chars)",
+                run_id,
+                comic_script.source_name,
+                comic_script.source_url,
+                " ".join(comic_script.hashtags[:3]) + ("…" if len(comic_script.hashtags) > 3 else ""),
+                len(comic_post_text),
+            )
 
-            # 3. Render SVG→PNG comic strip
+            # Step 3 — Render comic strip SVG → PNG
             comic_file = generate_comic_from_script(comic_script, run_id=run_id)
             comic_path = str(comic_file)
-            logger.info("[%s] comic generated: %s (%d bytes)", run_id, comic_path,
-                        _Path(comic_path).stat().st_size)
+            logger.info(
+                "[%s] comic rendered: %s (%d bytes)",
+                run_id, comic_path, _Path(comic_path).stat().st_size,
+            )
 
-            # 4. Base64-encode for cross-pod transfer (linkedin-mcp is a separate pod,
-            #    /tmp is not shared — never pass a filesystem path across pods)
+            # Step 4 — Base64-encode for cross-pod transfer
+            #           linkedin-mcp runs in a separate pod; /tmp is not shared.
             img_b64 = base64.b64encode(_Path(comic_path).read_bytes()).decode()
             logger.info("[%s] comic encoded: %d b64 chars", run_id, len(img_b64))
 
-            # 5. Upload to LinkedIn Assets API
+            # Step 5 — Upload image to LinkedIn Assets API
             upload_result = await self._client.upload_image(
                 image_data=img_b64,
                 description=f"AIFeeders comic: {summary.headline[:80]}",
             )
             asset_urn = upload_result.get("asset_urn", "")
-            if asset_urn:
-                logger.info("[%s] comic uploaded: asset_urn=%s", run_id, asset_urn)
-            else:
+            if not asset_urn:
                 logger.error(
-                    "[%s] comic upload FAILED (status=%s error=%s) — skipping publish "
+                    "[%s] comic upload FAILED (status=%s error=%s) — skipping "
                     "(policy: no text-only posts)",
                     run_id, upload_result.get("status"), upload_result.get("error", ""),
                 )
@@ -1060,10 +1074,11 @@ class PublisherAgent:
                     "skip_reason":   "upload_failed",
                     "upload_error":  upload_result.get("error", ""),
                 }
+            logger.info("[%s] comic uploaded: asset_urn=%s", run_id, asset_urn)
 
         except Exception as comic_exc:  # noqa: BLE001
             logger.error(
-                "[%s] comic generation/upload raised exception — skipping publish "
+                "[%s] comic generation/upload exception — skipping "
                 "(policy: no text-only posts): %s",
                 run_id, comic_exc,
             )
@@ -1076,15 +1091,17 @@ class PublisherAgent:
                 "error":         str(comic_exc),
             }
 
-        # ── Publish: comic image + clean outside-post text ONLY ───────────────
+        # ── Step 6: Publish — comic image + outside-post text ONLY ───────────
         # At this point asset_urn is guaranteed non-empty.
-        # publish_text = outside-image text (source + CTA + disclaimer + hashtags).
-        # The full persona dialogue lives inside the comic image — not in the post body.
+        # publish_text = Source block + CTA + disclaimer footer + dynamic hashtags.
+        # No persona dialogue text appears in the post body — it is in the image.
         publish_text    = comic_post_text
         publication_key = self._make_publication_key(summary.article_id, summary.headline, publish_text)
 
-        logger.info("[%s] publishing comic post article=%s outside_text_len=%d",
-                    run_id, summary.article_id, len(publish_text))
+        logger.info(
+            "[%s] publishing comic post article=%s outside_text_len=%d",
+            run_id, summary.article_id, len(publish_text),
+        )
 
         post_result = await self._client.create_post_with_image(
             text=publish_text,

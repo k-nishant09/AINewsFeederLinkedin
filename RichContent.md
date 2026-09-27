@@ -14,63 +14,48 @@ The reader should feel they are watching an insightful host moderate a live deba
 
 ---
 
-## Section 1 — What the Reader Sees (Post Anatomy)
+## Section 1 — What the Reader Sees (Post & Comic Strip Anatomy)
 
-Every AIFeeders post has exactly this structure, assembled by [`PublisherAgent._compose_main_post()`](src/daily_news/agents/publisher_agent.py):
+AIFeeders publishes content as a **Visual Comic Strip Post**. The full multi-persona debate lives inside the high-resolution 6-panel comic image asset rendered by [`ComicGenerator`](src/daily_news/agents/comic_generator.py), while the LinkedIn post text block is constructed strictly by [`build_outside_post()`](src/daily_news/agents/comic_generator.py:794) and published via [`PublisherAgent.publish()`](src/daily_news/agents/publisher_agent.py).
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  AIFEEDERS POST ANATOMY                                             │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│  🧠 𝐀𝐈𝐅𝐄𝐄𝐃𝐄𝐑𝐒 | 𝐓𝐇𝐄 𝐃𝐀𝐈𝐋𝐘 𝐀𝐈 𝐃𝐄𝐁𝐀𝐓𝐄                          │
-│  ← Unicode Mathematical Bold (LinkedIn API rejects **Markdown**)   │
-│                                                                     │
-│  🚨 HOOK LINE                                                       │
-│  ← First 220 chars before "see more" fold                          │
-│  ← MD5(headline) % 5 → deterministic variant rotation             │
-│  ← Never a press release opener. Never "In a move that..."        │
-│                                                                     │
-│  CONTEXT LINE (optional)                                            │
-│  ← Editorial framing from Jev significance + relevance scores     │
-│  ← Human-readable, not a score readout                            │
-│                                                                     │
-│  ─────────────────────────────────────────────────────────────     │
-│  💼 𝐅𝐎𝐔𝐍𝐃𝐄𝐑    [240–300 chars]                                    │
-│  ← Opens with a CONCRETE CLAIM or SPECIFIC NUMBER                 │
-│  ← Never: anecdote opener, "sounds great but", "I have seen..."   │
-│                                                                     │
-│  🧑‍💻 𝐄𝐍𝐆𝐈𝐍𝐄𝐄𝐑  [240–300 chars]                                    │
-│  ← Opens with a SPECIFIC FAILURE MODE or TECHNICAL CONSTRAINT     │
-│                                                                     │
-│  ⚖️ 𝐒𝐊𝐄𝐏𝐓𝐈𝐂   [240–300 chars]                                    │
-│  ← Opens with a CHALLENGE TO THE PREMISE of the article           │
-│                                                                     │
-│  🏛️ 𝐏𝐎𝐋𝐈𝐂𝐘    [240–300 chars]  ← only for regulation/research   │
-│  ← Opens with a SPECIFIC REGULATORY GAP or COMPLIANCE RISK        │
-│  ─────────────────────────────────────────────────────────────     │
-│                                                                     │
-│  🎙️ 𝐓𝐇𝐄 𝐀𝐈𝐅𝐄𝐄𝐃𝐄𝐑𝐒 𝐐𝐔𝐄𝐒𝐓𝐈𝐎𝐍                                     │
-│  ← 1–2 sentences synthesising the core tension across voices      │
-│                                                                     │
-│  💬 𝐘𝐎𝐔𝐑 𝐓𝐔𝐑𝐍                                                     │
-│  ← _build_cta() — 100% article-specific forced-choice question    │
-│  ← 1️⃣2️⃣3️⃣4️⃣ numbered options (scored +20 pts in reach scorer)    │
-│  ← NEVER "What do you think?" alone                               │
-│                                                                     │
-│  Source → https://...                                               │
-│  ← Original GNews article URL                                      │
-│                                                                     │
-│  #Hashtag1 #Hashtag2 #Hashtag3  ← inside parts[], NOT footer     │
-│  ← _extract_dynamic_tags(): proper nouns + AEO + foundation       │
-│  ← cap 7 tags · excess = bait penalty in reach scorer             │
-│                                                                     │
-│  🤖 AIFeeders · Daily AI Intelligence · Powered by Jev            │
-│  *AI-simulated perspectives for discussion — not professional      │
-│   advice.*                                                          │
-│  ← brand footer OUTSIDE parts[] — may be clipped at 2800 chars   │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  AIFEEDERS COMIC STRIP & POST ANATOMY                                           │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                 │
+│  [ATTACHED VISUAL ASSET — 1440 × 888px COMIC STRIP IMAGE]                       │
+│  ┌───────────────────────────────────────────────────────────────────────────┐  │
+│  │ 🧠 AIFEEDERS · ONE NEWS. MULTIPLE REAL-WORLD VOICES.                      │  │
+│  │ HEADLINE: Major AI capability or strategic development                    │  │
+│  │ SUBHEAD: Narrative context / tension line                                 │  │
+│  │ ┌───────────────────┬───────────────────┬───────────────────┐             │  │
+│  │ │ ① 🎙️ MEDIA HOST    │ ② 💼 FOUNDER      │ ③ 🧑‍💻 ENGINEER    │             │  │
+│  │ │ News Brief +      │ Opportunity Angle │ Production Reality│             │  │
+│  │ │ Hand-off Question │ Answering Host    │ Answering Founder │             │  │
+│  │ ├───────────────────┼───────────────────┼───────────────────┤             │  │
+│  │ │ ④ ⚖️ SKEPTIC       │ ⑤ 🏛️ POLICY       │ ⑥ 🎙️ MEDIA HOST    │             │  │
+│  │ │ Premise Challenge │ Governance / Risk │ Synthesis & Poll  │             │  │
+│  │ │ Answering Eng.    │ Answering Skeptic │ Question to Reader│             │  │
+│  │ └───────────────────┴───────────────────┴───────────────────┘             │  │
+│  └───────────────────────────────────────────────────────────────────────────┘  │
+│                                                                                 │
+│  [OUTSIDE-IMAGE LINKEDIN POST TEXT BLOCK]                                       │
+│  ───────────────────────────────────────────────────────────                    │
+│  📰 Source: <Publisher Name>                                                    │
+│  🔗 https://... (Article Canonical URL)                                         │
+│                                                                                 │
+│  🎙️ <HostName> — To the Audience:                                               │
+│                                                                                 │
+│  <Audience Discussion Question & Multi-choice Options>                          │
+│                                                                                 │
+│  Where do you stand? Drop your take below 👇                                    │
+│                                                                                 │
+│  ⚠️ Perspectives are AI-simulated — not professional advice.                    │
+│  🤖 AIFeeders  ·  Daily AI Intelligence  ·  Powered by Jev                      │
+│                                                                                 │
+│  #Dynamic #Hashtags #EntityBased #AIFeeders                                     │
+│  ───────────────────────────────────────────────────────────                    │
+└─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---

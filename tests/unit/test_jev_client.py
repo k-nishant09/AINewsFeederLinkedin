@@ -366,14 +366,14 @@ class TestJevPrefilterNode:
 
             result = await jev_prefilter_articles(state)
 
-        # Top 1 returned — highest composite score selected
-        assert len(result["selected_articles"]) == 1
-        assert result["selected_articles"][0]["article_id"] == "high"
-        # jev_prefilter_scores only contains the selected article
+        # Top-N (up to 3) returned — ranked by composite score, highest first
+        selected_ids = [a["article_id"] for a in result["selected_articles"]]
+        assert result["selected_articles"][0]["article_id"] == "high"  # best article first
+        assert "high" in selected_ids
+        # jev_prefilter_scores contains all selected articles
         scores = result["jev_prefilter_scores"]
         assert isinstance(scores, dict)
         assert "high" in scores
-        assert "low" not in scores
         assert scores["high"]["relevance_score"] == pytest.approx(0.95)
 
     @pytest.mark.asyncio
