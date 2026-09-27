@@ -1,11 +1,12 @@
 """
 Comic Strip Generator for AIFeeders — 6-Scene Conversational Story Format.
-v2 — redesigned for LinkedIn readability:
-  • Big, bold headline (top header bar)
-  • Small FACE avatars only (no full bodies) — content owns the panel
-  • Name + Role shown as a bold header row right beside the face — unmissable
-  • Tight padding everywhere — no dead space inside panels
-  • "↳ replying to X" micro-tag so the conversation thread stays legible
+v3 — storytelling conversation design:
+  • Each panel has a sequence badge (①②③…) for reading-order clarity
+  • Cross-panel connector arrows show the reply chain between panels
+  • Speech bubble tails point TOWARD the previous speaker (reply direction)
+  • Listener ghost — faded avatar of the person being replied to sits in the far corner
+  • Quote-reply strip styled as a chat thread reply (thick accent border, tinted)
+  • Panels flow as a living conversation, not isolated monologues
 
 STORY GRAMMAR (fixed narrative logic, dynamic cast):
 ─────────────────────────────────────────────────────
@@ -112,21 +113,26 @@ class ComicScene:
 # ── Small FACE-ONLY avatar ───────────────────────────────────────────────────
 # Deliberately tiny and simple — the words own the panel.
 
-def _face(cx: int, cy: int, persona: str, r: int = 26) -> str:
+def _face(cx: int, cy: int, persona: str, r: int = 26, show_badge: bool = True) -> str:
     accent = ACCENT.get(persona, "#555555")
     hair   = _HAIR.get(persona, "#3D2314")
     badge  = _BADGE.get(persona, "🙂")
     br     = max(11, int(r * 0.42))
 
-    return f"""<g transform="translate({cx},{cy})">
+    svg = f"""<g transform="translate({cx},{cy})">
 <circle cx="0" cy="0" r="{r}" fill="{SKIN}" stroke="{accent}" stroke-width="3.5"/>
 <path d="M{-r+2},{-r*0.35:.1f} Q0,{-r*1.55:.1f} {r-2},{-r*0.35:.1f} Q{r-4},{-r*0.65:.1f} 0,{-r*0.7:.1f} Q{-r+4},{-r*0.65:.1f} {-r+2},{-r*0.35:.1f} Z" fill="{hair}"/>
 <circle cx="{-r*0.32:.1f}" cy="{-r*0.05:.1f}" r="{max(2, int(r*0.09))}" fill="{BORDER_COL}"/>
 <circle cx="{r*0.32:.1f}"  cy="{-r*0.05:.1f}" r="{max(2, int(r*0.09))}" fill="{BORDER_COL}"/>
 <path d="M{-r*0.28:.1f},{r*0.35:.1f} Q0,{r*0.55:.1f} {r*0.28:.1f},{r*0.35:.1f}" stroke="{BORDER_COL}" stroke-width="2" fill="none"/>
-<circle cx="{r*0.72:.1f}" cy="{r*0.72:.1f}" r="{br}" fill="#FFFFFF" stroke="{accent}" stroke-width="2"/>
-<text x="{r*0.72:.1f}" y="{r*0.72 + br*0.38:.1f}" text-anchor="middle" font-size="{br*1.15:.1f}">{badge}</text>
-</g>"""
+"""
+    if show_badge:
+        svg += (f'<circle cx="{r*0.72:.1f}" cy="{r*0.72:.1f}" r="{br}" '
+                f'fill="#FFFFFF" stroke="{accent}" stroke-width="2"/>\n'
+                f'<text x="{r*0.72:.1f}" y="{r*0.72 + br*0.38:.1f}" '
+                f'text-anchor="middle" font-size="{br*1.15:.1f}">{badge}</text>\n')
+    svg += "</g>"
+    return svg
 
 
 # ── Text helpers ──────────────────────────────────────────────────────────────
@@ -178,17 +184,37 @@ def _speech_bubble(
     x: int, y: int, w: int, h: int, text: str,
     tail_x_frac: float = 0.16, accent: str = BORDER_COL,
     max_font: int = 30, min_font: int = 14,
+    tail_side: str = "top",   # "top" | "right"
 ) -> str:
-    """Speech bubble that FILLS the given box — text auto-scales, tail points up to speaker."""
+    """Speech bubble that FILLS the given box — text auto-scales.
+
+    tail_side="top"   Symmetric upward tail at x + w * tail_x_frac.
+                      The dashed thread line from the reply strip above aligns with the tip.
+    tail_side="right" Rightward tail at y + h * tail_x_frac (tail_x_frac reused as y-frac).
+                      Used for col-2 panels where previous speaker is to the left.
+    """
     rx_ = 12
     svg = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx_}" '
            f'fill="{BUBBLE_BG}" stroke="{accent}" stroke-width="2.5"/>\n')
 
-    tx = x + int(w * tail_x_frac)
-    svg += (f'<polygon points="{tx},{y} {tx-9},{y-16} {tx+17},{y}" '
-            f'fill="{BUBBLE_BG}" stroke="{accent}" stroke-width="2.5"/>\n')
-    svg += (f'<line x1="{tx-8}" y1="{y+1}" x2="{tx+16}" y2="{y+1}" '
-            f'stroke="{BUBBLE_BG}" stroke-width="3.5"/>\n')
+    TW = 13   # half-width of tail base
+    TH = 16   # height (length) of tail
+
+    if tail_side == "right":
+        # Tail points right from the right edge, centred vertically at tail_x_frac of h
+        ty = y + int(h * max(0.15, min(0.85, tail_x_frac)))
+        ex = x + w  # right edge
+        svg += (f'<polygon points="{ex},{ty - TW} {ex + TH},{ty} {ex},{ty + TW}" '
+                f'fill="{BUBBLE_BG}" stroke="{accent}" stroke-width="2.5"/>\n')
+        svg += (f'<line x1="{ex - 1}" y1="{ty - TW + 1}" x2="{ex - 1}" y2="{ty + TW - 1}" '
+                f'stroke="{BUBBLE_BG}" stroke-width="3.5"/>\n')
+    else:
+        # Symmetric upward tail: tip at (tx, y - TH), base from (tx-TW, y) to (tx+TW, y)
+        tx = x + int(w * tail_x_frac)
+        svg += (f'<polygon points="{tx - TW},{y} {tx},{y - TH} {tx + TW},{y}" '
+                f'fill="{BUBBLE_BG}" stroke="{accent}" stroke-width="2.5"/>\n')
+        svg += (f'<line x1="{tx - TW + 1}" y1="{y + 1}" x2="{tx + TW - 1}" y2="{y + 1}" '
+                f'stroke="{BUBBLE_BG}" stroke-width="3.5"/>\n')
 
     font_size, lines = _fit_text_to_box(text, w, h, max_font=max_font, min_font=min_font)
     lh       = font_size + 6
@@ -223,57 +249,69 @@ def _name_row(x: int, y: int, name: str, role: str, persona: str,
 
 
 def _quote_reply_strip(x: int, y: int, w: int, prev_persona: str, prev_name: str,
-                       prev_line: str, accent: str, is_close: bool = False) -> tuple[str, int]:
+                       prev_line: str, accent: str, is_close: bool = False,
+                       tail_frac: float = 0.10) -> tuple[str, int]:
     """
-    Compact tinted strip: tiny face + bold label + quoted question/line.
-    Shows exactly WHO this panel is responding to and WHAT they said.
+    Chat-thread style reply strip — thick left accent bar + tinted bg + avatar + quoted line.
+    Visually connects this panel to the previous speaker like a WhatsApp reply thread.
 
-    is_close=True (Scene 6): renders "🎙️ SYNTHESIZING THE DEBATE" — no avatar, no name.
-    is_close=False (Scenes 2–5): renders "» NAME ASKED: <question>"
+    tail_frac: the bubble tail's horizontal position (fraction of bubble width) so the
+               dashed thread line descending from this strip aligns exactly with the tail.
+    is_close=True (Scene 6): renders "🎙️ SYNTHESIZING THE DEBATE" synthesis bar.
+    is_close=False (Scenes 2–5): chat-reply bar referencing the previous speaker's question.
     Returns (svg, strip_height).
     """
-    h  = 50
-    fr = 16
+    h  = 54
+    fr = 17
 
-    # ── Scene 6 — synthesis strip (no avatar, no previous-speaker reference) ──
+    # Thread connector x = strip_x + strip_w * tail_frac (clamped to safe range)
+    thread_x = int(x + w * max(0.08, min(0.92, tail_frac)))
+
+    # ── Scene 6 — synthesis strip ──────────────────────────────────────────────
     if is_close:
         svg = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" '
-               f'fill="{accent}" opacity="0.08" stroke="{accent}" stroke-width="1.5" '
-               f'stroke-opacity="0.30"/>\n')
-        svg += (f'<line x1="{x + 26}" y1="{y + h}" x2="{x + 26}" y2="{y + h + 8}" '
-                f'stroke="{accent}" stroke-width="2.5" opacity="0.45"/>\n')
-        svg += (f'<text x="{x + 14}" y="{y + 31}" font-family="Arial,Helvetica,sans-serif" '
+               f'fill="{accent}" opacity="0.10" stroke="{accent}" stroke-width="1.5" '
+               f'stroke-opacity="0.25"/>\n')
+        # Thick left accent bar
+        svg += (f'<rect x="{x}" y="{y}" width="5" height="{h}" rx="3" fill="{accent}"/>\n')
+        svg += (f'<text x="{x + 14}" y="{y + 33}" font-family="Arial,Helvetica,sans-serif" '
                 f'font-size="14" font-weight="bold" fill="{accent}">'
                 f'🎙️  SYNTHESIZING THE DEBATE</text>\n')
+        # Thread line descends from strip bottom to bubble tail — aligns with tail_frac
+        svg += (f'<line x1="{thread_x}" y1="{y + h}" x2="{thread_x}" y2="{y + h + 10}" '
+                f'stroke="{accent}" stroke-width="2" stroke-dasharray="3,3" opacity="0.50"/>\n')
         return svg, h
 
-    # ── Scenes 2–5 — reply strip with avatar + "NAME ASKED:" label ────────────
-    # Truncate quote to fit on one line — keep it punchy
+    # ── Scenes 2–5 — chat-reply bar ────────────────────────────────────────────
     quote = prev_line.strip().strip('"')
-    max_chars = 62
+    max_chars = 58
     if len(quote) > max_chars:
         quote = quote[:max_chars].rsplit(" ", 1)[0] + "…"
 
-    # Tinted background pill
+    # Tinted background
     svg = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" '
-           f'fill="{accent}" opacity="0.08" stroke="{accent}" stroke-width="1.5" '
-           f'stroke-opacity="0.30"/>\n')
-    # Vertical connector to bubble below
-    svg += (f'<line x1="{x + 26}" y1="{y + h}" x2="{x + 26}" y2="{y + h + 8}" '
-            f'stroke="{accent}" stroke-width="2.5" opacity="0.45"/>\n')
+           f'fill="{accent}" opacity="0.09" stroke="{accent}" stroke-width="1.5" '
+           f'stroke-opacity="0.25"/>\n')
+    # Thick left accent bar — the key "reply thread" visual cue
+    svg += (f'<rect x="{x}" y="{y}" width="5" height="{h}" rx="3" fill="{accent}"/>\n')
 
-    fcx, fcy = x + 20, y + h // 2
-    svg += _face(fcx, fcy, prev_persona, r=fr)
+    # Tiny face of the person being quoted — no badge (keep it clean at small size)
+    fcx, fcy = x + fr + 10, y + h // 2
+    svg += _face(fcx, fcy, prev_persona, r=fr, show_badge=False)
 
-    tx = x + fr * 2 + 16
-    # "» SOPHIA ASKED:" — bold, accent colour, 13px
-    svg += (f'<text x="{tx}" y="{y + 19}" font-family="Arial,Helvetica,sans-serif" '
-            f'font-size="13" font-weight="bold" fill="{accent}">'
-            f'» {html.escape(prev_name.upper())} ASKED:</text>\n')
-    # The actual quoted question — italic, muted, 14px so it's readable
-    svg += (f'<text x="{tx}" y="{y + 38}" font-family="Georgia,Arial,sans-serif" '
-            f'font-size="14" font-style="italic" fill="{MUTED_TEXT}">'
+    tx = x + fr * 2 + 18
+    # "↩ SOPHIA:" — reply arrow + name, bold accent
+    svg += (f'<text x="{tx}" y="{y + 18}" font-family="Arial,Helvetica,sans-serif" '
+            f'font-size="12" font-weight="bold" fill="{accent}" letter-spacing="0.4">'
+            f'↩ {html.escape(prev_name.upper())}</text>\n')
+    # Quoted line — italic, muted, slightly larger for readability
+    svg += (f'<text x="{tx}" y="{y + 36}" font-family="Georgia,Arial,sans-serif" '
+            f'font-size="13" font-style="italic" fill="{MUTED_TEXT}">'
             f'"{html.escape(quote)}"</text>\n')
+
+    # Dashed thread line — descends to exactly where the bubble tail will point up from
+    svg += (f'<line x1="{thread_x}" y1="{y + h}" x2="{thread_x}" y2="{y + h + 10}" '
+            f'stroke="{accent}" stroke-width="2" stroke-dasharray="3,3" opacity="0.55"/>\n')
     return svg, h
 
 
@@ -303,19 +341,84 @@ def _host_question_pill(x: int, y: int, w: int, name: str, question: str,
 
 # ── Panel renderers ────────────────────────────────────────────────────────────
 
-def _panel_frame(px: int, py: int, accent: str) -> str:
-    return (f'<rect x="{px + BORDER}" y="{py + BORDER}" '
-            f'width="{PANEL_W - BORDER * 2}" height="{PANEL_H - BORDER * 2}" '
-            f'fill="{PANEL_BG}" stroke="{BORDER_COL}" stroke-width="{BORDER}" rx="8"/>\n'
-            # Top accent stripe — 7px tall, signals speaker colour at a glance
-            f'<rect x="{px + BORDER}" y="{py + BORDER}" '
+# Circled number characters for panel sequence badges
+_SEQUENCE_BADGE = ["①", "②", "③", "④", "⑤", "⑥"]
+
+
+def _panel_frame(px: int, py: int, accent: str, scene_idx: int = 0) -> str:
+    """Panel background + top accent stripe + sequence badge."""
+    svg = (f'<rect x="{px + BORDER}" y="{py + BORDER}" '
+           f'width="{PANEL_W - BORDER * 2}" height="{PANEL_H - BORDER * 2}" '
+           f'fill="{PANEL_BG}" stroke="{BORDER_COL}" stroke-width="{BORDER}" rx="8"/>\n')
+    # Top accent stripe
+    svg += (f'<rect x="{px + BORDER}" y="{py + BORDER}" '
             f'width="{PANEL_W - BORDER * 2}" height="7" rx="3" fill="{accent}"/>\n')
+    # Sequence badge — top-right corner pill
+    badge = _SEQUENCE_BADGE[min(scene_idx, 5)]
+    bx = px + PANEL_W - BORDER - 34
+    by = py + BORDER + 2
+    svg += (f'<rect x="{bx}" y="{by}" width="28" height="22" rx="6" '
+            f'fill="{accent}" opacity="0.92"/>\n')
+    svg += (f'<text x="{bx + 14}" y="{by + 15}" text-anchor="middle" '
+            f'font-family="Arial,Helvetica,sans-serif" font-size="13" '
+            f'font-weight="bold" fill="#FFFFFF">{badge}</text>\n')
+    return svg
+
+
+def _panel_connector_arrow(px: int, py: int, direction: str = "right") -> str:
+    """
+    Draw a small arrow on the panel border showing the reply direction.
+    direction='right': arrow points right (current speaker replied, next panel continues)
+    direction='down':  arrow points down (row break — reply continues below)
+    """
+    if direction == "right":
+        # Arrow on the right edge, vertically centred
+        ax = px + PANEL_W - BORDER
+        ay = py + PANEL_H // 2
+        return (f'<polygon points="{ax},{ay} {ax-14},{ay-9} {ax-14},{ay+9}" '
+                f'fill="{BORDER_COL}" opacity="0.28"/>\n')
+    if direction == "down":
+        # Arrow on the bottom edge, horizontally centred
+        ax = px + PANEL_W // 2
+        ay = py + PANEL_H - BORDER
+        return (f'<polygon points="{ax},{ay} {ax-9},{ay-14} {ax+9},{ay-14}" '
+                f'fill="{BORDER_COL}" opacity="0.28"/>\n')
+    return ""
+
+
+def _ghost_listener(px: int, py: int, prev_persona: str, col: int) -> str:
+    """
+    Minimal ghost silhouette of the PREVIOUS speaker — bottom-far corner of panel.
+    Purely a head+shoulder shape, no badge, no eyes — just enough to suggest presence.
+    col=2 (right panel) → ghost on left side; otherwise ghost on right.
+    """
+    r = 18
+    # Far corner: opposite to speaker's name row (top-left)
+    cx = px + BORDER + r + 14 if col == 2 else px + PANEL_W - BORDER - r - 14
+    cy = py + PANEL_H - BORDER - r - 14
+    accent = ACCENT.get(prev_persona, "#888888")
+    hair   = _HAIR.get(prev_persona, "#3D2314")
+
+    svg  = '<g opacity="0.15">\n'
+    # Head circle
+    svg += (f'<circle cx="{cx}" cy="{cy}" r="{r}" '
+            f'fill="{SKIN}" stroke="{accent}" stroke-width="1.5"/>\n')
+    # Hair: simple filled semicircle cap — M left Q top-ctrl right Z
+    svg += (f'<path d="M {cx - r + 2} {cy - int(r * 0.2)} '
+            f'Q {cx} {cy - r * 2} {cx + r - 2} {cy - int(r * 0.2)} Z" '
+            f'fill="{hair}"/>\n')
+    # Shoulder arc below — suggests a body is there
+    svg += (f'<path d="M {cx - r - 4} {cy + r + 2} '
+            f'Q {cx} {cy + r - 4} {cx + r + 4} {cy + r + 2}" '
+            f'stroke="{accent}" stroke-width="1.5" fill="none"/>\n')
+    svg += '</g>\n'
+    return svg
 
 
 def _render_scene1(px: int, py: int, scene: ComicScene) -> str:
     """Scene 1 — host brief (left) + hand-off question pill + 4-row cast roster (right)."""
     c   = ACCENT.get(scene.persona, "#2563EB")
-    svg = _panel_frame(px, py, c)
+    svg = _panel_frame(px, py, c, scene_idx=0)
 
     split = int(PANEL_W * 0.52)   # slightly more room for host brief
     div_x = px + split
@@ -382,10 +485,16 @@ def _render_scene1(px: int, py: int, scene: ComicScene) -> str:
     return svg
 
 
-def _render_conversation_scene(px: int, py: int, scene: ComicScene) -> str:
-    """Scenes 2-6 — name row + quote-reply strip + big speech bubble."""
+def _render_conversation_scene(px: int, py: int, scene: ComicScene,
+                                scene_idx: int = 1) -> str:
+    """Scenes 2-6 — name row + chat-reply strip + speech bubble with directional tail."""
     spk_c = ACCENT.get(scene.persona, "#555555")
-    svg   = _panel_frame(px, py, spk_c)
+    col   = scene_idx % COLS   # 0, 1, or 2 — drives tail direction + ghost position
+    svg   = _panel_frame(px, py, spk_c, scene_idx=scene_idx)
+
+    # Ghost listener — faded previous speaker in far corner
+    if scene.prev_persona and not scene.is_close:
+        svg += _ghost_listener(px, py, scene.prev_persona, col)
 
     hx = px + BORDER + 10
     hy = py + BORDER + 12
@@ -394,31 +503,64 @@ def _render_conversation_scene(px: int, py: int, scene: ComicScene) -> str:
 
     cursor_y = hy + row_h + 6
 
-    # Quote-reply strip — shows exactly what question/line is being answered
+    # Tail geometry — compute BEFORE strip so the strip's thread line aligns with the tail tip.
+    #   col 0 / col 1  → top tail, left side (frac=0.10) — speaker faces right toward next panel
+    #   col 2          → right-side tail (frac=0.35 of bubble height) — faces left to prev panel
+    #   Scene 6        → top tail, centred (frac=0.50) — synthesis, no directional reply
+    if scene.is_close:
+        tail_side  = "top"
+        tail_frac  = 0.50
+    elif col == 2:
+        tail_side  = "right"
+        tail_frac  = 0.35   # 35% down the bubble height = roughly name-row level
+    else:
+        tail_side  = "top"
+        tail_frac  = 0.10
+
+    # Chat-reply strip:
+    #  • Scenes 2-5: shown when prev_name+prev_line are set
+    #  • Scene 6 (is_close): synthesis strip always shown
+    # For col-2 (right-tail) the strip thread_x is ignored — tail is on right side, not top
     strip_h = 0
-    if scene.prev_name and scene.prev_line:
-        strip_x = px + BORDER + 8
-        strip_w = PANEL_W - BORDER * 2 - 16
+    strip_x = px + BORDER + 8
+    strip_w = PANEL_W - BORDER * 2 - 16
+    strip_tail_frac = tail_frac if tail_side == "top" else 0.10   # strip always drops down
+    if scene.is_close:
+        strip_svg, strip_h = _quote_reply_strip(
+            strip_x, cursor_y, strip_w,
+            "", "", "",
+            spk_c, is_close=True, tail_frac=strip_tail_frac,
+        )
+        svg += strip_svg
+        cursor_y += strip_h + 10
+    elif scene.prev_name and scene.prev_line:
         strip_svg, strip_h = _quote_reply_strip(
             strip_x, cursor_y, strip_w,
             scene.prev_persona, scene.prev_name, scene.prev_line,
-            spk_c, is_close=scene.is_close,
+            spk_c, is_close=False, tail_frac=strip_tail_frac,
         )
         svg += strip_svg
-        cursor_y += strip_h + 8
+        cursor_y += strip_h + 10
 
     bubble_x = px + BORDER + 8
     bubble_w = PANEL_W - BORDER * 2 - 16
     bubble_h = PANEL_H - (cursor_y - py) - 12
+
+    # Scene 6 synthesis: slightly tinted bubble bg to signal "wrap-up" visually
+    if scene.is_close:
+        svg += (f'<rect x="{bubble_x}" y="{cursor_y}" width="{bubble_w}" height="{bubble_h}" '
+                f'rx="12" fill="{spk_c}" opacity="0.06"/>\n')
+
     svg += _speech_bubble(bubble_x, cursor_y, bubble_w, bubble_h, scene.text,
-                          tail_x_frac=0.10, accent=spk_c, max_font=24, min_font=14)
+                          tail_x_frac=tail_frac, accent=spk_c, max_font=24, min_font=14,
+                          tail_side=tail_side)
     return svg
 
 
-def _render_scene(px: int, py: int, scene: ComicScene) -> str:
+def _render_scene(px: int, py: int, scene: ComicScene, scene_idx: int = 0) -> str:
     if scene.is_intro:
         return _render_scene1(px, py, scene)
-    return _render_conversation_scene(px, py, scene)
+    return _render_conversation_scene(px, py, scene, scene_idx=scene_idx)
 
 
 # ── Full comic strip render ───────────────────────────────────────────────────
@@ -435,16 +577,12 @@ def _render_comic(headline: str, subhead: str, scenes: list[ComicScene],
     svg += f'<rect x="0" y="0" width="8" height="{HEADER_H}" fill="#2563EB"/>\n'
 
     # ── BRAND ROW — occupies top 48px ─────────────────────────────────────────
-    # Blue badge with brain emoji
     svg += f'<rect x="18" y="10" width="40" height="40" rx="8" fill="#2563EB"/>\n'
     svg += (f'<text x="38" y="35" text-anchor="middle" '
             f'font-family="Arial,Helvetica,sans-serif" font-size="22" fill="#FFFFFF">🧠</text>\n')
-    # AIFEEDERS — 26px bold white, unmissable
     svg += (f'<text x="68" y="38" font-family="Arial Black,Arial,Helvetica,sans-serif" '
             f'font-size="26" font-weight="900" letter-spacing="2.5" fill="#FFFFFF">'
             f'{brand.upper()}</text>\n')
-    # Tagline — 16px bold accent blue, on the same baseline
-    # Approximate brand text width: 26px * 0.72 avg char width * letter-spacing ≈ 20px/char
     brand_px = 68 + len(brand) * 20 + 16
     svg += (f'<text x="{brand_px}" y="38" font-family="Arial,Helvetica,sans-serif" '
             f'font-size="16" font-weight="bold" letter-spacing="0.8" fill="#60A5FA">'
@@ -454,7 +592,7 @@ def _render_comic(headline: str, subhead: str, scenes: list[ComicScene],
     svg += (f'<line x1="18" y1="56" x2="{TOTAL_W - 18}" y2="56" '
             f'stroke="#2563EB" stroke-width="1.5" opacity="0.35"/>\n')
 
-    # ── HEADLINE — 34px bold, max 2 lines, cols=50 to avoid mid-phrase breaks ─
+    # ── HEADLINE ──────────────────────────────────────────────────────────────
     hl_lines = _wrap(headline, cols=50)[:2]
     hl_fs    = 34 if len(hl_lines) == 1 else 28
     hl_lh    = hl_fs + 8
@@ -464,18 +602,46 @@ def _render_comic(headline: str, subhead: str, scenes: list[ComicScene],
                 f'font-size="{hl_fs}" font-weight="900" fill="{HEADER_TEXT}">'
                 f'{html.escape(ln)}</text>\n')
 
-    # ── SUBHEAD — 18px, accent colour so it reads clearly on dark bg ──────────
+    # ── SUBHEAD ───────────────────────────────────────────────────────────────
     if subhead:
         sub_y = 72 + len(hl_lines) * hl_lh + 6
         svg += (f'<text x="18" y="{min(sub_y, HEADER_H - 8)}" '
                 f'font-family="Arial,Helvetica,sans-serif" '
-                f'font-size="18" fill="#FCD34D">'   # warm yellow — pops on dark bg
+                f'font-size="18" fill="#FCD34D">'
                 f'{html.escape(subhead[:115])}</text>\n')
 
+    # ── Panels + cross-panel connector arrows ─────────────────────────────────
+    # Render all panels first, then overlay the connector arrows on top so they
+    # sit in the gutter between panels rather than under the panel borders.
     for i, scene in enumerate(scenes[:6]):
         col, row = i % COLS, i // COLS
         px, py   = col * PANEL_W, HEADER_H + row * PANEL_H
-        svg += _render_scene(px, py, scene)
+        svg += _render_scene(px, py, scene, scene_idx=i)
+
+    # Connector arrows drawn AFTER all panels — sit in the inter-panel gutters
+    for i in range(5):   # arrows between panels 0→1, 1→2, 2→3, 3→4, 4→5
+        col, row = i % COLS, i // COLS
+        px, py   = col * PANEL_W, HEADER_H + row * PANEL_H
+        next_scene = scenes[i + 1] if i + 1 < len(scenes) else None
+        arr_c = ACCENT.get(next_scene.persona, HEADER_BG) if next_scene else HEADER_BG
+
+        if col < COLS - 1:
+            # Right-pointing chevron arrow in the gutter between panels
+            # Centre it on the right border of panel i
+            ax = px + PANEL_W              # the panel border x
+            ay = py + PANEL_H // 2
+            # White backing circle so arrow pops over both panel borders
+            svg += (f'<circle cx="{ax}" cy="{ay}" r="13" fill="#FFFFFF" opacity="0.92"/>\n')
+            svg += (f'<polygon points="{ax + 10},{ay} {ax - 4},{ay - 8} {ax - 4},{ay + 8}" '
+                    f'fill="{arr_c}" opacity="0.80"/>\n')
+        elif col == COLS - 1:
+            # Down-pointing chevron arrow in the gutter between rows
+            # Centre it horizontally on the full strip
+            ax = TOTAL_W // 2
+            ay = py + PANEL_H              # bottom border of row 0
+            svg += (f'<circle cx="{ax}" cy="{ay}" r="13" fill="#FFFFFF" opacity="0.92"/>\n')
+            svg += (f'<polygon points="{ax},{ay + 10} {ax - 8},{ay - 4} {ax + 8},{ay - 4}" '
+                    f'fill="{arr_c}" opacity="0.80"/>\n')
 
     svg += "</svg>\n"
     return svg
