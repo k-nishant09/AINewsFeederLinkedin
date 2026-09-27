@@ -577,11 +577,22 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
 
     # On retry: collect all failure_reasons from the previous eval cycle so the
     # generator can see exactly which phrases were banned and avoid them.
+    # Extract bare quoted phrases from judge critiques like:
+    #   "llm_judge: The post contains the banned phrase 'the real question' ..."
+    # so the LLM gets the concise signal, not the full verbose critique.
+    import re as _re_local
     avoid_phrases: list[str] = []
     if state.get("retry_count", 0) > 0:
         for r in state.get("evaluation_results", []):
             for reason in r.get("failure_reasons", []):
-                avoid_phrases.append(reason)
+                # Extract all single-quoted phrases from the reason string
+                quoted = _re_local.findall(r"'([^']+)'", reason)
+                if quoted:
+                    avoid_phrases.extend(quoted)
+                else:
+                    # Fallback: strip "llm_judge: " prefix and use full reason
+                    avoid_phrases.append(reason.removeprefix("llm_judge: ").strip())
+        avoid_phrases = list(dict.fromkeys(avoid_phrases))  # deduplicate, preserve order
         if avoid_phrases:
             logger.info(
                 "[%s] generate_personas retry=%d — injecting %d avoid_phrases into prompts",

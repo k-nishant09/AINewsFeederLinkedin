@@ -226,10 +226,9 @@ def check_linkedin_token(token: str, dry_run: bool) -> str | None:
         skip("Skipped (--dry-run or LINKEDIN_ACCESS_TOKEN not set)")
         return None
 
-    url = "https://api.linkedin.com/rest/userinfo"
+    url = "https://api.linkedin.com/v2/userinfo"
     headers = {
         "Authorization": f"Bearer {token}",
-        "LinkedIn-Version": "202504",
     }
 
     try:
@@ -257,7 +256,7 @@ def check_linkedin_token(token: str, dry_run: bool) -> str | None:
 
 def check_mcp_health(name: str, base_url: str) -> bool:
     """Check /health endpoint of an MCP server."""
-    health_url = base_url.replace("/mcp", "") + "/health"
+    health_url = base_url.rstrip("/").removesuffix("mcp").rstrip("/") + "/health"
     try:
         r = httpx.get(health_url, timeout=10)
         r.raise_for_status()
@@ -273,50 +272,38 @@ def check_mcp_health(name: str, base_url: str) -> bool:
         return False
 
 
+def _call(base_url: str, tool: str, arguments: dict, auth_token: str, timeout: int = 30) -> Any:
+    """Call a tool via POST /call REST endpoint (the protocol used by MCPHTTPClient)."""
+    # Strip /mcp suffix — the /call endpoint is at the server root
+    call_url = base_url.rstrip("/").removesuffix("/mcp").rstrip("/") + "/call"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {auth_token}",
+    }
+    r = httpx.post(call_url, json={"tool": tool, "arguments": arguments},
+                   headers=headers, timeout=timeout)
+    r.raise_for_status()
+    data = r.json()
+    if "error" in data:
+        raise RuntimeError(f"MCP error: {data['error']}")
+    return data.get("result")
+
+
 def check_news_mcp_tool(base_url: str, dry_run: bool, auth_token: str) -> bool:
-    """Call news_search_latest tool via MCP streamable-http."""
+    """Call news_search_latest tool via POST /call."""
     section("4b. News MCP — news_search_latest tool call")
     if dry_run:
         skip("Skipped (--dry-run)")
         return True
 
-    # MCP streamable-http: POST /mcp with JSON-RPC 2.0
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": "news_search_latest",
-            "arguments": {
-                "query": "artificial intelligence LLM",
-                "hours": 24,
-                "limit": 3,
-            },
-        },
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {auth_token}",
-    }
     try:
-        r = httpx.post(base_url, json=payload, headers=headers, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        if "error" in data:
-            fail(f"MCP error: {data['error']}")
-            return False
-        result = data.get("result", {})
-        # parse content
-        content = result.get("content", [{}])
-        text = content[0].get("text", "{}") if content else "{}"
-        try:
-            articles = json.loads(text).get("articles", [])
-        except json.JSONDecodeError:
-            articles = []
+        result = _call(base_url, "news_search_latest",
+                       {"query": "artificial intelligence LLM", "hours": 24, "limit": 3},
+                       auth_token)
+        articles = result.get("articles", []) if isinstance(result, dict) else []
         ok(f"news_search_latest returned {len(articles)} articles")
         for a in articles[:2]:
-            title = a.get("title", "")[:70]
-            print(f"     → {title}")
+            print(f"     → {a.get('title', '')[:70]}")
         return True
     except Exception as e:
         fail(f"Tool call failed: {e}")
@@ -324,57 +311,42 @@ def check_news_mcp_tool(base_url: str, dry_run: bool, auth_token: str) -> bool:
 
 
 def check_pageindex_round_trip(base_url: str, dry_run: bool, auth_token: str) -> bool:
-    """Index a document and retrieve relevant sections."""
+    """Index a document and retrieve relevant sections via POST /call."""
     section("5b. PageIndex MCP — index + retrieve round-trip")
     if dry_run:
         skip("Skipped (--dry-run)")
         return True
 
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {auth_token}"}
-
-    def call(method: str, name: str, args: dict) -> dict | None:
-        payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": {"name": name, "arguments": args}}
-        try:
-            r = httpx.post(base_url, json=payload, headers=headers, timeout=20)
-            r.raise_for_status()
-            data = r.json()
-            if "error" in data:
-                fail(f"MCP error calling {name}: {data['error']}")
-                return None
-            content = data.get("result", {}).get("content", [{}])
-            text = content[0].get("text", "{}") if content else "{}"
-            return json.loads(text)
-        except Exception as e:
-            fail(f"{name} failed: {e}")
-            return None
-
-    # Index
-    idx = call("tools/call", "pageindex_index_document", {
-        "document_id": "verify-test-001",
-        "title": "Test: AI impact on employment",
-        "content": (
-            "Artificial intelligence is transforming enterprise workflows. "
-            "Studies show 40% of tasks in professional services can be automated. "
-            "Workers in creative industries show increased productivity with AI tools. "
-            "Policy makers are debating universal basic income as AI displaces routine jobs."
-        ),
-        "source_url": "https://example.com/test",
-    })
-    if not idx:
+    try:
+        idx = _call(base_url, "pageindex_index_document", {
+            "document_id": "verify-test-001",
+            "title": "Test: AI impact on employment",
+            "content": (
+                "Artificial intelligence is transforming enterprise workflows. "
+                "Studies show 40% of tasks in professional services can be automated. "
+                "Workers in creative industries show increased productivity with AI tools. "
+                "Policy makers are debating universal basic income as AI displaces routine jobs."
+            ),
+            "source_url": "https://example.com/test",
+        }, auth_token, timeout=20)
+        ok(f"pageindex_index_document: {idx}")
+    except Exception as e:
+        fail(f"pageindex_index_document failed: {e}")
         return False
-    ok(f"pageindex_index_document: {idx}")
 
-    # Retrieve
-    ret = call("tools/call", "pageindex_get_relevant_sections", {
-        "document_id": "verify-test-001",
-        "question": "What is the impact on jobs?",
-    })
-    if not ret:
+    try:
+        ret = _call(base_url, "pageindex_get_relevant_sections", {
+            "document_id": "verify-test-001",
+            "question": "What is the impact on jobs?",
+        }, auth_token, timeout=20)
+        sections_text = ret.get("sections_text", "") if isinstance(ret, dict) else str(ret)
+        ok(f"pageindex_get_relevant_sections: {len(sections_text)} chars returned")
+        if sections_text:
+            print(f"     → {sections_text[:120]}...")
+    except Exception as e:
+        fail(f"pageindex_get_relevant_sections failed: {e}")
         return False
-    sections_text = ret.get("sections_text", "")
-    ok(f"pageindex_get_relevant_sections: {len(sections_text)} chars returned")
-    if sections_text:
-        print(f"     → {sections_text[:120]}...")
+
     return True
 
 
@@ -385,38 +357,17 @@ def check_linkedin_mcp_mock(base_url: str, dry_run: bool, auth_token: str, publi
         skip("Skipped (--dry-run)")
         return True
 
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {auth_token}"}
-    payload = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": {
-            "name": "linkedin_create_post",
-            "arguments": {
-                "text": (
-                    "[TEST] AI Daily News Platform verification post.\n\n"
-                    f"Timestamp: {datetime.utcnow().isoformat()}Z\n\n"
-                    "#AI #Test"
-                ),
-                "publication_key": f"verify-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
-            },
-        },
-    }
-
-    if not publish:
-        # Call with no LINKEDIN_ACCESS_TOKEN → server returns mock response
-        payload["params"]["arguments"]["text"] = "[MOCK] " + payload["params"]["arguments"]["text"]
-
+    prefix = "" if publish else "[MOCK] "
+    text = (
+        f"{prefix}AI Daily News Platform verification post.\n\n"
+        f"Timestamp: {datetime.utcnow().isoformat()}Z\n\n"
+        "#AI #Test"
+    )
     try:
-        r = httpx.post(base_url, json=payload, headers=headers, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        if "error" in data:
-            fail(f"MCP error: {data['error']}")
-            return False
-        content = data.get("result", {}).get("content", [{}])
-        text = content[0].get("text", "{}") if content else "{}"
-        result = json.loads(text)
+        result = _call(base_url, "linkedin_create_post", {
+            "text": text,
+            "publication_key": f"verify-{datetime.utcnow().strftime('%Y%m%d-%H%M%S')}",
+        }, auth_token, timeout=30)
         ok(f"linkedin_create_post: {result}")
         return True
     except Exception as e:

@@ -95,13 +95,14 @@ class EvaluationAgent:
                 "DO NOT expand these lists — only flag what is explicitly listed here.\n\n"
 
                 "### BANNED OPENERS (throat-clearing) — INSTANT FAIL:\n"
-                "These openers are banned ONLY when they are the FIRST words of a persona's passage:\n"
+                "These openers are banned ONLY when they are the EXACT FIRST words of a persona's passage.\n"
+                "DO NOT flag openers that merely contain these words mid-sentence or mid-paragraph.\n"
                 "- 'When I was scaling', 'When I was running', 'When I was building', 'When I was at'\n"
                 "- 'When we deployed', 'When we rolled out', 'When we launched', 'When we built'\n"
                 "- 'When an AI model', 'When a platform team', 'When the platform team'\n"
                 "- 'Imagine you are', \"Imagine you're\", 'Imagine a startup', 'Imagine running'\n"
                 "- 'Consider a scenario', 'Let me paint a picture', 'Let me be clear'\n"
-                "- Any persona text starting with the word 'I' as the very first character\n\n"
+                "NOTE: An opener starting with a company name, statistic, or news fact is NOT banned.\n\n"
 
                 "### BANNED INLINE PHRASES — INSTANT FAIL (EXACT MATCHES ONLY):\n"
                 "- 'the real question' (exact), 'the real challenge' (exact), 'the real issue' (exact)\n"
