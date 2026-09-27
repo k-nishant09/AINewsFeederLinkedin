@@ -1170,15 +1170,17 @@ async def linkedin_upload_image(
         return {"asset_urn": "", "status": "error", "error": str(exc)}
 
     # Step 2 — binary PUT upload of raw bytes
+    # NOTE: uploadUrl from LinkedIn registerUpload is an Amazon S3 / Akamai pre-signed URL.
+    # Sending LinkedIn Authorization Bearer token to S3/CDN pre-signed URL causes HTTP 400/403
+    # signature mismatch error. Upload headers must only contain Content-Type.
     upload_headers = {
-        "Authorization": f"Bearer {_get_access_token()}",
-        "Content-Type":  "image/png",
+        "Content-Type": "image/png",
     }
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             put_resp = await client.put(upload_url, headers=upload_headers, content=image_bytes)
-        # LinkedIn returns 201 on success; some variants return 200
+        # S3/Akamai returns 200 or 201 on successful binary PUT
         if put_resp.status_code not in (200, 201):
             put_resp.raise_for_status()
 

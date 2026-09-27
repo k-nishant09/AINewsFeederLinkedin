@@ -154,6 +154,36 @@ def _extract_question(text: str) -> str:
     return sentences[-1]
 
 
+def _grounded_question(candidate: str, spoken_text: str) -> str:
+    """
+    Only trust an explicitly-supplied pivot question if it is actually grounded
+    in what the speaker's own bubble says. Otherwise, the quote strip on the
+    NEXT panel attributes a question to someone that never appears in their visible dialogue.
+    Falls back to extracting the question directly FROM the spoken text.
+    """
+    candidate = (candidate or "").strip()
+    spoken_text = (spoken_text or "").strip()
+    if candidate:
+        import re
+        def _keywords(s: str) -> set[str]:
+            return {
+                w for w in re.findall(r"[a-z]{3,}", s.lower())
+                if w not in {
+                    "this", "that", "with", "does", "what", "when", "where",
+                    "actually", "really", "which", "about", "isn't", "aren't",
+                    "from", "have", "been", "their", "there", "would", "could", "should", "the", "and"
+                }
+            }
+        cand_kw, spoken_kw = _keywords(candidate), _keywords(spoken_text)
+        if cand_kw and spoken_kw and len(cand_kw & spoken_kw) >= 1:
+            return candidate
+        logger.warning(
+            "Discarding ungrounded pivot question (no keyword overlap with speaker's line): %r vs %r",
+            candidate, spoken_text[:80],
+        )
+    return _extract_question(spoken_text)
+
+
 def _fit_text_to_box(text: str, box_w: int, box_h: int,
                      max_font: int = 30, min_font: int = 14) -> tuple[int, list[str]]:
     """
@@ -768,12 +798,12 @@ def build_scenes(script: ComicScript) -> list[ComicScene]:
             is_close=close,
         )
 
-    # Each persona answers the explicit next_question from the previous speaker
-    # (script carries per-voice question bridges; fall back to _extract_question)
-    q1 = getattr(script, "question1", "") or host_q
-    q2 = getattr(script, "question2", "") or _extract_question(script.voice1_line)
-    q3 = getattr(script, "question3", "") or _extract_question(script.voice2_line)
-    q4 = getattr(script, "question4", "") or _extract_question(script.voice3_line)
+    # Each persona answers the previous speaker's question — validated with grounding
+    # check against the speaker's actual text to prevent disconnects between panels.
+    q1 = _grounded_question(getattr(script, "question1", "") or host_q, brief_text)
+    q2 = _grounded_question(getattr(script, "question2", ""), script.voice1_line)
+    q3 = _grounded_question(getattr(script, "question3", ""), script.voice2_line)
+    q4 = _grounded_question(getattr(script, "question4", ""), script.voice3_line)
 
     scene2 = _conv(A, host_cast, script.voice1_line, prev_line=q1)
     scene3 = _conv(B, A,         script.voice2_line, prev_line=q2)
@@ -792,70 +822,105 @@ def build_scenes(script: ComicScript) -> list[ComicScene]:
 
 # ── Outside-image LinkedIn post text ─────────────────────────────────────────
 
+def _clean_summary_point(text: str) -> str:
+    """Extract a punchy single sentence from a persona's line for the caption teaser."""
+    cleaned = (text or "").strip().strip('"').strip()
+    if not cleaned:
+        return ""
+    # Extract the first complete sentence
+    for i, c in enumerate(cleaned):
+        if c in ".!?" and i >= 20:
+            sentence = cleaned[: i + 1].strip()
+            # If the sentence ends with a question that directs the next speaker, strip it or use it
+            if len(sentence) <= 120:
+                return sentence
+            return sentence[:118].rsplit(" ", 1)[0] + "…"
+    if len(cleaned) > 110:
+        return cleaned[:108].rsplit(" ", 1)[0] + "…"
+    return cleaned
+
+
 def build_outside_post(script: ComicScript) -> str:
     """
     Build the ONLY text that accompanies the comic image on LinkedIn.
 
-    The full persona debate lives inside the comic image strip — this text
-    must be minimal, clean, and drive engagement without duplicating the image.
+    The visual 6-panel comic hosts the full dialogue, while this caption acts
+    as the intellectual hook and natural continuation from Scene 6's unresolved question.
 
-    Exact format (each section separated by a blank line):
-    ─────────────────────────────────────────────────────
-      📰 Source: <name>         ← always shown when source_name is present
-      🔗 <url>                  ← always shown when source_url is present
-                                  (blank line follows if either was shown)
-
-      🎙️ <HostName> — To the Audience:
-
-      <audience_question>
-
-      Where do you stand? Drop your take below 👇
-          (appended only if not already in audience_question text)
-
-      ⚠️ Perspectives are AI-simulated — not professional advice.
-      🤖 AIFeeders  ·  Daily AI Intelligence  ·  Powered by Jev
-
-      #Hashtag1 #Hashtag2 … (dynamic, up to 7 — never hardcoded)
-    ─────────────────────────────────────────────────────
-    This function is the SINGLE source of truth for outside-image post text.
-    publisher_agent.publish() MUST use this and not _compose_main_post().
+    Structure:
+      1. Scroll-stopping Hook (first 2-3 lines — NO metadata at top)
+      2. Context & Framing
+      3. Media Host Attribution: 🎙️ <HostName> — Media Host:
+      4. Dynamic Audience Dilemma & Sharp Choices (from Scene 6 synthesis)
+      5. Community CTA ("Where do you stand? Drop your choice + reason below 👇")
+      6. Source attribution (cleanly placed at footer)
+      7. Compliance / AI Disclaimer & Brand Footer
+      8. Dynamic SEO Hashtags (targeted 3-5 tags)
     """
     lines: list[str] = []
 
-    # ── Source block ──────────────────────────────────────────────────────────
-    source_shown = False
-    if script.source_name:
-        lines.append(f"📰 Source: {script.source_name}")
-        source_shown = True
-    if script.source_url:
-        lines.append(f"🔗 {script.source_url}")
-        source_shown = True
-    if source_shown:
+    # ── 1. Scroll-stopping Hook & Context Framing ──────────────────────────────
+    # First 2-3 lines before 'see more' are high-value real estate.
+    if script.news_brief:
+        brief_clean = script.news_brief.strip()
+        lines.append(brief_clean)
         lines.append("")
 
-    # ── Host CTA ──────────────────────────────────────────────────────────────
-    lines.append(f"🎙️ {script.host_name} — To the Audience:")
+    # ── 2. Cast Perspective Teasers ───────────────────────────────────────────
+    # Bridge the reader from the feed directly into the comic strip
+    if script.cast and len(script.cast) >= 4:
+        lines.append("Our four voices don't agree on what that actually changes:")
+        lines.append("")
+
+        voice_lines = [script.voice1_line, script.voice2_line, script.voice3_line, script.voice4_line]
+        persona_dot = {
+            "business": "🟢",
+            "linkedin": "🟣",
+            "genz":     "🔴",
+            "policy":   "🟠",
+        }
+
+        for cast_member, vline in zip(script.cast[:4], voice_lines):
+            dot = persona_dot.get(cast_member.persona, "🔹")
+            ptake = _clean_summary_point(vline)
+            role_label = cast_member.role.split()[-1]
+            if ptake:
+                lines.append(f"{dot} {cast_member.name} ({role_label}): {ptake}")
+            else:
+                lines.append(f"{dot} {cast_member.name} ({role_label})")
+        lines.append("")
+
+    # ── 3. Media Host Question from Scene 6 ────────────────────────────────────
+    lines.append(f"🎙️ {script.host_name} — Media Host:")
     lines.append("")
     lines.append(script.audience_question.strip())
 
-    # Append engagement CTA only if not already in the question text
+    # ── 4. Engagement CTA ─────────────────────────────────────────────────────
     cta_lower = script.audience_question.lower()
     if "where do you stand" not in cta_lower and "drop your" not in cta_lower:
-        lines += ["", "Where do you stand? Drop your take below 👇"]
+        lines += ["", "Where do you stand? Drop your choice + your reason below 👇"]
 
-    # ── Disclaimer + brand footer (always present, never skipped) ─────────────
+    # ── 5. Clean Source Attribution (Bottom of Post) ──────────────────────────
+    source_items = []
+    if script.source_name:
+        source_items.append(f"Source: {script.source_name}")
+    if script.source_url:
+        source_items.append(f"🔗 {script.source_url}")
+    if source_items:
+        lines += ["", " · ".join(source_items)]
+
+    # ── 6. Disclaimer + Brand Footer ──────────────────────────────────────────
     lines += [
         "",
-        "⚠️ Perspectives are AI-simulated — not professional advice.",
-        "🤖 AIFeeders  ·  Daily AI Intelligence  ·  Powered by Jev",
+        "⚠️ Perspectives are AI-simulated for discussion — not professional advice.",
+        "🤖 AIFeeders · Daily AI Intelligence · Powered by Jev",
     ]
 
-    # ── Dynamic hashtags (always present) ────────────────────────────────────
+    # ── 7. Dynamic Hashtags ───────────────────────────────────────────────────
     if script.hashtags:
         lines += ["", " ".join(h if h.startswith("#") else f"#{h}" for h in script.hashtags)]
     else:
-        # Fallback only when the script has zero hashtags (should never happen in production)
-        lines += ["", "#AI #GenerativeAI #AIFeeders"]
+        lines += ["", "#AIInfrastructure #EnterpriseAI #AIGovernance"]
 
     return "\n".join(lines)
 
@@ -914,10 +979,11 @@ def generate_comic(
 
 # ── Pipeline integration: build script from workflow objects ──────────────────
 
-_HOST_NAMES = ["Maya", "Daniel", "Sophia", "Marcus", "Elena", "Jordan"]
+# Ensure host and cast names NEVER overlap in the same story
+_HOST_NAMES = ["Maya", "Daniel", "Sophia", "Chloe", "Tara", "Julian"]
 _CAST_NAMES: dict[str, list[str]] = {
     "business": ["Arjun", "Priya", "Leo", "Ravi", "Sarah", "David"],
-    "linkedin": ["Steve", "Anika", "Tom", "Elena", "Marcus", "Chris"],
+    "linkedin": ["Steve", "Anika", "Tom", "Marcus", "Chris", "Felix"],
     "genz":     ["Nina",  "Zoe",   "Alex", "Jordan", "Sam",   "Taylor"],
     "policy":   ["James", "Rachel", "Michael", "Wei", "Laura", "Carlos"],
 }
@@ -945,13 +1011,106 @@ def _pick_host_name(article_id: str) -> str:
     return _HOST_NAMES[seed % len(_HOST_NAMES)]
 
 
+def _clip_at_sentence_local(text: str, limit: int) -> str:
+    """UTF-16 safe sentence clipper without importing PublisherAgent."""
+    def _lk_len(t: str) -> int:
+        return sum(2 if ord(c) > 0xFFFF else 1 for c in t)
+
+    if _lk_len(text) <= limit:
+        return text
+    units = 0
+    cut = 0
+    for i, c in enumerate(text):
+        units += 2 if ord(c) > 0xFFFF else 1
+        if units >= limit - 1:
+            cut = i
+            break
+    clipped = text[:cut]
+    for i in range(len(clipped) - 1, -1, -1):
+        if clipped[i] in ".!?":
+            return clipped[: i + 1]
+    return clipped + "…"
+
+
+def _extract_dynamic_tags(
+    headline: str,
+    summary: str,
+    source: str,
+    key_points: list[str],
+    event_type: str,
+    story_seo_tags: list[str] | None = None,
+    max_tags: int = 4,
+) -> list[str]:
+    """
+    SEO & AEO Dynamic Hashtag Extractor:
+    Consolidates meaningful multi-word and entity hashtags (e.g. #Claude37Sonnet, #AIInfrastructure)
+    instead of single-word fragments. Target 3–4 high-relevance tags.
+    """
+    import re
+    found_tags: list[str] = []
+    seen_lower: set[str] = set()
+
+    # 1. First priority: Storyteller AI-generated SEO hashtags
+    if story_seo_tags:
+        for tag in story_seo_tags:
+            cleaned = tag.strip()
+            if not cleaned:
+                continue
+            if not cleaned.startswith("#"):
+                cleaned = f"#{cleaned}"
+            cleaned = "#" + re.sub(r"[^A-Za-z0-9]", "", cleaned[1:])
+            tag_lower = cleaned.lower()
+            if len(cleaned) > 2 and tag_lower not in seen_lower:
+                seen_lower.add(tag_lower)
+                found_tags.append(cleaned)
+            if len(found_tags) >= max_tags:
+                return found_tags
+
+    # 2. Extract compound entities (e.g., "Claude 3.7", "Anthropic AI", "DeepSeek R2")
+    compound_patterns = [
+        r"\b([A-Z][a-zA-Z]+(?:\s+[0-9]+(?:\.[0-9]+)*)?(?:\s+[A-Z][a-zA-Z]+)?)\b",
+    ]
+    for pat in compound_patterns:
+        for match in re.findall(pat, headline):
+            words = match.split()
+            # If multi-token or single substantial entity like Anthropic/DeepSeek/Copilot
+            if len(words) >= 2 or len(words[0]) >= 6:
+                camel = "".join(w.capitalize() if not w.isupper() else w for w in words)
+                camel_clean = re.sub(r"[^A-Za-z0-9]", "", camel)
+                if len(camel_clean) >= 4 and camel_clean.lower() not in {"unveils", "announces", "launches", "releases"}:
+                    tag = f"#{camel_clean}"
+                    if tag.lower() not in seen_lower:
+                        seen_lower.add(tag.lower())
+                        found_tags.append(tag)
+            if len(found_tags) >= 2:
+                break
+
+    # 3. Contextual Domain Tag
+    _EVENT_AEO = {
+        "product_launch": ["AIInfrastructure", "EnterpriseAI"],
+        "funding":        ["AIVenture", "EnterpriseAI"],
+        "regulation":     ["AIGovernance", "AIRegulation"],
+        "research":       ["AIResearch", "MachineLearning"],
+        "acquisition":    ["AIStrategy", "TechConsolidation"],
+        "other":          ["AIInfrastructure", "AIGovernance"],
+    }
+    for ev_tag in _EVENT_AEO.get(event_type, ["AIInfrastructure"]):
+        if len(found_tags) >= max_tags:
+            break
+        tag = f"#{ev_tag}"
+        if tag.lower() not in seen_lower:
+            seen_lower.add(tag.lower())
+            found_tags.append(tag)
+
+    return found_tags[:max_tags]
+
+
 async def build_comic_script_from_summary(
     summary,
     personas,
     run_id: str | None = None,
 ) -> ComicScript:
     """Build a ComicScript from pipeline workflow objects — no extra LLM calls."""
-    from daily_news.agents.publisher_agent import _clip_at_sentence
 
     def _first_sentences(text: str, n: int = 2, limit: int = 200) -> str:
         text  = (text or "").strip().strip('"').strip()
@@ -960,8 +1119,8 @@ async def build_comic_script_from_summary(
             if c in ".!?" and i >= 15:
                 count += 1
                 if count >= n:
-                    return _clip_at_sentence(text[:i + 1], limit)
-        return _clip_at_sentence(text, limit)
+                    return _clip_at_sentence_local(text[:i + 1], limit)
+        return _clip_at_sentence_local(text, limit)
 
     def _story_field(fname: str, fallback: str = "") -> str:
         story = getattr(summary, "story", None)
@@ -971,20 +1130,19 @@ async def build_comic_script_from_summary(
             return str(story.get(fname, fallback) or fallback).strip()
         return str(getattr(story, fname, fallback) or fallback).strip()
 
-    from daily_news.agents.publisher_agent import _extract_dynamic_tags
-
     aid     = summary.article_id
-    opening = _story_field("media_host_opening") or summary.headline
+    opening = _story_field("media_host_opening")
     hook    = _story_field("hook") or summary.why_it_matters
     why     = summary.why_it_matters or ""
     tension = _story_field("future_question") or _story_field("media_host_audience_cta") or ""
 
-    # ── Scene 1 brief: WHAT HAPPENED + WHY IT MATTERS only (not 3 stacked sources) ──
-    what_happened = _first_sentences(opening, n=1, limit=100)
-    why_matters   = _clip_at_sentence(why or hook or "", 90)
-    news_brief    = what_happened
-    if why_matters and why_matters.lower() not in news_brief.lower():
-        news_brief += " " + why_matters
+    # ── Scene 1 brief: WHAT HAPPENED + WHY IT MATTERS only (clean hook sentence) ──
+    if opening:
+        news_brief = _first_sentences(opening, n=2, limit=180)
+    else:
+        news_brief = summary.headline
+        if why and why.lower() not in news_brief.lower():
+            news_brief += f". {why}"
     news_brief = news_brief.strip()
     # central_tension is shown in the hand-off pill — never repeat it inside the bubble
     central_tension = _first_sentences(tension, n=1, limit=110) if tension else ""
@@ -1008,9 +1166,14 @@ async def build_comic_script_from_summary(
         "policy":   personas.policy,
     }
 
-    def _voice(key: str, n: int = 2) -> str:
+    def _voice(key: str) -> str:
         po = persona_map.get(key)
-        return _first_sentences(po.perspective if po else "", n=n, limit=160)
+        if not po or not po.perspective:
+            return ""
+        # Strip outer quotes & clean whitespace
+        text = po.perspective.strip().strip('"').strip()
+        # Full perspective is used so entire grounded thought is present
+        return _clip_at_sentence_local(text, 240)
 
     def _next_q(key: str) -> str:
         """Return the explicit next_question from PersonaOutput, or empty string."""
@@ -1024,12 +1187,13 @@ async def build_comic_script_from_summary(
     cta = _story_field("media_host_audience_cta") or _story_field("future_question") or ""
 
     # ── Scene 6 synthesis: use story analytical fields, not cast-name template ──
+    media_synth  = _story_field("media_host_synthesis")
     perspective  = _story_field("perspective")
     second_order = _story_field("second_order_effect")
     future_q     = _story_field("future_question")
-    synthesis_raw = " ".join(filter(None, [perspective, second_order, future_q])).strip()
+    synthesis_raw = media_synth or " ".join(filter(None, [perspective, second_order, future_q])).strip()
     host_synthesis = (
-        _clip_at_sentence(synthesis_raw, 220)
+        _clip_at_sentence_local(synthesis_raw, 240)
         if synthesis_raw
         else (
             f"Four views, one question: "
@@ -1037,7 +1201,7 @@ async def build_comic_script_from_summary(
         )
     )
 
-    audience_question = _clip_at_sentence(cta, 300) if cta else (
+    audience_question = _clip_at_sentence_local(cta, 300) if cta else (
         f"If AI dramatically changes {summary.headline[:50]}…\n\n"
         f"A — Development speed\nB — Security and compliance\n"
         f"C — Governance and oversight\nD — Operational cost\nE — Something else entirely"
@@ -1074,10 +1238,10 @@ async def build_comic_script_from_summary(
         key_points     = list(summary.key_points or []),
         event_type     = event_type_for_tags,
         story_seo_tags = story_seo_tags,
-        max_tags       = 7,
+        max_tags       = 4,
     )
     if not hashtags:
-        hashtags = ["#AI", "#GenerativeAI", "#AIFeeders", "#EnterpriseAI"]
+        hashtags = ["#AIInfrastructure", "#EnterpriseAI", "#AIGovernance"]
 
     return ComicScript(
         headline          = summary.headline,

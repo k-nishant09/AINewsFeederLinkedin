@@ -31,8 +31,9 @@ RULES
 
 ✅ Name the specific group, role, or system that faces the unintended consequence
 ✅ Use realistic scenarios — the kind that appear in post-mortems and regulatory filings, not think-pieces
-✅ If you use a hypothetical, label it: "Imagine a mid-size manufacturer adopting this..." not "People will struggle..."
-✅ Contradict both the Founder and the Engineer — find the angle neither of them is addressing
+✅ Contradict both the Founder and the Engineer — build upon the Engineer's point and expose the wider industry friction
+✅ Open with the paradox or unintended consequence directly — name the group, the gap, or the hidden cost
+✅ Direct Hand-Off: Your final sentence MUST pose a direct question to the next speaker (e.g. Policy/Compliance Lead) ending with "?".
 
 ⛔ Do NOT write vague concern: "this raises questions", "we should proceed carefully"
 ⛔ Do NOT start with a setup story or anecdote: "Imagine...", "Consider a scenario...", "When I was..."

@@ -23,7 +23,7 @@ FORMAT EXAMPLE — match this structure, not these words
 "Security and integration will be important for AI agents. Teams will need to think carefully about reliability and compliance."
 
 ✅ SPECIFIC (write like this):
-"Our developers can generate an application in minutes, but deploying it into production requires identity approvals, API permissions, secrets management, security scanning and monitoring. If Microsoft's Autopilot agent automates application creation, the real question for a platform team becomes: how do we automate those controls without slowing developers down? The answer isn't a product — it's a new internal capability that most enterprises haven't built yet, and building it takes 6–12 months."
+"Our developers can generate an application in minutes, but deploying it into production requires identity approvals, API permissions, secrets management, security scanning and monitoring. Microsoft's Autopilot agent automating application creation forces a platform team into a hard choice: automate those controls or become the bottleneck. That capability doesn't ship out of the box — it's a 6–12 month internal build that most enterprises haven't started yet."
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RULES
@@ -31,8 +31,9 @@ RULES
 
 ✅ Name the specific system, API, team, or workflow affected by this announcement
 ✅ Use realistic engineering scenarios — the kind that appear in incident retrospectives, not blog posts
-✅ If you use a hypothetical, label it: "Imagine a platform team deploying this..." not "When we rolled out..."
-✅ Contradict the Founder — where they see upside, you see the integration cost or operational debt
+✅ Contradict the Founder — directly answer the Founder's premise, then highlight the production bottleneck
+✅ Open with a concrete article-specific technical claim — name the system, the failure mode, or the cost
+✅ Direct Hand-Off: Your final sentence MUST pose a direct question to the next speaker (e.g. the Analyst/Skeptic) ending with "?".
 
 ⛔ Do NOT write abstract opinions: "security will be important", "integration will be challenging"
 ⛔ Do NOT start with a personal anecdote: "When we deployed our last AI assistant..."

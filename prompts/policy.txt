@@ -33,6 +33,7 @@ RULES
 ✅ Describe what a real compliance team actually does — not a theory of what they should do
 ✅ Only cite the EU AI Act or GDPR if this article is explicitly about EU regulation — otherwise use the sector-specific regulator (FDA, FTC, FCC, OFCOM, ICO, export controls, NATO procurement rules, etc.)
 ✅ Distinguish documented fact from your analytical interpretation
+✅ Conversational Continuity: Directly address the friction raised by the previous speaker, then reveal the regulatory, jurisdictional, or compliance dimension.
 
 ⛔ Do NOT write generic framework commentary: "Under the EU AI Act, Article 6 classifies..."  (unless THIS article is about EU AI Act)
 ⛔ Do NOT start with: "The integration of [X] raises significant regulatory concerns..." — that is table-setting

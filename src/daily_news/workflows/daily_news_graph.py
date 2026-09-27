@@ -44,6 +44,7 @@ All nodes fall back gracefully when JEV_ENABLED=false or on network error.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -141,8 +142,12 @@ class NewsWorkflowState(TypedDict):
 
 async def discover_news(state: NewsWorkflowState) -> NewsWorkflowState:
     """
-    Architecture: all 9 GNews queries fire concurrently via asyncio.gather.
-    Was serial (9 × ~1s = ~9s). Now parallel (~1.5s regardless of query count).
+    Architecture: queries are serialised with a 1.2 s gap to respect GNews free-tier
+    rate limit (1 req/s per API key).  Firing all 9 in parallel caused 429s because
+    each MCP pod applies its own internal delay — but all pods receive the requests
+    simultaneously so the delay is useless against burst traffic.
+
+    9 queries × 1.2 s = ~11 s total (vs serial ~9 s previously — comparable, no 429s).
     """
     run_id = state["run_id"]
     logger.info("[%s] discover_news started", run_id)
@@ -157,31 +162,37 @@ async def discover_news(state: NewsWorkflowState) -> NewsWorkflowState:
 
     client = NewsMCPClient()
     errors: list[str] = []
+    # Serialise GNews requests — free tier enforces 1 req/s per API key.
+    # A Semaphore(1) + 1.2 s delay between acquisitions keeps us safely under the limit.
+    _gnews_sem = asyncio.Semaphore(1)
 
     async def _search_one(query: str, category: NewsCategory) -> list[dict]:
-        span = trace.span(
-            name="news.search_latest",
-            input={"query": query, "category": category.value},
-        ) if trace else None
-        try:
-            results = await client.search_latest(
-                query=query,
-                hours=72,   # 72h window — wider net for free-tier GNews (12h delay)
-                limit=10,   # 10 results per query (free-tier cap)
-                category=category.value,
-            )
-            found = results.get("articles", [])
-            if span:
-                span.end(output={"count": len(found)})
-            return found
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("news search failed for %s: %s", query, exc)
-            errors.append(f"news.search_latest failed for '{query}': {exc}")
-            if span:
-                span.end(output={"error": str(exc)}, level="ERROR")
-            return []
+        async with _gnews_sem:
+            span = trace.span(
+                name="news.search_latest",
+                input={"query": query, "category": category.value},
+            ) if trace else None
+            try:
+                results = await client.search_latest(
+                    query=query,
+                    hours=72,   # 72h window — wider net for free-tier GNews (12h delay)
+                    limit=10,   # 10 results per query (free-tier cap)
+                    category=category.value,
+                )
+                found = results.get("articles", [])
+                if span:
+                    span.end(output={"count": len(found)})
+                return found
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("news search failed for %s: %s", query, exc)
+                errors.append(f"news.search_latest failed for '{query}': {exc}")
+                if span:
+                    span.end(output={"error": str(exc)}, level="ERROR")
+                return []
+            finally:
+                # Stagger requests — 1.2 s between each GNews API call
+                await asyncio.sleep(1.2)
 
-    # Fire all queries in parallel — single network round-trip latency instead of 9×
     all_results: list[list[dict]] = await asyncio.gather(
         *[_search_one(q, c) for q, c in AI_SEARCH_QUERIES]
     )
@@ -536,18 +547,22 @@ async def summarize(state: NewsWorkflowState) -> NewsWorkflowState:
 async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
     """
     Runs persona LLM agents only for the Jev-selected active personas.
-    Falls back to all five if jev_active_personas is empty.
+    Falls back to all four if jev_active_personas is empty.
+
+    Architecture: PageIndex fetch + persona generation run concurrently across
+    all articles via asyncio.gather. Was serial (N articles × ~15s = ~45s).
+    Now parallel (~15s regardless of article count).
 
     On retry cycles (retry_count > 0), extracts failure_reasons from the
     previous evaluation_results and injects them into the persona prompt as
-    avoid_phrases so the LLM has an explicit signal about what to change.
+    avoid_phrases so the LLM has an explicit signal about what to avoid on retry.
     """
     from daily_news.models.summary import NewsSummary
 
     run_id = state["run_id"]
     factory = PersonaAgentFactory()
     pi_client = PageIndexMCPClient()
-    persona_outputs: list[dict] = []
+    errors: list[str] = []
 
     # Jev-selected personas — fall back to all if missing
     active_values: list[str] = state.get("jev_active_personas", [])
@@ -566,8 +581,6 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
     if state.get("retry_count", 0) > 0:
         for r in state.get("evaluation_results", []):
             for reason in r.get("failure_reasons", []):
-                # Extract the quoted phrase from e.g. "deterministic_scanner: persona=genz phrase='at the end of the day'"
-                # or "llm_judge: Stock boilerplate detected — 'sounds great, but'"
                 avoid_phrases.append(reason)
         if avoid_phrases:
             logger.info(
@@ -577,7 +590,7 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
 
     logger.info("[%s] generate_personas: running %s", run_id, [p.value for p in active_personas])
 
-    for summary_dict in state["summaries"]:
+    async def _generate_one(summary_dict: dict) -> dict | None:
         summary = NewsSummary(**summary_dict)
         try:
             sections_resp = await pi_client.get_relevant_sections(
@@ -589,23 +602,33 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
                 summary, evidence, run_id=run_id, personas=active_personas,
                 avoid_phrases=avoid_phrases or None,
             )
-            persona_outputs.append(persona_set.model_dump())
+            return persona_set.model_dump()
         except Exception as exc:  # noqa: BLE001
             logger.error("persona generation failed for %s: %s", summary.article_id, exc, exc_info=True)
-            state["errors"].append(f"personas failed: {exc}")
+            errors.append(f"personas failed: {exc}")
+            return None
 
-    return {**state, "persona_outputs": persona_outputs, "workflow_status": "PERSONAS_GENERATED"}
+    raw_outputs = await asyncio.gather(*[_generate_one(s) for s in state["summaries"]])
+    persona_outputs = [p for p in raw_outputs if p is not None]
+
+    combined_errors = list(state["errors"]) + errors
+    return {**state, "persona_outputs": persona_outputs, "errors": combined_errors, "workflow_status": "PERSONAS_GENERATED"}
 
 
 async def evaluate(state: NewsWorkflowState) -> NewsWorkflowState:
+    """
+    Architecture: all article evaluations fire concurrently via asyncio.gather.
+    Was serial (3 articles × ~10s judge call = ~30s). Now parallel (~10s regardless).
+    The EvaluationAgent is stateless — safe to share across concurrent coroutines.
+    """
     from daily_news.models.persona import PersonaSetOutput
     from daily_news.models.summary import NewsSummary
 
     run_id = state["run_id"]
     agent = EvaluationAgent()
-    results: list[dict] = []
+    errors: list[str] = []
 
-    for summary_dict, persona_dict in zip(state["summaries"], state["persona_outputs"]):
+    async def _evaluate_one(summary_dict: dict, persona_dict: dict) -> dict | None:
         summary = NewsSummary(**summary_dict)
         personas = PersonaSetOutput(**persona_dict)
         source_text = next(
@@ -630,23 +653,29 @@ async def evaluate(state: NewsWorkflowState) -> NewsWorkflowState:
                     "hallucination": result.hallucination,
                     "policy_check":  result.policy_check,
                 })
-            result_dict = result.model_dump()
             logger.info(
                 "[%s] eval article=%s decision=%s factuality=%.2f groundedness=%.2f hallucination=%.2f",
                 run_id, summary.article_id, result.decision.value,
                 result.factuality, result.groundedness, result.hallucination,
             )
-            results.append(result_dict)
+            return result.model_dump()
         except Exception as exc:  # noqa: BLE001
             logger.error("evaluation failed for %s: %s", summary.article_id, exc)
-            state["errors"].append(f"evaluation failed: {exc}")
+            errors.append(f"evaluation failed: {exc}")
             if trace:
                 trace.update(output={"error": str(exc)}, level="ERROR")
+            return None
+
+    raw_results = await asyncio.gather(
+        *[_evaluate_one(s, p) for s, p in zip(state["summaries"], state["persona_outputs"])]
+    )
+    results = [r for r in raw_results if r is not None]
 
     any_regen = any(r.get("decision") == EvaluationDecision.REGENERATE.value for r in results)
     new_retry = state.get("retry_count", 0) + (1 if any_regen else 0)
 
-    return {**state, "evaluation_results": results, "retry_count": new_retry, "workflow_status": "EVALUATED"}
+    combined_errors = list(state["errors"]) + errors
+    return {**state, "evaluation_results": results, "retry_count": new_retry, "errors": combined_errors, "workflow_status": "EVALUATED"}
 
 
 async def score_reach(state: NewsWorkflowState) -> NewsWorkflowState:
