@@ -34,10 +34,13 @@ class _PersonaOutputRaw(BaseModel):
     """Lenient parse target — accepts any string for persona so the LLM's
     display-name output doesn't fail validation. The real PersonaType is
     injected from agent context after parsing."""
-    persona:     str
-    perspective: str
-    evidence:    list[str]
-    article_id:  str
+    persona:       str
+    perspective:   str
+    evidence:      list[str]
+    article_id:    str
+    # One direct question to the NEXT speaker in the conversation chain.
+    # Must end with "?". Empty string is acceptable (comic falls back to heuristic).
+    next_question: str = ""
 
 PERSONA_FOCUS: dict[PersonaType, dict] = {
     PersonaType.BUSINESS: {
@@ -71,6 +74,9 @@ Rules:
 - Do not invent facts or attribute fake quotes.
 - Be punchy, direct, and conversational (2-4 crisp sentences).
 - Avoid essay transitions or stilted phrasing. Speak with conviction and lived experience.
+- After your response, pose ONE direct question to the next speaker that arises naturally
+  from your specific point — not a generic question. This goes in the "next_question" field.
+  It must end with "?" and be grounded in the article, not abstract.
 
 Persona: {persona_name}
 Focus areas: {focus}
@@ -312,6 +318,7 @@ class PersonaAgent:
             article_id=summary.article_id,
             perspective=raw.perspective,
             evidence=raw.evidence,
+            next_question=raw.next_question or "",
         )
 
 

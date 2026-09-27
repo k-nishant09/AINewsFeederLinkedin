@@ -14,10 +14,14 @@ class PersonaType(str, Enum):
 
 
 class PersonaOutput(BaseModel):
-    persona: PersonaType
-    perspective: str
-    evidence: list[str]
-    article_id: str
+    persona:       PersonaType
+    perspective:   str
+    evidence:      list[str]
+    article_id:    str
+    # Explicit question handed to the NEXT speaker in the conversation chain.
+    # The comic generator uses this as the "X ASKED: …" bridge strip.
+    # Empty string = fall back to _extract_question() heuristic.
+    next_question: str = ""
 
 
 class PersonaSetOutput(BaseModel):
