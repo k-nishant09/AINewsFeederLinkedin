@@ -357,12 +357,14 @@ class TestJevPrefilterNode:
             make_prefilter_result("high", 0.95, 0.85),
         ]
 
+        mock_instance = AsyncMock()
+        mock_instance.prefilter_article = AsyncMock(side_effect=side_effects)
+
         with patch("daily_news.agents.jev_agents.get_settings") as mock_settings, \
-             patch("daily_news.agents.jev_agents.JevClient") as MockJev:
+             patch("daily_news.agents.jev_agents.jev_singleton", return_value=mock_instance):
 
             mock_settings.return_value.jev_enabled = True
-            instance = MockJev.return_value
-            instance.prefilter_article = AsyncMock(side_effect=side_effects)
+            mock_settings.return_value.jev_base_url = "https://mock-jev.test"
 
             result = await jev_prefilter_articles(state)
 
@@ -383,12 +385,14 @@ class TestJevPrefilterNode:
         articles = [{"article_id": "a1", "title": "T", "content": ""}]
         state = self._make_state(articles)
 
+        mock_instance = AsyncMock()
+        mock_instance.prefilter_article = AsyncMock(side_effect=Exception("gateway timeout"))
+
         with patch("daily_news.agents.jev_agents.get_settings") as mock_settings, \
-             patch("daily_news.agents.jev_agents.JevClient") as MockJev:
+             patch("daily_news.agents.jev_agents.jev_singleton", return_value=mock_instance):
 
             mock_settings.return_value.jev_enabled = True
-            instance = MockJev.return_value
-            instance.prefilter_article = AsyncMock(side_effect=Exception("gateway timeout"))
+            mock_settings.return_value.jev_base_url = "https://mock-jev.test"
 
             result = await jev_prefilter_articles(state)
 
@@ -429,13 +433,14 @@ class TestJevRouterNode:
             "errors": [],
         }
 
+        mock_instance = AsyncMock()
+        mock_instance.route_personas = AsyncMock(return_value=[PersonaType.GENZ])
+
         with patch("daily_news.agents.jev_agents.get_settings") as mock_settings, \
-             patch("daily_news.agents.jev_agents.JevClient") as MockJev:
+             patch("daily_news.agents.jev_agents.jev_singleton", return_value=mock_instance):
 
             mock_settings.return_value.jev_enabled = True
-            instance = MockJev.return_value
-            # Jev returns only GENZ
-            instance.route_personas = AsyncMock(return_value=[PersonaType.GENZ])
+            mock_settings.return_value.jev_base_url = "https://mock-jev.test"
 
             result = await jev_route_personas(state)
 

@@ -29,8 +29,8 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 
 from daily_news.config.settings import get_settings
+from daily_news.mcp.client import jev_singleton
 from daily_news.mcp.evaluation import EvaluationMCPClient
-from daily_news.mcp.jev_client import JevClient
 from daily_news.models.evaluation import EvaluationDecision, EvaluationResult
 from daily_news.models.persona import PersonaSetOutput
 from daily_news.models.summary import NewsSummary
@@ -54,9 +54,11 @@ class EvaluationAgent:
     def __init__(self) -> None:
         s = get_settings()
         self._settings = s
-        # Jev is the primary backend when JEV_BASE_URL is configured;
-        # otherwise None and the fallback path goes straight to MCP.
-        self._jev = JevClient() if s.jev_base_url else None
+        # Architecture fix: use the process-scoped JevClient singleton so we reuse
+        # the same connection pool that jev_prefilter / jev_find_angle / jev_router use.
+        # Fresh JevClient() per EvaluationAgent instantiation was causing a 4th cold
+        # TCP+TLS handshake to the Jev gateway that the singleton now eliminates.
+        self._jev = jev_singleton() if s.jev_base_url else None
         self._mcp = EvaluationMCPClient()
 
         # Independent LLM-as-a-Judge Reviewer
@@ -64,13 +66,22 @@ class EvaluationAgent:
         judge_base_url = s.eval_llm_base_url or s.llm_base_url
         judge_api_key = s.eval_llm_api_key or s.llm_api_key
 
+        # Architecture fix: add explicit Limits so the judge pool doesn't over-provision
+        # (httpx default max_connections=100 is wasteful for a single-host judge call).
+        # keepalive_expiry=60s matches the workflow run window so the connection stays
+        # warm for the evaluate → potential-retry → re-evaluate cycle.
+        _judge_limits = httpx.Limits(
+            max_connections=10,
+            max_keepalive_connections=4,
+            keepalive_expiry=60.0,
+        )
         self._judge_llm = ChatOpenAI(
             model=judge_model,
             api_key=judge_api_key,
             base_url=judge_base_url,
             temperature=0.1,  # low temperature for critical judgment
-            http_client=httpx.Client(verify=False),
-            http_async_client=httpx.AsyncClient(verify=False),
+            http_client=httpx.Client(verify=False, limits=_judge_limits),
+            http_async_client=httpx.AsyncClient(verify=False, limits=_judge_limits),
         )
 
         self._judge_prompt = ChatPromptTemplate.from_messages([

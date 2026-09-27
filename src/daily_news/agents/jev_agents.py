@@ -43,7 +43,8 @@ import asyncio
 import logging
 
 from daily_news.config.settings import get_settings
-from daily_news.mcp.jev_client import JevClient, JevPrefilterResult
+from daily_news.mcp.client import jev_singleton
+from daily_news.mcp.jev_client import JevPrefilterResult
 from daily_news.models.persona import PersonaType
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ async def jev_prefilter_articles(state: dict) -> dict:
         return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
 
     try:
-        client = JevClient()
+        client = jev_singleton()
         sem = asyncio.Semaphore(5)
 
         async def _score(article: dict) -> JevPrefilterResult:
@@ -220,24 +221,21 @@ async def jev_find_angle(state: dict) -> dict:
         logger.info("[%s] jev_find_angle: JEV_BASE_URL not set — skipping", run_id)
         return {**state, "workflow_status": "JEV_ANGLE_FOUND"}
 
-    client = JevClient()
+    client = jev_singleton()
     updated_scores = dict(all_jev)
 
-    for summary_dict in summaries:
+    # Architecture fix: was a serial for-loop — each content_angle call ~800ms.
+    # With 3 articles: 3 × 800ms = 2.4s serial → now ~800ms parallel via gather.
+    async def _angle_one(summary_dict: dict) -> None:
         aid = summary_dict.get("article_id", "")
         try:
-            # Build a rich intelligence state string for Jev
             intel = all_jev.get(aid, {})
             intelligence_state = _build_intelligence_state(summary_dict, intel)
-
             angle = await client.content_angle(intelligence_state)
-
-            # Inject content_opportunity into the article's intelligence scores
             if aid in updated_scores:
                 updated_scores[aid]["content_opportunity"] = angle
             else:
                 updated_scores[aid] = {"content_opportunity": angle}
-
             logger.info(
                 "[%s] jev_find_angle: article=%s audience=%s missing_angle=%s",
                 run_id, aid,
@@ -246,6 +244,8 @@ async def jev_find_angle(state: dict) -> dict:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[%s] jev_find_angle failed for %s (%s) — skipping", run_id, aid, exc)
+
+    await asyncio.gather(*[_angle_one(s) for s in summaries])
 
     return {
         **state,
@@ -307,22 +307,31 @@ async def jev_route_personas(state: dict) -> dict:
     if not summaries:
         return {**state, "jev_active_personas": all_personas, "workflow_status": "JEV_ROUTED"}
 
-    client = JevClient()
-    active_personas: list[str] = []
+    client = jev_singleton()
+    # Architecture fix: was a serial for-loop over summaries (same 800ms-per-call
+    # serial penalty as find_angle).  Use gather — each summary is independent.
+    # We collect the union of all active personas across articles (typically 1 article
+    # after jev_prefilter, but gather is correct for the multi-article case too).
+    all_active: set[str] = set()
 
-    for summary_dict in summaries:
+    async def _route_one(summary_dict: dict) -> None:
         try:
             persona_types = await client.route_personas(summary_dict)
-            active_personas = [p.value for p in persona_types]
+            vals = [p.value for p in persona_types]
+            all_active.update(vals)
             logger.info(
                 "[%s] jev_route_personas: article=%s active_personas=%s",
-                run_id, summary_dict.get("article_id"), active_personas,
+                run_id, summary_dict.get("article_id"), vals,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "[%s] jev_route_personas failed (%s) — falling back to all personas", run_id, exc
             )
-            active_personas = all_personas
+            all_active.update(all_personas)
+
+    await asyncio.gather(*[_route_one(s) for s in summaries])
+
+    active_personas = list(all_active) if all_active else all_personas
 
     # Merge with prefilter hints (union — keep any persona flagged by either signal)
     if hints:

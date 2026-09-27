@@ -842,81 +842,107 @@ def _clean_summary_point(text: str) -> str:
 
 def build_outside_post(script: ComicScript) -> str:
     """
-    Build the ONLY text that accompanies the comic image on LinkedIn.
+    LinkedIn post caption that bridges the reader into the comic image.
 
-    The visual 6-panel comic hosts the full dialogue, while this caption acts
-    as the intellectual hook and natural continuation from Scene 6's unresolved question.
+    Architecture rule: the caption compresses and extends the six-scene debate —
+    it must NEVER introduce a new argument that does not appear in the image.
 
     Structure:
-      1. Scroll-stopping Hook (first 2-3 lines — NO metadata at top)
-      2. Context & Framing
-      3. Media Host Attribution: 🎙️ <HostName> — Media Host:
-      4. Dynamic Audience Dilemma & Sharp Choices (from Scene 6 synthesis)
-      5. Community CTA ("Where do you stand? Drop your choice + reason below 👇")
-      6. Source attribution (cleanly placed at footer)
-      7. Compliance / AI Disclaimer & Brand Footer
-      8. Dynamic SEO Hashtags (targeted 3-5 tags)
+      1. Hook  — one bold sentence naming what actually changed (not just the headline)
+      2. Framing — one sentence on why this matters to practitioners right now
+      3. "Our four voices see it differently:" + per-persona one-line teaser
+         (first complete sentence from each voice, stripped to ≤ 100 chars)
+      4. Host question — the unresolved question from Scene 6, with labelled choices
+      5. Source · disclaimer · brand footer · hashtags
     """
+    import re as _re_p
+
     lines: list[str] = []
 
-    # ── 1. Scroll-stopping Hook & Context Framing ──────────────────────────────
-    # First 2-3 lines before 'see more' are high-value real estate.
-    if script.news_brief:
-        brief_clean = script.news_brief.strip()
-        lines.append(brief_clean)
-        lines.append("")
+    # ── 1 & 2. Hook + framing (derived from news_brief, not repeated verbatim) ──
+    # Split brief into sentences; use first as hook, second as framing line.
+    brief = script.news_brief.strip()
+    brief_sentences = [s.strip() for s in _re_p.split(r"(?<=[.!?])\s+", brief) if s.strip()]
+    if len(brief_sentences) >= 2:
+        hook    = brief_sentences[0]
+        framing = brief_sentences[1]
+    elif brief_sentences:
+        hook    = brief_sentences[0]
+        framing = ""
+    else:
+        hook    = script.headline
+        framing = ""
 
-    # ── 2. Cast Perspective Teasers ───────────────────────────────────────────
-    # Bridge the reader from the feed directly into the comic strip
-    if script.cast and len(script.cast) >= 4:
-        lines.append("Our four voices don't agree on what that actually changes:")
-        lines.append("")
-
-        voice_lines = [script.voice1_line, script.voice2_line, script.voice3_line, script.voice4_line]
-        persona_dot = {
-            "business": "🟢",
-            "linkedin": "🟣",
-            "genz":     "🔴",
-            "policy":   "🟠",
-        }
-
-        for cast_member, vline in zip(script.cast[:4], voice_lines):
-            dot = persona_dot.get(cast_member.persona, "🔹")
-            ptake = _clean_summary_point(vline)
-            role_label = cast_member.role.split()[-1]
-            if ptake:
-                lines.append(f"{dot} {cast_member.name} ({role_label}): {ptake}")
-            else:
-                lines.append(f"{dot} {cast_member.name} ({role_label})")
-        lines.append("")
-
-    # ── 3. Media Host Question from Scene 6 ────────────────────────────────────
-    lines.append(f"🎙️ {script.host_name} — Media Host:")
+    lines.append(hook)
+    if framing:
+        lines += ["", framing]
     lines.append("")
-    lines.append(script.audience_question.strip())
 
-    # ── 4. Engagement CTA ─────────────────────────────────────────────────────
-    cta_lower = script.audience_question.lower()
-    if "where do you stand" not in cta_lower and "drop your" not in cta_lower:
-        lines += ["", "Where do you stand? Drop your choice + your reason below 👇"]
+    # ── 3. Four persona teasers ───────────────────────────────────────────────
+    # One sentence per voice — the opening claim, ≤ 100 chars, stripped of any
+    # reply-to prefix so it reads cleanly as a standalone take.
+    lines.append("Our four voices see it differently:")
+    lines.append("")
 
-    # ── 5. Clean Source Attribution (Bottom of Post) ──────────────────────────
-    source_items = []
-    if script.source_name:
-        source_items.append(f"Source: {script.source_name}")
-    if script.source_url:
-        source_items.append(f"🔗 {script.source_url}")
-    if source_items:
-        lines += ["", " · ".join(source_items)]
+    voice_lines = [
+        script.voice1_line,
+        script.voice2_line,
+        script.voice3_line,
+        script.voice4_line,
+    ]
+    persona_dot = {
+        "business": "🟢",
+        "linkedin": "🟣",
+        "genz":     "🔴",
+        "policy":   "🟠",
+    }
+    role_short = {
+        "AI Infrastructure Founder": "Founder",
+        "ML Platform Engineer":      "Engineer",
+        "AI Industry Analyst":       "AI Analyst",
+        "AI Policy Lead":            "AI Governance Lead",
+    }
 
-    # ── 6. Disclaimer + Brand Footer ──────────────────────────────────────────
+    for cast_member, vline in zip(script.cast[:4], voice_lines):
+        dot   = persona_dot.get(cast_member.persona, "🔹")
+        label = role_short.get(cast_member.role, cast_member.role.split()[-1])
+        # First complete sentence ≥ 15 chars, stripped to ≤ 100 chars
+        sents = [s.strip() for s in _re_p.split(r"(?<=[.!?])\s+", (vline or "")) if len(s.strip()) >= 15]
+        teaser = sents[0] if sents else (vline or "").strip()
+        if len(teaser) > 100:
+            teaser = teaser[:97].rsplit(" ", 1)[0] + "…"
+        if teaser:
+            lines.append(f"{dot} **{cast_member.name} — {label}:** {teaser}")
+
+    lines.append("")
+
+    # ── 4. Host question from Scene 6 with labelled engagement choices ─────────
+    lines.append(f"🎙️ **{script.host_name} — Media Host**")
+    lines.append("")
+
+    # Use audience_question as-is when it already has labelled choices;
+    # otherwise wrap with engagement choices derived from the central tension.
+    aq = script.audience_question.strip()
+    lines.append(aq)
+
+    # ── 5. Source ─────────────────────────────────────────────────────────────
+    lines.append("")
+    if script.source_name and script.source_url:
+        lines.append(f"📰 Source: {script.source_name}")
+        lines.append(f"🔗 {script.source_url}")
+    elif script.source_url:
+        lines.append(f"🔗 {script.source_url}")
+    elif script.source_name:
+        lines.append(f"📰 Source: {script.source_name}")
+
+    # ── 6. Disclaimer + brand footer ─────────────────────────────────────────
     lines += [
         "",
         "⚠️ Perspectives are AI-simulated for discussion — not professional advice.",
         "🤖 AIFeeders · Daily AI Intelligence · Powered by Jev",
     ]
 
-    # ── 7. Dynamic Hashtags ───────────────────────────────────────────────────
+    # ── 7. Dynamic hashtags ───────────────────────────────────────────────────
     if script.hashtags:
         lines += ["", " ".join(h if h.startswith("#") else f"#{h}" for h in script.hashtags)]
     else:
@@ -1134,17 +1160,35 @@ async def build_comic_script_from_summary(
     opening = _story_field("media_host_opening")
     hook    = _story_field("hook") or summary.why_it_matters
     why     = summary.why_it_matters or ""
+    what_changed   = _story_field("what_changed") or ""
+    second_order_b = _story_field("second_order_effect") or ""
     tension = _story_field("future_question") or _story_field("media_host_audience_cta") or ""
 
-    # ── Scene 1 brief: WHAT HAPPENED + WHY IT MATTERS only (clean hook sentence) ──
+    # ── Scene 1 brief: 4 lines — what happened · context · debate angle · host seed ──
+    # Line 1: what actually changed (hook sentence from story or headline)
+    # Line 2: why it matters to practitioners right now
+    # Line 3: the deeper tension or second-order effect
+    # Line 4: the question this debate is going to answer
+    brief_parts: list[str] = []
     if opening:
-        news_brief = _first_sentences(opening, n=2, limit=180)
+        # opening may already contain 2-4 rich sentences
+        opening_sents = [s.strip() for s in __import__("re").split(r"(?<=[.!?])\s+", opening.strip()) if len(s.strip()) >= 15]
+        brief_parts = opening_sents[:4]
     else:
-        news_brief = summary.headline
-        if why and why.lower() not in news_brief.lower():
-            news_brief += f". {why}"
-    news_brief = news_brief.strip()
-    # central_tension is shown in the hand-off pill — never repeat it inside the bubble
+        if summary.headline:
+            brief_parts.append(summary.headline.strip().rstrip(".") + ".")
+        if why and why.lower() not in " ".join(brief_parts).lower():
+            brief_parts.append(_first_sentences(why, n=1, limit=120))
+        if what_changed and what_changed.lower() not in " ".join(brief_parts).lower():
+            brief_parts.append(_first_sentences(what_changed, n=1, limit=110))
+        if second_order_b and second_order_b.lower() not in " ".join(brief_parts).lower():
+            brief_parts.append(_first_sentences(second_order_b, n=1, limit=100))
+
+    # Ensure we have at least 2 and at most 4 lines; clip each for readability
+    brief_parts = [_clip_at_sentence_local(p, 150) for p in brief_parts if p.strip()][:4]
+    news_brief = " ".join(brief_parts).strip()
+
+    # central_tension drives the hand-off pill — kept short
     central_tension = _first_sentences(tension, n=1, limit=110) if tension else ""
 
     host_name   = _pick_host_name(aid)
@@ -1166,14 +1210,53 @@ async def build_comic_script_from_summary(
         "policy":   personas.policy,
     }
 
-    def _voice(key: str) -> str:
+    def _voice(key: str, next_name: str = "") -> str:
+        """
+        3 complete conversational sentences for the comic panel speech bubble.
+
+        Sentence 1 — core claim: specific and article-grounded. Starts cold — no opener.
+        Sentence 2 — builds on it: the practical consequence, tension, or second-order effect.
+        Sentence 3 — hands off: a direct question or challenge to the next speaker by name
+                      (uses next_question from PersonaOutput if available, otherwise
+                      extracted from the last sentence of the perspective).
+
+        All sentences are complete (end with . ! ?).
+        Total ≤ 220 chars — 3 sentences fit comfortably at 16–18px in the bubble.
+        """
+        import re as _re2
         po = persona_map.get(key)
         if not po or not po.perspective:
             return ""
-        # Strip outer quotes & clean whitespace
         text = po.perspective.strip().strip('"').strip()
-        # Full perspective is used so entire grounded thought is present
-        return _clip_at_sentence_local(text, 240)
+        if not text:
+            return ""
+
+        raw = [s.strip() for s in _re2.split(r"(?<=[.!?])\s+", text) if len(s.strip()) >= 15]
+
+        # Sentence 1 & 2: first two substantial sentences from perspective
+        body: list[str] = []
+        for s in raw:
+            body.append(s)
+            if len(body) == 2:
+                break
+        if not body:
+            body = [raw[0]] if raw else [text[:100]]
+
+        # Sentence 3: hand-off question to next speaker
+        # Prefer the explicit next_question field; fall back to last sentence of perspective.
+        nq = (getattr(po, "next_question", "") or "").strip()
+        if not nq:
+            # Extract the last question in the perspective text, or the last sentence
+            questions = [s for s in raw if s.endswith("?")]
+            nq = questions[-1] if questions else (raw[-1] if raw else "")
+        # Personalise with next speaker's name if we have it and the question doesn't already
+        if next_name and next_name not in nq:
+            # Prepend name as direct address only when it won't create a banned opener
+            nq = f"{next_name}, {nq[0].lower()}{nq[1:]}" if nq else f"{next_name}?"
+
+        kept = body + ([nq] if nq and nq not in body else [])
+        result = " ".join(kept[:3])
+        return _clip_at_sentence_local(result, 220)
 
     def _next_q(key: str) -> str:
         """Return the explicit next_question from PersonaOutput, or empty string."""
@@ -1182,7 +1265,12 @@ async def build_comic_script_from_summary(
             return po.next_question.strip()
         return ""
 
-    voice1, voice2, voice3, voice4 = (_voice(k) for k in voice_order)
+    # Pass each persona's next speaker name so Sentence 3 directly addresses them by name
+    # Order: business → linkedin → genz → policy → (host closes)
+    voice1 = _voice("business", next_name=cast[1].name)   # → Engineer
+    voice2 = _voice("linkedin", next_name=cast[2].name)   # → Analyst
+    voice3 = _voice("genz",     next_name=cast[3].name)   # → Policy Lead
+    voice4 = _voice("policy",   next_name="")              # → Host closes; no hand-off needed
 
     cta = _story_field("media_host_audience_cta") or _story_field("future_question") or ""
 
@@ -1201,11 +1289,22 @@ async def build_comic_script_from_summary(
         )
     )
 
-    audience_question = _clip_at_sentence_local(cta, 300) if cta else (
-        f"If AI dramatically changes {summary.headline[:50]}…\n\n"
-        f"A — Development speed\nB — Security and compliance\n"
-        f"C — Governance and oversight\nD — Operational cost\nE — Something else entirely"
-    )
+    # Audience question: use story CTA when available, otherwise build a labelled
+    # choice block from the central tension. Labelled choices (emoji + letter) lower
+    # the barrier to reply and signal which dimension each choice represents.
+    if cta:
+        audience_question = _clip_at_sentence_local(cta, 300)
+    else:
+        subject = (central_tension or summary.headline)[:60].rstrip("?. ")
+        audience_question = (
+            f"If {subject} becomes the norm, what is the biggest enterprise challenge?\n\n"
+            f"⚡ A — Latency & performance\n"
+            f"💰 B — Cost & token economics\n"
+            f"🔍 C — Observability & debugging\n"
+            f"🛡️ D — Governance & compliance\n"
+            f"🧩 E — Something else entirely\n\n"
+            f"Drop your choice + one reason. 👇"
+        )
 
     # ── Dynamic hashtags from the existing engine — no hardcoded list ──────────
     intel = getattr(summary, "intelligence", None)

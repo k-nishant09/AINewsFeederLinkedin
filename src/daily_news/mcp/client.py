@@ -115,3 +115,37 @@ def mcp_factory() -> MCPClientFactory:
     if _instance is None:
         _instance = MCPClientFactory()
     return _instance
+
+
+# ── JevClient singleton ───────────────────────────────────────────────────────
+# Architecture fix: JevClient was instantiated fresh inside every graph node
+# (jev_prefilter, jev_find_angle, jev_route_personas, EvaluationAgent.__init__)
+# causing 4× cold TCP+TLS handshakes to the Jev gateway per run (~300-800ms each).
+# Sharing one persistent client reuses the connection pool across all nodes.
+# The factory pattern mirrors mcp_factory() — thread-safe for asyncio single-thread.
+
+_jev_instance: "JevClient | None" = None  # type: ignore[name-defined]
+
+
+def jev_singleton() -> "JevClient":  # type: ignore[name-defined]
+    """
+    Process-scoped JevClient singleton.
+    Returns a new instance when Jev is not configured (jev_base_url is empty) —
+    callers must still honour JEV_ENABLED before making real calls.
+    """
+    global _jev_instance
+    if _jev_instance is None:
+        from daily_news.mcp.jev_client import JevClient  # avoid circular import
+        _jev_instance = JevClient()
+    return _jev_instance
+
+
+async def close_jev_singleton() -> None:
+    """Drain the shared Jev connection pool. Call at process shutdown."""
+    global _jev_instance
+    if _jev_instance is not None:
+        try:
+            await _jev_instance.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+        _jev_instance = None

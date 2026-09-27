@@ -5,8 +5,7 @@ import asyncio
 import logging
 import sys
 
-from daily_news.mcp.client import mcp_factory
-from daily_news.mcp.jev_client import JevClient
+from daily_news.mcp.client import close_jev_singleton, mcp_factory
 from daily_news.observability.tracing import flush_langfuse, setup_tracing
 from daily_news.workflows.daily_news_graph import daily_news_graph, make_initial_state
 
@@ -33,13 +32,10 @@ async def run():
         # Drain all persistent HTTP connection pools — prevents ResourceWarning
         # and ensures in-flight keep-alive sockets are closed cleanly on pod shutdown.
         await mcp_factory().aclose()
-        # Close the Jev client pool if Jev was enabled this run
-        from daily_news.config.settings import get_settings
-        if get_settings().jev_base_url:
-            try:
-                await JevClient().aclose()
-            except Exception:  # noqa: BLE001
-                pass  # not critical — OS will reclaim sockets at process exit anyway
+        # Architecture fix: close the SHARED Jev singleton pool (not a fresh JevClient()).
+        # The old code called JevClient().aclose() which closed a brand-new unused instance
+        # and left the actual shared pool's sockets open until GC.
+        await close_jev_singleton()
 
     errors = final.get("errors", [])
     published = len(final.get("linkedin_results", []))

@@ -965,12 +965,20 @@ class PublisherAgent:
             _repaired = personas.get("_repaired_post")
         main_text = _repaired or self._compose_main_post(summary, personas, jev_scores=jev_scores)
 
-        # ── Grammar correction pass — best-effort, never blocks publish ───────
-        main_text = await self._grammar.correct(
-            main_text,
-            run_id=run_id,
-            article_id=summary.article_id,
-        )
+        # ── Grammar correction pass — SKIPPED on the comic path ───────────────
+        # Architecture fix: the comic path replaces main_text with comic_post_text
+        # (built by build_outside_post()) before publishing.  Correcting main_text
+        # here wastes an entire Qwen LLM call (~3-8s) on text that is NEVER
+        # published — it is discarded at line `publish_text = comic_post_text`.
+        # Grammar correction is still useful on the non-comic fallback path, but
+        # since _COMIC_ENABLED is always True we skip it unconditionally here.
+        # If a non-comic path is ever re-enabled, restore this block there.
+        if not _COMIC_ENABLED:
+            main_text = await self._grammar.correct(
+                main_text,
+                run_id=run_id,
+                article_id=summary.article_id,
+            )
 
         # ── Output Guardrail validation ───────────────────────────────────────
         out_guard = OutputGuardrail.inspect_output(main_text)

@@ -523,10 +523,15 @@ NewsWorkflowState.summaries (list of NewsSummary)
            ▼  (after PASS evaluation)
    Comic Generator & Publisher Integration
    ────────────────────────────────────────
-   The full persona debate is rendered INSIDE the 6-Panel Comic Strip Image.
-   The LinkedIn post text body contains ONLY the minimal outside text:
-   Source + URL + Host audience question + Disclaimer + Dynamic hashtags.
-   (Persona perspectives live exclusively inside the visual asset).
+   The complete multi-turn debate is rendered INSIDE the 6-Panel Comic Strip Image.
+   The LinkedIn post caption provides Scene 6 caption continuity:
+     1. Hook & framing (what changed + practitioner relevance)
+     2. "Our four voices see it differently:" + 4-persona colored bullet teaser
+        (🟢 Founder, 🟣 Engineer, 🔴 AI Analyst, 🟠 Policy Lead)
+     3. Dynamic Host Question: 🎙️ <HostName> — Media Host (labelled A/B/C/D/E choices)
+     4. Source attribution + Link + Disclaimer + Dynamic hashtags
+   
+   If image rendering or upload fails, the publication is skipped (no text-only fallback).
 
    Event-type determines lead persona order in the comic strip:
      product_launch → Engineer leads
@@ -700,14 +705,26 @@ _svg_to_png()
   4. .svg file            ← final fallback (LinkedIn accepts SVG)
 
 Outside-post text (build_outside_post):
+  <Hook sentence: what actually changed>
+  
+  <Framing: why it matters to practitioners right now>
+  
+  Our four voices see it differently:
+  🟢 **<FounderName> — Founder:** <teaser ≤ 100 chars>
+  🟣 **<EngineerName> — Engineer:** <teaser ≤ 100 chars>
+  🔴 **<AnalystName> — AI Analyst:** <teaser ≤ 100 chars>
+  🟠 **<PolicyName> — AI Governance Lead:** <teaser ≤ 100 chars>
+  
+  🎙️ **<HostName> — Media Host**
+  <audience_question with choices A/B/C/D/E>
+  
   📰 Source: <name>
   🔗 <url>
-  🎙️ <HostName> — To the Audience:
-  <audience_question>
-  Where do you stand? Drop your take below 👇
-  ⚠️ Perspectives are AI-simulated — not professional advice.
+  
+  ⚠️ Perspectives are AI-simulated for discussion — not professional advice.
   🤖 AIFeeders · Daily AI Intelligence · Powered by Jev
-  #AI #GenerativeAI …
+  
+  #EnterpriseAI #MLOps #AIGovernance
 ```
 
 **Why a comic?**
