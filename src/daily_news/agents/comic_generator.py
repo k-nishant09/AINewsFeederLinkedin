@@ -842,90 +842,36 @@ def _clean_summary_point(text: str) -> str:
 
 def build_outside_post(script: ComicScript) -> str:
     """
-    LinkedIn post caption that bridges the reader into the comic image.
+    LinkedIn post caption — news summary + host question + source + footer + hashtags.
 
-    Architecture rule: the caption compresses and extends the six-scene debate —
-    it must NEVER introduce a new argument that does not appear in the image.
-
-    Structure:
-      1. Hook  — one bold sentence naming what actually changed (not just the headline)
-      2. Framing — one sentence on why this matters to practitioners right now
-      3. "Our four voices see it differently:" + per-persona one-line teaser
-         (first complete sentence from each voice, stripped to ≤ 100 chars)
-      4. Host question — the unresolved question from Scene 6, with labelled choices
-      5. Source · disclaimer · brand footer · hashtags
+    Architecture rule:
+      • NO persona teasers in the post body — the full persona debate lives INSIDE
+        the comic image. The post drives people to look at the image, not replace it.
+      • Structure:
+          1. News summary — what happened and why it matters (2 sentences max)
+          2. Host question — the unresolved question from Scene 6, with labelled choices
+          3. Source · disclaimer · brand footer · hashtags
     """
     import re as _re_p
 
     lines: list[str] = []
 
-    # ── 1 & 2. Hook + framing (derived from news_brief, not repeated verbatim) ──
-    # Split brief into sentences; use first as hook, second as framing line.
+    # ── 1. News summary — what happened + why it matters ─────────────────────
+    # Take the first 2 sentences from news_brief so the post opens with substance,
+    # not just a headline repeat.
     brief = script.news_brief.strip()
     brief_sentences = [s.strip() for s in _re_p.split(r"(?<=[.!?])\s+", brief) if s.strip()]
-    if len(brief_sentences) >= 2:
-        hook    = brief_sentences[0]
-        framing = brief_sentences[1]
-    elif brief_sentences:
-        hook    = brief_sentences[0]
-        framing = ""
-    else:
-        hook    = script.headline
-        framing = ""
-
-    lines.append(hook)
-    if framing:
-        lines += ["", framing]
+    summary_lines = brief_sentences[:2]
+    for sl in summary_lines:
+        lines.append(sl)
     lines.append("")
 
-    # ── 3. Four persona teasers ───────────────────────────────────────────────
-    # One sentence per voice — the opening claim, ≤ 100 chars, stripped of any
-    # reply-to prefix so it reads cleanly as a standalone take.
-    lines.append("Our four voices see it differently:")
-    lines.append("")
-
-    voice_lines = [
-        script.voice1_line,
-        script.voice2_line,
-        script.voice3_line,
-        script.voice4_line,
-    ]
-    persona_dot = {
-        "business": "🟢",
-        "linkedin": "🟣",
-        "genz":     "🔴",
-        "policy":   "🟠",
-    }
-    role_short = {
-        "AI Infrastructure Founder": "Founder",
-        "ML Platform Engineer":      "Engineer",
-        "AI Industry Analyst":       "AI Analyst",
-        "AI Policy Lead":            "AI Governance Lead",
-    }
-
-    for cast_member, vline in zip(script.cast[:4], voice_lines):
-        dot   = persona_dot.get(cast_member.persona, "🔹")
-        label = role_short.get(cast_member.role, cast_member.role.split()[-1])
-        # First complete sentence ≥ 15 chars, stripped to ≤ 100 chars
-        sents = [s.strip() for s in _re_p.split(r"(?<=[.!?])\s+", (vline or "")) if len(s.strip()) >= 15]
-        teaser = sents[0] if sents else (vline or "").strip()
-        if len(teaser) > 100:
-            teaser = teaser[:97].rsplit(" ", 1)[0] + "…"
-        if teaser:
-            lines.append(f"{dot} **{cast_member.name} — {label}:** {teaser}")
-
-    lines.append("")
-
-    # ── 4. Host question from Scene 6 with labelled engagement choices ─────────
+    # ── 2. Host question with labelled engagement choices ─────────────────────
     lines.append(f"🎙️ **{script.host_name} — Media Host**")
     lines.append("")
+    lines.append(script.audience_question.strip())
 
-    # Use audience_question as-is when it already has labelled choices;
-    # otherwise wrap with engagement choices derived from the central tension.
-    aq = script.audience_question.strip()
-    lines.append(aq)
-
-    # ── 5. Source ─────────────────────────────────────────────────────────────
+    # ── 3. Source ─────────────────────────────────────────────────────────────
     lines.append("")
     if script.source_name and script.source_url:
         lines.append(f"📰 Source: {script.source_name}")
@@ -935,14 +881,14 @@ def build_outside_post(script: ComicScript) -> str:
     elif script.source_name:
         lines.append(f"📰 Source: {script.source_name}")
 
-    # ── 6. Disclaimer + brand footer ─────────────────────────────────────────
+    # ── 4. Disclaimer + brand footer ─────────────────────────────────────────
     lines += [
         "",
         "⚠️ Perspectives are AI-simulated for discussion — not professional advice.",
         "🤖 AIFeeders · Daily AI Intelligence · Powered by Jev",
     ]
 
-    # ── 7. Dynamic hashtags ───────────────────────────────────────────────────
+    # ── 5. Dynamic hashtags ───────────────────────────────────────────────────
     if script.hashtags:
         lines += ["", " ".join(h if h.startswith("#") else f"#{h}" for h in script.hashtags)]
     else:
@@ -1212,16 +1158,17 @@ async def build_comic_script_from_summary(
 
     def _voice(key: str, next_name: str = "") -> str:
         """
-        3 complete conversational sentences for the comic panel speech bubble.
+        Rich conversational bubble — 4 to 5 complete sentences so the reader
+        fully understands the persona's position before the hand-off.
 
-        Sentence 1 — core claim: specific and article-grounded. Starts cold — no opener.
-        Sentence 2 — builds on it: the practical consequence, tension, or second-order effect.
-        Sentence 3 — hands off: a direct question or challenge to the next speaker by name
-                      (uses next_question from PersonaOutput if available, otherwise
-                      extracted from the last sentence of the perspective).
+        Sentence 1 — core claim: specific, article-grounded, starts cold (no opener).
+        Sentence 2 — consequence: practical impact or production reality.
+        Sentence 3 — tension / second-order effect: what this actually means deeper down.
+        Sentence 4 — stakes: who wins, who loses, or what changes in practice.
+        Sentence 5 — hand-off: direct question to next speaker by name.
 
-        All sentences are complete (end with . ! ?).
-        Total ≤ 220 chars — 3 sentences fit comfortably at 16–18px in the bubble.
+        Font auto-shrinks via _fit_text_to_box() so longer text still fits the bubble.
+        Hard cap raised to 480 chars — enough for 4–5 sentences at min_font=14.
         """
         import re as _re2
         po = persona_map.get(key)
@@ -1231,32 +1178,34 @@ async def build_comic_script_from_summary(
         if not text:
             return ""
 
-        raw = [s.strip() for s in _re2.split(r"(?<=[.!?])\s+", text) if len(s.strip()) >= 15]
+        raw = [s.strip() for s in _re2.split(r"(?<=[.!?])\s+", text) if len(s.strip()) >= 12]
 
-        # Sentence 1 & 2: first two substantial sentences from perspective
+        # Take up to 4 body sentences — gives the reader the full argument
         body: list[str] = []
         for s in raw:
             body.append(s)
-            if len(body) == 2:
+            if len(body) == 4:
                 break
         if not body:
-            body = [raw[0]] if raw else [text[:100]]
+            body = [raw[0]] if raw else [text[:150]]
 
-        # Sentence 3: hand-off question to next speaker
-        # Prefer the explicit next_question field; fall back to last sentence of perspective.
+        # Final sentence: explicit hand-off question to the next speaker by name.
+        # Prefer next_question field; fall back to the last question in the perspective,
+        # or the last sentence if no question exists.
         nq = (getattr(po, "next_question", "") or "").strip()
         if not nq:
-            # Extract the last question in the perspective text, or the last sentence
             questions = [s for s in raw if s.endswith("?")]
             nq = questions[-1] if questions else (raw[-1] if raw else "")
-        # Personalise with next speaker's name if we have it and the question doesn't already
+        # Remove nq from body if it's already there to avoid duplication
+        body = [s for s in body if s != nq][:4]
+        # Personalise with next speaker's name when not already present
         if next_name and next_name not in nq:
-            # Prepend name as direct address only when it won't create a banned opener
             nq = f"{next_name}, {nq[0].lower()}{nq[1:]}" if nq else f"{next_name}?"
 
-        kept = body + ([nq] if nq and nq not in body else [])
-        result = " ".join(kept[:3])
-        return _clip_at_sentence_local(result, 220)
+        kept = body + ([nq] if nq else [])
+        result = " ".join(kept[:5])
+        # Raised cap: 480 chars fits 4-5 sentences; _fit_text_to_box handles rendering
+        return _clip_at_sentence_local(result, 480)
 
     def _next_q(key: str) -> str:
         """Return the explicit next_question from PersonaOutput, or empty string."""
@@ -1280,12 +1229,16 @@ async def build_comic_script_from_summary(
     second_order = _story_field("second_order_effect")
     future_q     = _story_field("future_question")
     synthesis_raw = media_synth or " ".join(filter(None, [perspective, second_order, future_q])).strip()
+    # Scene 6 synthesis: keep up to 3 sentences so the host wrap-up reads as a
+    # proper conclusion, not just a one-liner.  Cap raised to 420 chars.
     host_synthesis = (
-        _clip_at_sentence_local(synthesis_raw, 240)
+        _clip_at_sentence_local(synthesis_raw, 420)
         if synthesis_raw
         else (
-            f"Four views, one question: "
-            f"{central_tension or 'can organisations move as fast as AI enables?'}"
+            f"Four perspectives, one unresolved question: "
+            f"{central_tension or 'can organisations move as fast as AI enables?'} "
+            f"Ravi sees opportunity, Tom sees operational friction, Taylor sees regulatory exposure, "
+            f"and Laura sees a governance gap — all triggered by the same announcement."
         )
     )
 
