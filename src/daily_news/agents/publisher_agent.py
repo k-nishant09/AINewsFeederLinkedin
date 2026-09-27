@@ -1026,9 +1026,17 @@ class PublisherAgent:
                 comic_path = str(comic_file)
                 logger.info("[%s] comic generated: %s", run_id, comic_path)
 
+                # Read PNG bytes and base64-encode for cross-pod transfer.
+                # The linkedin-mcp server runs in a separate pod — passing a
+                # filesystem path would be a file-not-found on arrival.
+                import base64
+                from pathlib import Path as _Path
+                img_b64 = base64.b64encode(_Path(comic_path).read_bytes()).decode()
+                logger.info("[%s] comic encoded %d b64 chars", run_id, len(img_b64))
+
                 # Upload PNG to LinkedIn — returns asset_urn on success
                 upload_result = await self._client.upload_image(
-                    image_path=comic_path,
+                    image_data=img_b64,
                     description=f"AIFeeders comic: {summary.headline[:80]}",
                 )
                 asset_urn = upload_result.get("asset_urn", "")

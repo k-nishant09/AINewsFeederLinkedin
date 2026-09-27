@@ -128,24 +128,20 @@ class LinkedInMCPClient:
 
     async def upload_image(
         self,
-        image_path: str,
+        image_data: str,
         description: str = "AIFeeders comic strip",
     ) -> dict[str, Any]:
         """
-        Upload an image file to LinkedIn and return its asset URN.
+        Upload a base64-encoded image to LinkedIn and return its asset URN.
 
-        image_path  — local filesystem path to the PNG (or SVG fallback).
+        image_data  — base64-encoded PNG bytes (cross-pod safe, no filesystem path).
         Returns {"asset_urn": "urn:li:digitalmediaAsset:...", "status": str}.
         On error returns {"asset_urn": "", "status": "error", ...}.
-
-        The LinkedIn MCP server reads the file from disk and calls:
-          POST /v2/assets?action=registerUpload  (register)
-          PUT  <upload_url>                       (binary upload)
         """
         try:
             return await mcp_factory().linkedin.call(
                 "linkedin_upload_image",
-                {"image_path": image_path, "description": description},
+                {"image_data": image_data, "description": description},
             )
         except Exception as exc:
             return {"asset_urn": "", "status": "error", "error": str(exc)}

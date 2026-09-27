@@ -1081,36 +1081,43 @@ async def linkedin_get_audit() -> dict:
 
 @mcp.tool()
 async def linkedin_upload_image(
-    image_path: str,
+    image_data: str,
     description: str = "AIFeeders comic strip",
 ) -> dict:
     """
-    Upload an image to LinkedIn using the Assets API (registerUpload flow).
+    Upload a base64-encoded image to LinkedIn using the Assets API (registerUpload flow).
+
+    IMPORTANT: accepts base64-encoded image bytes, NOT a filesystem path.
+    This is cross-pod safe — the caller encodes the PNG in memory and sends it
+    over the MCP /call HTTP request body. No shared filesystem required.
 
     Steps:
       1. POST /v2/assets?action=registerUpload  → get upload_url + asset URN
-      2. PUT  <upload_url>                       → binary upload of the image file
+      2. PUT  <upload_url>                       → binary upload of decoded bytes
       3. Return {"asset_urn": "urn:li:digitalmediaAsset:...", "status": "ok"}
 
-    image_path  — absolute filesystem path to a PNG or JPEG file.
+    image_data  — base64-encoded PNG/JPEG bytes.
     On any failure returns {"asset_urn": "", "status": "error", "error": str}.
 
     Ref: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api
     """
-    import mimetypes
-    from pathlib import Path
+    import base64
 
     author_urn = await _get_profile_urn()
 
     if not _is_token_present():
-        mock_urn = "urn:li:digitalmediaAsset:mock-" + hashlib.md5(image_path.encode()).hexdigest()[:12]
-        logger.info("[MOCK] LinkedIn image upload: %s → %s", image_path, mock_urn)
+        mock_urn = "urn:li:digitalmediaAsset:mock-" + hashlib.md5(image_data[:64].encode()).hexdigest()[:12]
+        logger.info("[MOCK] LinkedIn image upload (base64, %d chars) → %s", len(image_data), mock_urn)
         return {"asset_urn": mock_urn, "status": "mock"}
 
-    img_path = Path(image_path)
-    if not img_path.exists():
-        logger.error("linkedin_upload_image: file not found: %s", image_path)
-        return {"asset_urn": "", "status": "error", "error": f"File not found: {image_path}"}
+    # Decode base64 → raw bytes
+    try:
+        image_bytes = base64.b64decode(image_data)
+    except Exception as exc:
+        logger.error("linkedin_upload_image: base64 decode failed: %s", exc)
+        return {"asset_urn": "", "status": "error", "error": f"base64 decode failed: {exc}"}
+
+    logger.info("linkedin_upload_image: decoded %d bytes from %d b64 chars", len(image_bytes), len(image_data))
 
     # Step 1 — register upload, get upload URL + asset URN
     register_url = f"{LINKEDIN_V2_BASE}/assets?action=registerUpload"
@@ -1149,51 +1156,41 @@ async def linkedin_upload_image(
         asset_urn  = reg_data.get("value", {}).get("asset", "")
 
         if not upload_url or not asset_urn:
-            logger.error(
-                "linkedin_upload_image: registerUpload response missing upload_url or asset_urn: %s",
-                reg_data,
-            )
+            logger.error("linkedin_upload_image: registerUpload missing upload_url/asset_urn: %s", reg_data)
             return {"asset_urn": "", "status": "error", "error": "registerUpload missing upload_url/asset_urn"}
 
         logger.info("linkedin_upload_image: registered asset_urn=%s upload_url=%s…", asset_urn, upload_url[:60])
 
     except httpx.HTTPStatusError as exc:
-        err = _classify_http_error(
-            exc, actor_urn=author_urn, endpoint=register_url,
-            attempt=1, tool="linkedin_upload_image",
-        )
+        err = _classify_http_error(exc, actor_urn=author_urn, endpoint=register_url,
+                                   attempt=1, tool="linkedin_upload_image")
         return {"asset_urn": "", **err}
     except (httpx.RequestError, OSError) as exc:
         logger.error("linkedin_upload_image register network error: %s", exc)
         return {"asset_urn": "", "status": "error", "error": str(exc)}
 
-    # Step 2 — binary PUT upload
-    mime_type = mimetypes.guess_type(str(img_path))[0] or "image/png"
-    image_bytes = img_path.read_bytes()
+    # Step 2 — binary PUT upload of raw bytes
     upload_headers = {
-        "Authorization":  f"Bearer {_get_access_token()}",
-        "Content-Type":   mime_type,
+        "Authorization": f"Bearer {_get_access_token()}",
+        "Content-Type":  "image/png",
     }
 
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             put_resp = await client.put(upload_url, headers=upload_headers, content=image_bytes)
+        # LinkedIn returns 201 on success; some variants return 200
         if put_resp.status_code not in (200, 201):
             put_resp.raise_for_status()
 
-        logger.info(
-            "linkedin_upload_image: PUT succeeded HTTP %s asset_urn=%s size=%d bytes",
-            put_resp.status_code, asset_urn, len(image_bytes),
-        )
+        logger.info("linkedin_upload_image: PUT OK HTTP %s asset_urn=%s %d bytes",
+                    put_resp.status_code, asset_urn, len(image_bytes))
         _audit(tool="linkedin_upload_image", actor_urn=author_urn, post_urn=asset_urn,
                status="ok", http_status=put_resp.status_code, attempt=1)
         return {"asset_urn": asset_urn, "status": "ok"}
 
     except httpx.HTTPStatusError as exc:
-        err = _classify_http_error(
-            exc, actor_urn=author_urn, endpoint=upload_url[:80],
-            attempt=1, tool="linkedin_upload_image",
-        )
+        err = _classify_http_error(exc, actor_urn=author_urn, endpoint=upload_url[:80],
+                                   attempt=1, tool="linkedin_upload_image")
         return {"asset_urn": "", **err}
     except (httpx.RequestError, OSError) as exc:
         logger.error("linkedin_upload_image PUT network error: %s", exc)
@@ -1339,62 +1336,39 @@ async def linkedin_create_post_with_image(
 @mcp.tool()
 async def linkedin_get_post_analytics(post_urn: str) -> dict:
     """
-    Fetch engagement metrics for a published post.
-    GET /rest/organizationalEntityShareStatistics or /rest/memberNetworkFeed
-    Uses the Share Statistics API.
+    Fetch engagement metrics for a published post via the UGC Posts socialMetadata.
+    Returns zeroed metrics safely on any error — never blocks publishing.
 
-    Returns {"impressions": int, "reactions": int, "comments": int,
-             "reposts": int, "engagement_rate": float, "status": str}.
-    Returns zeroed metrics on any error (non-blocking).
-
-    Ref: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/share-statistics-api
+    Uses GET /v2/socialMetadata?q=key&key=<encoded_urn>
+    Ref: https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/social-metadata-api
     """
     if not _is_token_present() or not post_urn:
         return {"post_urn": post_urn, "impressions": 0, "reactions": 0,
                 "comments": 0, "reposts": 0, "engagement_rate": 0.0, "status": "mock"}
 
     from urllib.parse import quote as _quote
-    author_urn = await _get_profile_urn()
     encoded_urn = _quote(post_urn, safe="")
-
-    # Member share statistics endpoint
-    stats_url = (
-        f"{LINKEDIN_REST_BASE}/memberNetworkFeed?"
-        f"q=memberNetworkFeedByMember&memberUrn={_quote(author_urn, safe='')}"
-        f"&count=10"
-    )
+    stats_url   = f"{LINKEDIN_V2_BASE}/socialMetadata?q=key&key={encoded_urn}"
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.get(stats_url, headers=_rest_headers())
+        headers = {
+            "Authorization":             f"Bearer {_get_access_token()}",
+            "X-Restli-Protocol-Version": "2.0.0",
+        }
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(stats_url, headers=headers)
         if resp.status_code not in (200, 201):
             resp.raise_for_status()
 
-        data     = resp.json()
-        elements = data.get("elements", [])
-        # Find the matching post
-        for el in elements:
-            activity = el.get("activity", el)
-            if post_urn in str(activity.get("entityUrn", "")) or post_urn in str(activity.get("id", "")):
-                stats = activity.get("socialDetail", {}).get("totalSocialActivityCounts", {})
-                impressions = stats.get("numImpressions", 0)
-                reactions   = stats.get("numLikes", 0)
-                comments    = stats.get("numComments", 0)
-                reposts     = stats.get("numReposts", 0)
-                total_eng   = reactions + comments + reposts
-                eng_rate    = round(total_eng / max(impressions, 1) * 100, 2)
-                return {
-                    "post_urn":        post_urn,
-                    "impressions":     impressions,
-                    "reactions":       reactions,
-                    "comments":        comments,
-                    "reposts":         reposts,
-                    "engagement_rate": eng_rate,
-                    "status":          "ok",
-                }
-        # Post not found in feed — return zeros
-        return {"post_urn": post_urn, "impressions": 0, "reactions": 0,
-                "comments": 0, "reposts": 0, "engagement_rate": 0.0, "status": "ok"}
+        data        = resp.json()
+        impressions = data.get("numImpressions", 0)
+        reactions   = data.get("numLikes", 0)
+        comments    = data.get("numComments", 0)
+        reposts     = data.get("numReposts", data.get("numShares", 0))
+        total_eng   = reactions + comments + reposts
+        eng_rate    = round(total_eng / max(impressions, 1) * 100, 2)
+        return {"post_urn": post_urn, "impressions": impressions, "reactions": reactions,
+                "comments": comments, "reposts": reposts, "engagement_rate": eng_rate, "status": "ok"}
 
     except Exception as exc:
         logger.warning("linkedin_get_post_analytics failed for %s: %s", post_urn, exc)
