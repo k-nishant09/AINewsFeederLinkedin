@@ -13,19 +13,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# ── System deps for cairosvg (SVG → PNG for comic strip rendering) ────────────
-# Try to install cairo libs; on build nodes where the package name differs
-# (libcairo2t64 on newer Debian) we fall back gracefully — cairosvg will still
-# install from pip and the comic generator falls back to .svg if cairo is absent.
-RUN apt-get update && \
-    ( apt-get install -y --no-install-recommends \
-        libcairo2 libpango-1.0-0 libpangocairo-1.0-0 \
-        libgdk-pixbuf-2.0-0 libffi-dev pkg-config shared-mime-info \
-      || apt-get install -y --no-install-recommends \
-        libcairo2t64 libpango-1.0-0 libpangocairo-1.0-0 \
-        libgdk-pixbuf-2.0-0 libffi-dev pkg-config shared-mime-info \
-    ) && rm -rf /var/lib/apt/lists/*
-
 # ── Python deps ──────────────────────────────────────────────────────────────
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
@@ -42,7 +29,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         opentelemetry-exporter-otlp-proto-http \
         opentelemetry-instrumentation-fastapi prometheus-client \
         langfuse python-dotenv structlog anyio \
-        cairosvg
+        "cairosvg>=2.7"
 
 EXPOSE 8000
 

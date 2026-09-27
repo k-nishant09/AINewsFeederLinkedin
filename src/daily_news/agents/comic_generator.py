@@ -227,18 +227,32 @@ def _quote_reply_strip(x: int, y: int, w: int, prev_persona: str, prev_name: str
     """
     Compact tinted strip: tiny face + bold label + quoted question/line.
     Shows exactly WHO this panel is responding to and WHAT they said.
+
+    is_close=True (Scene 6): renders "🎙️ SYNTHESIZING THE DEBATE" — no avatar, no name.
+    is_close=False (Scenes 2–5): renders "» NAME ASKED: <question>"
     Returns (svg, strip_height).
     """
     h  = 50
     fr = 16
+
+    # ── Scene 6 — synthesis strip (no avatar, no previous-speaker reference) ──
+    if is_close:
+        svg = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" '
+               f'fill="{accent}" opacity="0.08" stroke="{accent}" stroke-width="1.5" '
+               f'stroke-opacity="0.30"/>\n')
+        svg += (f'<line x1="{x + 26}" y1="{y + h}" x2="{x + 26}" y2="{y + h + 8}" '
+                f'stroke="{accent}" stroke-width="2.5" opacity="0.45"/>\n')
+        svg += (f'<text x="{x + 14}" y="{y + 31}" font-family="Arial,Helvetica,sans-serif" '
+                f'font-size="14" font-weight="bold" fill="{accent}">'
+                f'🎙️  SYNTHESIZING THE DEBATE</text>\n')
+        return svg, h
+
+    # ── Scenes 2–5 — reply strip with avatar + "NAME ASKED:" label ────────────
     # Truncate quote to fit on one line — keep it punchy
     quote = prev_line.strip().strip('"')
     max_chars = 62
     if len(quote) > max_chars:
         quote = quote[:max_chars].rsplit(" ", 1)[0] + "…"
-
-    label = "» RESPONDING TO" if is_close else "» ANSWERING"
-    suffix = "" if is_close else "'S QUESTION"
 
     # Tinted background pill
     svg = (f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="9" '
@@ -252,11 +266,11 @@ def _quote_reply_strip(x: int, y: int, w: int, prev_persona: str, prev_name: str
     svg += _face(fcx, fcy, prev_persona, r=fr)
 
     tx = x + fr * 2 + 16
-    # "» ANSWERING MAYA'S QUESTION" — bold, accent colour, 13px
+    # "» SOPHIA ASKED:" — bold, accent colour, 13px
     svg += (f'<text x="{tx}" y="{y + 19}" font-family="Arial,Helvetica,sans-serif" '
             f'font-size="13" font-weight="bold" fill="{accent}">'
-            f'{label} {html.escape(prev_name.upper())}{suffix}</text>\n')
-    # The actual quoted line — italic, muted, 14px so it's readable
+            f'» {html.escape(prev_name.upper())} ASKED:</text>\n')
+    # The actual quoted question — italic, muted, 14px so it's readable
     svg += (f'<text x="{tx}" y="{y + 38}" font-family="Georgia,Arial,sans-serif" '
             f'font-size="14" font-style="italic" fill="{MUTED_TEXT}">'
             f'"{html.escape(quote)}"</text>\n')
@@ -474,26 +488,37 @@ def _svg_to_png(svg_str: str, out_path: Path) -> Path:
     svg_path = out_path.with_suffix(".svg")
     svg_path.write_text(svg_str, encoding="utf-8")
 
+    # ── Attempt 1: cairosvg (pip-installed, pure-Python SVG parser) ───────────
+    # Pass bytestring directly — avoids any file-URI resolution issues.
     try:
         import cairosvg  # type: ignore
-        cairosvg.svg2png(url=str(svg_path), write_to=str(out_path),
-                         output_width=TOTAL_W, output_height=TOTAL_H)
+        cairosvg.svg2png(
+            bytestring=svg_str.encode("utf-8"),
+            write_to=str(out_path),
+            output_width=TOTAL_W,
+            output_height=TOTAL_H,
+        )
         svg_path.unlink(missing_ok=True)
+        logger.info("comic: cairosvg rendered %s (%d bytes)", out_path.name, out_path.stat().st_size)
         return out_path
-    except (ImportError, OSError):
-        pass
+    except ImportError:
+        logger.debug("comic: cairosvg not installed — trying CLI converters")
+    except Exception as e:          # OSError (missing .so), ValueError, etc.
+        logger.warning("comic: cairosvg failed (%s) — trying CLI converters", e)
 
+    # ── Attempt 2: rsvg-convert / inkscape ────────────────────────────────────
     for cmd in (["rsvg-convert", "-o", str(out_path), str(svg_path)],
                 ["inkscape", "--export-type=png", f"--export-filename={out_path}", str(svg_path)]):
         try:
             r = subprocess.run(cmd, capture_output=True, timeout=20)
             if r.returncode == 0:
                 svg_path.unlink(missing_ok=True)
+                logger.info("comic: %s rendered %s", cmd[0], out_path.name)
                 return out_path
         except (FileNotFoundError, subprocess.TimeoutExpired):
             continue
 
-    logger.warning("No SVG→PNG converter found. Returning .svg path.")
+    logger.warning("comic: no SVG→PNG converter available — returning .svg path")
     return svg_path
 
 
@@ -522,6 +547,12 @@ class ComicScript:
     host_synthesis:    str
     audience_question: str
     host_question:     str = ""   # specific question Media poses to Persona A — shown as pill in Scene 1
+    # Explicit causal question bridges (set from PersonaOutput.next_question)
+    # question1 = host → A, question2 = A → B, question3 = B → C, question4 = C → D
+    question1:         str = ""
+    question2:         str = ""
+    question3:         str = ""
+    question4:         str = ""
     hashtags:          list[str] = field(default_factory=list)
     source_url:        str = ""
     source_name:       str = ""
@@ -571,13 +602,24 @@ def build_scenes(script: ComicScript) -> list[ComicScene]:
             is_close=close,
         )
 
-    # Each persona answers the QUESTION from the previous speaker
-    scene2 = _conv(A, host_cast,   script.voice1_line, prev_line=host_q)
-    scene3 = _conv(B, A,           script.voice2_line, prev_line=_extract_question(script.voice1_line))
-    scene4 = _conv(C, B,           script.voice3_line, prev_line=_extract_question(script.voice2_line))
-    scene5 = _conv(D, C,           script.voice4_line, prev_line=_extract_question(script.voice3_line))
-    scene6 = _conv(host_cast, D,   script.host_synthesis,
-                   prev_line=_extract_question(script.voice4_line), close=True)
+    # Each persona answers the explicit next_question from the previous speaker
+    # (script carries per-voice question bridges; fall back to _extract_question)
+    q1 = getattr(script, "question1", "") or host_q
+    q2 = getattr(script, "question2", "") or _extract_question(script.voice1_line)
+    q3 = getattr(script, "question3", "") or _extract_question(script.voice2_line)
+    q4 = getattr(script, "question4", "") or _extract_question(script.voice3_line)
+
+    scene2 = _conv(A, host_cast, script.voice1_line, prev_line=q1)
+    scene3 = _conv(B, A,         script.voice2_line, prev_line=q2)
+    scene4 = _conv(C, B,         script.voice3_line, prev_line=q3)
+    scene5 = _conv(D, C,         script.voice4_line, prev_line=q4)
+    # Scene 6: synthesis — no previous-speaker reference, is_close suppresses avatar
+    scene6 = ComicScene(
+        persona="media", name=script.host_name, role=script.host_role,
+        text=script.host_synthesis.strip(),
+        prev_persona="", prev_name="", prev_role="", prev_line="",
+        is_close=True,
+    )
 
     return [scene1, scene2, scene3, scene4, scene5, scene6]
 
@@ -702,10 +744,10 @@ _CAST_NAMES: dict[str, list[str]] = {
     "policy":   ["James", "Rachel", "Michael", "Wei", "Laura", "Carlos"],
 }
 _ROLE_LABELS: dict[str, str] = {
-    "business": "AI Founder",
-    "linkedin": "Enterprise Engineer",
-    "genz":     "Generalist Thinker",
-    "policy":   "Policy Specialist",
+    "business": "AI Infrastructure Founder",
+    "linkedin": "ML Platform Engineer",
+    "genz":     "AI Industry Analyst",
+    "policy":   "AI Policy Lead",
 }
 _PERSONA_EMOJI: dict[str, str] = {
     "business": "💼", "linkedin": "🧑‍💻", "genz": "⚖️", "policy": "🏛️",
@@ -751,18 +793,22 @@ async def build_comic_script_from_summary(
             return str(story.get(fname, fallback) or fallback).strip()
         return str(getattr(story, fname, fallback) or fallback).strip()
 
+    from daily_news.agents.publisher_agent import _extract_dynamic_tags
+
     aid     = summary.article_id
     opening = _story_field("media_host_opening") or summary.headline
     hook    = _story_field("hook") or summary.why_it_matters
     why     = summary.why_it_matters or ""
     tension = _story_field("future_question") or _story_field("media_host_audience_cta") or ""
 
-    news_brief = _first_sentences(opening, n=1, limit=120)
-    if hook and hook.lower() not in news_brief.lower():
-        news_brief += " " + _clip_at_sentence(hook, 100)
-    if why and len(news_brief) < 200:
-        news_brief += " " + _clip_at_sentence(why, 90)
-    news_brief      = news_brief.strip()
+    # ── Scene 1 brief: WHAT HAPPENED + WHY IT MATTERS only (not 3 stacked sources) ──
+    what_happened = _first_sentences(opening, n=1, limit=100)
+    why_matters   = _clip_at_sentence(why or hook or "", 90)
+    news_brief    = what_happened
+    if why_matters and why_matters.lower() not in news_brief.lower():
+        news_brief += " " + why_matters
+    news_brief = news_brief.strip()
+    # central_tension is shown in the hand-off pill — never repeat it inside the bubble
     central_tension = _first_sentences(tension, n=1, limit=110) if tension else ""
 
     host_name   = _pick_host_name(aid)
@@ -788,14 +834,29 @@ async def build_comic_script_from_summary(
         po = persona_map.get(key)
         return _first_sentences(po.perspective if po else "", n=n, limit=160)
 
+    def _next_q(key: str) -> str:
+        """Return the explicit next_question from PersonaOutput, or empty string."""
+        po = persona_map.get(key)
+        if po and getattr(po, "next_question", ""):
+            return po.next_question.strip()
+        return ""
+
     voice1, voice2, voice3, voice4 = (_voice(k) for k in voice_order)
 
     cta = _story_field("media_host_audience_cta") or _story_field("future_question") or ""
+
+    # ── Scene 6 synthesis: use story analytical fields, not cast-name template ──
+    perspective  = _story_field("perspective")
+    second_order = _story_field("second_order_effect")
+    future_q     = _story_field("future_question")
+    synthesis_raw = " ".join(filter(None, [perspective, second_order, future_q])).strip()
     host_synthesis = (
-        f"{cast[0].name} sees opportunity. {cast[1].name} flags production complexity. "
-        f"{cast[2].name} questions the broader impact. {cast[3].name} sees a governance gap. "
-        + (_first_sentences(central_tension, n=1, limit=90) if central_tension
-           else "So: can organisations move as fast as AI enables?")
+        _clip_at_sentence(synthesis_raw, 220)
+        if synthesis_raw
+        else (
+            f"Four views, one question: "
+            f"{central_tension or 'can organisations move as fast as AI enables?'}"
+        )
     )
 
     audience_question = _clip_at_sentence(cta, 300) if cta else (
@@ -804,7 +865,26 @@ async def build_comic_script_from_summary(
         f"C — Governance and oversight\nD — Operational cost\nE — Something else entirely"
     )
 
-    hashtags = ["#AI", "#GenerativeAI", "#AIFeeders", "#EnterpriseAI", "#FutureOfWork"]
+    # ── Dynamic hashtags from the existing engine — no hardcoded list ──────────
+    intel = getattr(summary, "intelligence", None)
+    story_seo_tags: list[str] = []
+    if intel is not None:
+        raw_tags = (intel.get("seo_hashtags") if isinstance(intel, dict)
+                    else getattr(intel, "seo_hashtags", None))
+        if raw_tags:
+            story_seo_tags = list(raw_tags)
+
+    hashtags = _extract_dynamic_tags(
+        headline       = summary.headline,
+        summary        = summary.summary or "",
+        source         = getattr(summary, "source", "") or "",
+        key_points     = list(summary.key_points or []),
+        event_type     = getattr(summary, "event_type", "other") or "other",
+        story_seo_tags = story_seo_tags,
+        max_tags       = 7,
+    )
+    if not hashtags:
+        hashtags = ["#AI", "#GenerativeAI", "#AIFeeders", "#EnterpriseAI"]
 
     return ComicScript(
         headline          = summary.headline,
@@ -819,6 +899,11 @@ async def build_comic_script_from_summary(
         voice4_line       = voice4,
         host_synthesis    = host_synthesis,
         audience_question = audience_question,
+        # Causal question bridges — from PersonaOutput.next_question
+        question1         = central_tension or "",   # host → A: the debate seed
+        question2         = _next_q("business"),     # A (business) → B (linkedin)
+        question3         = _next_q("linkedin"),     # B (linkedin) → C (genz)
+        question4         = _next_q("genz"),         # C (genz)     → D (policy)
         hashtags          = hashtags,
         source_url        = getattr(summary, "source_url", ""),
         source_name       = getattr(summary, "source", ""),
