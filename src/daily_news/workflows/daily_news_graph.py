@@ -57,6 +57,7 @@ from langgraph.graph import END, START, StateGraph
 from daily_news.agents.content_optimizer import ContentOptimizerAgent
 from daily_news.agents.evaluation_agent import EvaluationAgent
 from daily_news.agents.linkedin_skills_optimizer import LinkedInSkillsOptimizer
+from daily_news.config.settings import get_settings
 from daily_news.agents.guardrails import InputGuardrail
 from daily_news.agents.jev_agents import jev_find_angle, jev_prefilter_articles, jev_route_personas
 from daily_news.agents.judgment_agent import JudgmentAgent
