@@ -178,7 +178,7 @@ async def discover_news(state: NewsWorkflowState) -> NewsWorkflowState:
             try:
                 results = await client.search_latest(
                     query=query,
-                    hours=72,   # 72h window — wider net for free-tier GNews (12h delay)
+                    hours=168,  # 7-day window — maximises article pool on free-tier GNews
                     limit=10,   # 10 results per query (free-tier cap)
                     category=category.value,
                 )

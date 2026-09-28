@@ -41,6 +41,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from datetime import UTC, datetime
 
 from daily_news.config.settings import get_settings
 from daily_news.mcp.client import jev_singleton
@@ -48,6 +50,79 @@ from daily_news.mcp.jev_client import JevPrefilterResult
 from daily_news.models.persona import PersonaType
 
 logger = logging.getLogger(__name__)
+
+# ── Fallback scorer (no Jev, no LLM) ─────────────────────────────────────────
+# Used when JEV_BASE_URL is not set. Scores articles purely from metadata so
+# the workflow never blindly picks [:1] (always the same GNews-ordered article).
+#
+# Scoring dimensions (all 0–1, summed to a composite 0–4):
+#   recency         — published within last 24h → 1.0, 48h → 0.6, 72h → 0.3, older → 0.1
+#   ai_relevance    — count of high-signal AI keywords in title + description
+#   source_quality  — whitelist of known-good AI/tech sources
+#   title_length    — sweet-spot 60–100 chars (informative but not clickbait)
+
+_AI_KEYWORDS = re.compile(
+    r"\b(openai|anthropic|deepmind|gemini|gpt|llm|claude|mistral|qwen|llama|"
+    r"artificial intelligence|machine learning|neural|chatgpt|copilot|agentic|"
+    r"generative ai|foundation model|large language|transformer|nvidia|ai chip|"
+    r"ai regulation|ai policy|ai safety|ai startup|ai funding|ai agent)\b",
+    re.IGNORECASE,
+)
+_QUALITY_SOURCES = {
+    "techcrunch", "wired", "mit technology review", "the verge", "venturebeat",
+    "siliconangle", "reuters", "bloomberg", "financial times", "the information",
+    "ars technica", "zdnet", "cnet", "ieee spectrum", "nature", "science",
+    "axios", "politico", "wall street journal", "new york times", "washington post",
+    "the guardian", "bbc", "cnbc", "fortune", "fast company",
+}
+
+
+def _heuristic_score(article: dict) -> float:
+    """Return a 0–4 composite score from article metadata alone."""
+    title = article.get("title", "")
+    desc  = article.get("description", "") or ""
+    src   = (article.get("source", "") or "").lower()
+    pub   = article.get("published_at", "") or ""
+
+    # Recency
+    recency = 0.1
+    try:
+        age_h = (datetime.now(UTC) - datetime.fromisoformat(pub.replace("Z", "+00:00"))).total_seconds() / 3600
+        if age_h <= 24:   recency = 1.0
+        elif age_h <= 48: recency = 0.6
+        elif age_h <= 72: recency = 0.3
+    except Exception:  # noqa: BLE001
+        pass
+
+    # AI relevance — keyword hits in title + description (cap at 1.0)
+    text = f"{title} {desc}"
+    hits = len(_AI_KEYWORDS.findall(text))
+    ai_relevance = min(hits * 0.25, 1.0)
+
+    # Source quality
+    source_quality = 0.5
+    for q in _QUALITY_SOURCES:
+        if q in src:
+            source_quality = 1.0
+            break
+
+    # Title length sweet-spot
+    tl = len(title)
+    title_score = 1.0 if 60 <= tl <= 100 else (0.6 if 40 <= tl <= 120 else 0.3)
+
+    return recency + ai_relevance + source_quality + title_score
+
+
+def _heuristic_select(articles: list[dict], top_n: int = 3) -> list[dict]:
+    """Sort articles by heuristic score, return top_n."""
+    scored = sorted(articles, key=_heuristic_score, reverse=True)
+    if logger.isEnabledFor(logging.INFO):
+        for i, a in enumerate(scored[:top_n]):
+            logger.info(
+                "jev_prefilter_fallback: #%d score=%.2f title=%s",
+                i + 1, _heuristic_score(a), a.get("title", "")[:70],
+            )
+    return scored[:top_n]
 
 
 # ── Node 1: Article pre-filter + Stage 3 intelligence ────────────────────────
@@ -76,12 +151,12 @@ async def jev_prefilter_articles(state: dict) -> dict:
         return {**state, "workflow_status": "JEV_PREFILTERED"}
 
     if not s.jev_enabled:
-        logger.info("[%s] jev_prefilter: JEV_ENABLED=false — keeping [:1]", run_id)
-        return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
+        logger.info("[%s] jev_prefilter: JEV_ENABLED=false — heuristic fallback (%d articles)", run_id, len(articles))
+        return {**state, "selected_articles": _heuristic_select(articles), "workflow_status": "JEV_PREFILTERED"}
 
     if not s.jev_base_url:
-        logger.info("[%s] jev_prefilter: JEV_BASE_URL not set — keeping [:1]", run_id)
-        return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
+        logger.info("[%s] jev_prefilter: JEV_BASE_URL not set — heuristic fallback (%d articles)", run_id, len(articles))
+        return {**state, "selected_articles": _heuristic_select(articles), "workflow_status": "JEV_PREFILTERED"}
 
     try:
         client = jev_singleton()
@@ -96,8 +171,8 @@ async def jev_prefilter_articles(state: dict) -> dict:
             return_exceptions=True,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("[%s] jev_prefilter failed (%s) — falling back to [:1]", run_id, exc)
-        return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
+        logger.warning("[%s] jev_prefilter failed (%s) — heuristic fallback", run_id, exc)
+        return {**state, "selected_articles": _heuristic_select(articles), "workflow_status": "JEV_PREFILTERED"}
 
     # Filter out exceptions, pair with original article
     scored: list[tuple[float, dict, JevPrefilterResult]] = []
@@ -114,8 +189,8 @@ async def jev_prefilter_articles(state: dict) -> dict:
         scored.append((composite, article, result))
 
     if not scored:
-        logger.warning("[%s] jev_prefilter: no AI articles passed — keeping [:1]", run_id)
-        return {**state, "selected_articles": articles[:1], "workflow_status": "JEV_PREFILTERED"}
+        logger.warning("[%s] jev_prefilter: no AI articles passed — heuristic fallback", run_id)
+        return {**state, "selected_articles": _heuristic_select(articles), "workflow_status": "JEV_PREFILTERED"}
 
     # Pick the top-3 articles by composite score.
     # Processing top-3 gives the eval/retry loop 2 fallback articles if the best
