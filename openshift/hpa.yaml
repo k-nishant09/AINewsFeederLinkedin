@@ -1,5 +1,8 @@
 ---
 # HPA for the main API
+# minReplicas=1 — the API is stateless and the workflow is triggered by cron/manual.
+# Scale threshold raised to 80% CPU / 85% memory to avoid thrashing on a saturated cluster.
+# stabilizationWindowSeconds=120 prevents rapid scale-down after a workflow burst.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -10,18 +13,31 @@ spec:
     apiVersion: apps/v1
     kind: Deployment
     name: daily-news-api
-  minReplicas: 2
-  maxReplicas: 10
+  minReplicas: 1
+  maxReplicas: 4
   metrics:
     - type: Resource
       resource:
         name: cpu
         target:
           type: Utilization
-          averageUtilization: 70
+          averageUtilization: 80
     - type: Resource
       resource:
         name: memory
         target:
           type: Utilization
-          averageUtilization: 80
+          averageUtilization: 85
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 120
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 30

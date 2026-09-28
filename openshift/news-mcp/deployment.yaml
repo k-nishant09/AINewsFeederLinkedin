@@ -8,7 +8,7 @@ metadata:
     app: news-mcp
     role: mcp-server
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: news-mcp
@@ -19,6 +19,13 @@ spec:
         role: mcp-server
     spec:
       serviceAccountName: daily-news
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: news-mcp
       containers:
         - name: news-mcp
           image: image-registry.openshift-image-registry.svc:5000/aifeeders/news-mcp:latest
@@ -31,8 +38,8 @@ spec:
                 name: daily-news-secrets
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "50m"
+              memory: "128Mi"
             limits:
               cpu: "1"
               memory: "1Gi"
@@ -42,9 +49,11 @@ spec:
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 15
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
             initialDelaySeconds: 20
             periodSeconds: 30
+            failureThreshold: 3

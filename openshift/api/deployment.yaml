@@ -7,7 +7,7 @@ metadata:
   labels:
     app: daily-news-api
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: daily-news-api
@@ -17,6 +17,15 @@ spec:
         app: daily-news-api
     spec:
       serviceAccountName: daily-news
+      # Spread replicas evenly across all schedulable worker nodes so no single
+      # node is double-burdened when HPA scales up.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: daily-news-api
       containers:
         - name: api
           image: image-registry.openshift-image-registry.svc:5000/aifeeders/daily-news:latest
@@ -27,10 +36,12 @@ spec:
                 name: daily-news-config
             - secretRef:
                 name: daily-news-secrets
+          # Requests sized to actual observed usage (2m CPU, ~100Mi memory).
+          # Limits give headroom for workflow bursts (LLM calls, concurrent agents).
           resources:
             requests:
-              cpu: "250m"
-              memory: "512Mi"
+              cpu: "50m"
+              memory: "128Mi"
             limits:
               cpu: "1"
               memory: "1Gi"
@@ -40,9 +51,11 @@ spec:
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 15
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
             initialDelaySeconds: 20
             periodSeconds: 30
+            failureThreshold: 3

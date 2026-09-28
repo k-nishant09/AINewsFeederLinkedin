@@ -34,3 +34,27 @@ spec:
   selector:
     matchLabels:
       app: linkedin-mcp
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pageindex-mcp-pdb
+  namespace: aifeeders
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: pageindex-mcp
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: evaluation-mcp-pdb
+  namespace: aifeeders
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: evaluation-mcp
