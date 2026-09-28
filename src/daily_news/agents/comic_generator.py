@@ -130,7 +130,7 @@ def _face(cx: int, cy: int, persona: str, r: int = 26, show_badge: bool = True) 
         svg += (f'<circle cx="{r*0.72:.1f}" cy="{r*0.72:.1f}" r="{br}" '
                 f'fill="#FFFFFF" stroke="{accent}" stroke-width="2"/>\n'
                 f'<text x="{r*0.72:.1f}" y="{r*0.72 + br*0.38:.1f}" '
-                f'text-anchor="middle" font-size="{br*1.15:.1f}">{badge}</text>\n')
+                f'text-anchor="middle" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, Android Emoji, EmojiSymbols, sans-serif" font-size="{br*1.15:.1f}">{badge}</text>\n')
     svg += "</g>"
     return svg
 
@@ -842,36 +842,50 @@ def _clean_summary_point(text: str) -> str:
 
 def build_outside_post(script: ComicScript) -> str:
     """
-    LinkedIn post caption — news summary + host question + source + footer + hashtags.
+    LinkedIn post caption — news summary + 4 persona angles + host decision question + footer + hashtags.
 
-    Architecture rule:
-      • NO persona teasers in the post body — the full persona debate lives INSIDE
-        the comic image. The post drives people to look at the image, not replace it.
+    Architecture rules:
+      • Specificity + relevance + professional decision conversation.
       • Structure:
-          1. News summary — what happened and why it matters (2 sentences max)
-          2. Host question — the unresolved question from Scene 6, with labelled choices
-          3. Source · disclaimer · brand footer · hashtags
+          1. Hook & News Summary (what happened + core tension)
+          2. 4 Professional Angles (concise 1-line takeaways from the cast)
+          3. Host Decision Question (concrete trade-offs + prompt for reader experience)
+          4. Source · disclaimer · brand footer · hashtags (max 3-4 focused tags)
     """
     import re as _re_p
 
     lines: list[str] = []
 
-    # ── 1. News summary — what happened + why it matters ─────────────────────
-    # Take the first 2 sentences from news_brief so the post opens with substance,
-    # not just a headline repeat.
+    # ── 1. News summary & Hook ───────────────────────────────────────────────
     brief = script.news_brief.strip()
     brief_sentences = [s.strip() for s in _re_p.split(r"(?<=[.!?])\s+", brief) if s.strip()]
-    summary_lines = brief_sentences[:2]
+    summary_lines = brief_sentences[:2] if brief_sentences else [script.headline]
     for sl in summary_lines:
         lines.append(sl)
     lines.append("")
 
-    # ── 2. Host question with labelled engagement choices ─────────────────────
+    # ── 2. Persona Perspectives Summary ──────────────────────────────────────
+    if script.cast and len(script.cast) >= 4:
+        lines.append("Our four voices looked at the same question from different angles:")
+        lines.append("")
+        voice_lines = [
+            script.voice1_line,
+            script.voice2_line,
+            script.voice3_line,
+            script.voice4_line,
+        ]
+        for p, vline in zip(script.cast[:4], voice_lines):
+            summary_pt = _clean_summary_point(vline)
+            if summary_pt:
+                lines.append(f"{p.emoji} **{p.role}:** {summary_pt}")
+        lines.append("")
+
+    # ── 3. Host question with labelled choices ────────────────────────────────
     lines.append(f"🎙️ **{script.host_name} — Media Host**")
     lines.append("")
     lines.append(script.audience_question.strip())
 
-    # ── 3. Source ─────────────────────────────────────────────────────────────
+    # ── 4. Source ─────────────────────────────────────────────────────────────
     lines.append("")
     if script.source_name and script.source_url:
         lines.append(f"📰 Source: {script.source_name}")
@@ -881,18 +895,18 @@ def build_outside_post(script: ComicScript) -> str:
     elif script.source_name:
         lines.append(f"📰 Source: {script.source_name}")
 
-    # ── 4. Disclaimer + brand footer ─────────────────────────────────────────
+    # ── 5. Disclaimer + brand footer ─────────────────────────────────────────
     lines += [
         "",
         "⚠️ Perspectives are AI-simulated for discussion — not professional advice.",
         "🤖 AIFeeders · Daily AI Intelligence · Powered by Jev",
     ]
 
-    # ── 5. Dynamic hashtags ───────────────────────────────────────────────────
+    # ── 6. Dynamic hashtags (max 3-4 tags) ───────────────────────────────────
     if script.hashtags:
-        lines += ["", " ".join(h if h.startswith("#") else f"#{h}" for h in script.hashtags)]
+        lines += ["", " ".join(h if h.startswith("#") else f"#{h}" for h in script.hashtags[:4])]
     else:
-        lines += ["", "#AIInfrastructure #EnterpriseAI #AIGovernance"]
+        lines += ["", "#EnterpriseAI #AIInfrastructure #AIGovernance"]
 
     return "\n".join(lines)
 
@@ -1250,13 +1264,12 @@ async def build_comic_script_from_summary(
     else:
         subject = (central_tension or summary.headline)[:60].rstrip("?. ")
         audience_question = (
-            f"If {subject} becomes the norm, what is the biggest enterprise challenge?\n\n"
-            f"⚡ A — Latency & performance\n"
-            f"💰 B — Cost & token economics\n"
+            f"If you were responsible for deploying this in your environment, what becomes the biggest bottleneck first?\n\n"
+            f"⚡ A — Latency & system SLAs\n"
+            f"💰 B — Unit cost & token economics\n"
             f"🔍 C — Observability & debugging\n"
-            f"🛡️ D — Governance & compliance\n"
-            f"🧩 E — Something else entirely\n\n"
-            f"Drop your choice + one reason. 👇"
+            f"🛡️ D — Governance & compliance\n\n"
+            f"Pick one + tell us what you've seen in your own environment. 👇"
         )
 
     # ── Dynamic hashtags from the existing engine — no hardcoded list ──────────

@@ -251,3 +251,23 @@ class TestComicScript:
         s     = _minimal_script()
         for p in s.cast:
             assert p.persona in valid
+
+# ── build_outside_post ────────────────────────────────────────────────────────
+
+class TestBuildOutsidePost:
+    def test_build_outside_post_structure(self):
+        from daily_news.agents.comic_generator import build_outside_post
+        s = _minimal_script(
+            source_name="TechCrunch",
+            source_url="https://techcrunch.com/example",
+            hashtags=["#EnterpriseAI", "#AIInfrastructure"],
+        )
+        post = build_outside_post(s)
+        assert "GPT-5 runs code autonomously" in post
+        assert "Our four voices looked at the same question" in post
+        assert "AI Founder:" in post
+        assert "Enterprise Engineer:" in post
+        assert "Maya — Media Host" in post
+        assert "TechCrunch" in post
+        assert "https://techcrunch.com/example" in post
+        assert "#EnterpriseAI #AIInfrastructure" in post

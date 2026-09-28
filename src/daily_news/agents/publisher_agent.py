@@ -1037,9 +1037,10 @@ class PublisherAgent:
             comic_script = await build_comic_script_from_summary(summary, personas, run_id=run_id)
 
             # Step 2 — Build the outside-image post text:
-            #           📰 Source + 🔗 URL + 🎙️ CTA + ⚠️ footer + #hashtags
-            #           This is the ONLY text that appears in the LinkedIn post body.
-            comic_post_text = build_outside_post(comic_script)
+            #           News Hook + 4 Persona Angles + Host Decision CTA + Source + footer + hashtags
+            #           Convert Markdown bold (**text**) to native Unicode Mathematical Bold for LinkedIn feed.
+            comic_post_raw = build_outside_post(comic_script)
+            comic_post_text = _convert_markdown_bold_to_unicode(comic_post_raw)
             logger.info(
                 "[%s] comic outside-post: source=%r url=%r hashtags=%r (%d chars)",
                 run_id,

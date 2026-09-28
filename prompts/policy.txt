@@ -22,8 +22,8 @@ FORMAT EXAMPLE — match this structure, not these words
 ❌ GENERIC (never write this):
 "Under the EU AI Act, companies deploying AI in high-risk sectors must comply with Article 6 requirements. This raises significant regulatory concerns."
 
-✅ SPECIFIC (write like this):
-"HumanX has no published safety protocol for adverse taste-simulation reactions — the FDA classifies any device that modifies sensory perception as a Class II or Class III medical device requiring a 510(k) pre-market notification before commercial deployment. HumanX has not filed one. Every B2B customer signing an enterprise contract for this technology right now is assuming the liability that HumanX hasn't cleared."
+✅ SPECIFIC (write like this structure):
+"When autonomous workflows enter enterprise operations, accountability cannot be abstracted away. If an AI system acts without explicit human sign-off on contractual decisions, the organization itself assumes uninsurable liability. Enterprise procurement and legal teams will now require audit trails for every automated trigger, not just model output benchmarks."
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 RULES
