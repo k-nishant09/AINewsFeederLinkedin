@@ -157,6 +157,7 @@ class EvaluationAgent:
         personas: PersonaSetOutput,
         source_text: str,
         run_id: str | None = None,
+        linkedin_audit: dict | None = None,
     ) -> EvaluationResult:
         generated_text = self._compose_generated_text(summary, personas)
         enriched_source = _enrich_source(source_text, summary)
@@ -298,6 +299,39 @@ class EvaluationAgent:
                 )
         except Exception as exc:
             logger.warning("[%s] LLM judge pass non-blocking error: %s", run_id or "?", exc)
+
+        # LinkedIn Skills audit — advisory signals logged for observability.
+        # Low hook_strength or commentability adds a failure_reason but does NOT
+        # force REGENERATE on its own — it informs the retry avoid_phrases.
+        if linkedin_audit:
+            hook_s  = linkedin_audit.get("hook_strength", 1.0)
+            comment = linkedin_audit.get("commentability", 1.0)
+            ai_den  = linkedin_audit.get("ai_style_density", 0.0)
+            formula = linkedin_audit.get("hook_formula", "")
+            blockers = linkedin_audit.get("blockers", [])
+            logger.info(
+                "[%s] linkedin_audit article=%s hook=%.2f commentability=%.2f "
+                "ai_density=%.2f formula=%s blockers=%s",
+                run_id or "?", summary.article_id,
+                hook_s, comment, ai_den, formula, blockers,
+            )
+            if hook_s < 0.50:
+                result.failure_reasons.append(
+                    f"linkedin_audit: weak hook (score={hook_s:.2f}) — "
+                    "open with a number, named entity, or structural tension"
+                )
+            if comment < 0.50:
+                result.failure_reasons.append(
+                    f"linkedin_audit: low commentability (score={comment:.2f}) — "
+                    "CTA must pose one concrete unresolved question from the story tension"
+                )
+            if ai_den > 0.60:
+                result.failure_reasons.append(
+                    f"linkedin_audit: high AI-vocab density (score={ai_den:.2f}) — "
+                    "remove: leverage, streamline, fundamentally, game-changer"
+                )
+            for blocker in blockers[:2]:
+                result.failure_reasons.append(f"linkedin_audit_blocker: {blocker}")
 
         # Deterministic gate — scoring backend is advisory only
         result.decision = self._apply_gate(result)

@@ -24,7 +24,8 @@ LangGraph state machine:
                                         └─► find_angle        ← Stage 5: Jev content angle
                                               └─► jev_router        ← route relevant personas
                                                     └─► generate_personas  (parallel)
-                                                          └─► evaluate    ← Jev quality gate
+                                                          └─► linkedin_optimize  ← Hook + Humanizer + Audit
+                                                                └─► evaluate    ← Jev quality gate
                                                                 ├─► REGENERATE ─► summarize
                                                                 ├─► BLOCK      ─► hard stop
                                                                 ├─► HUMAN_REVIEW ─► approval
@@ -55,6 +56,7 @@ from langgraph.graph import END, START, StateGraph
 
 from daily_news.agents.content_optimizer import ContentOptimizerAgent
 from daily_news.agents.evaluation_agent import EvaluationAgent
+from daily_news.agents.linkedin_skills_optimizer import LinkedInSkillsOptimizer
 from daily_news.agents.guardrails import InputGuardrail
 from daily_news.agents.jev_agents import jev_find_angle, jev_prefilter_articles, jev_route_personas
 from daily_news.agents.judgment_agent import JudgmentAgent
@@ -626,6 +628,109 @@ async def generate_personas(state: NewsWorkflowState) -> NewsWorkflowState:
     return {**state, "persona_outputs": persona_outputs, "errors": combined_errors, "workflow_status": "PERSONAS_GENERATED"}
 
 
+async def linkedin_optimize(state: NewsWorkflowState) -> NewsWorkflowState:
+    """
+    LinkedIn Skills optimization layer — runs after persona generation, before evaluation.
+
+    Applies three passes in sequence:
+      Pass 1 — Hook Selector: scores and optionally replaces the opening hook
+               using 2026 formula heuristics (number-first, contrarian, false-binary).
+      Pass 2 — Humanizer: deterministic scrub of AI-vocabulary density, reveal bridges,
+               staccato fragments, and engagement-bait closers.
+      Pass 3 — Audit: LLM-backed scoring of hook_strength, commentability,
+               ai_style_density, cta_quality, algorithm_compliance.
+
+    Stores optimization_audit in state for the evaluation judge to use as
+    additional scoring signals. Falls back gracefully — never blocks the pipeline.
+
+    Contract:
+      - NEVER changes: persona identities, factual claims, source URLs, debate structure,
+        comic caption, or header.
+      - MAY change: opening hook, AI-vocab density, fragment runs, reveal bridges, CTA phrasing.
+    """
+    from daily_news.models.summary import NewsSummary
+
+    run_id = state["run_id"]
+    s = get_settings()
+
+    # Skip if LLM not configured (e.g. local dev without gateway)
+    if not s.llm_base_url:
+        logger.info("[%s] linkedin_optimize: LLM_BASE_URL not set — skipping", run_id)
+        return {**state, "workflow_status": "LI_OPTIMIZED"}
+
+    try:
+        optimizer = LinkedInSkillsOptimizer()
+    except Exception as exc:
+        logger.warning("[%s] linkedin_optimize: init failed (%s) — skipping", run_id, exc)
+        return {**state, "workflow_status": "LI_OPTIMIZED"}
+
+    publisher = PublisherAgent()
+    new_persona_outputs: list[dict] = []
+    audit_results: list[dict] = []
+
+    for summary_dict, persona_dict in zip(state["summaries"], state["persona_outputs"]):
+        try:
+            from daily_news.models.persona import PersonaSetOutput
+            summary  = NewsSummary(**summary_dict)
+            personas = PersonaSetOutput(**persona_dict)
+
+            # Compose current post text so the optimizer can see it holistically
+            jev_scores = {}
+            for r in state.get("jev_scores", []):
+                if r.get("article_id") == summary.article_id:
+                    jev_scores = r
+                    break
+            post_text = publisher._compose_main_post(summary, personas, jev_scores)
+
+            # Extract story metadata for hook selection
+            story = persona_dict.get("story") or {}
+            if isinstance(story, dict):
+                central_tension = story.get("media_host_synthesis", "") or story.get("perspective", "")
+                story_style = story.get("narrative_style", "ai_debate")
+            else:
+                central_tension = ""
+                story_style = "ai_debate"
+
+            result = await optimizer.optimize(
+                post_text=post_text,
+                headline=summary.headline,
+                central_tension=central_tension,
+                story_style=story_style,
+                run_id=run_id,
+            )
+
+            # Store audit scores in persona_dict so evaluate() can read them
+            enriched = {**persona_dict, "linkedin_audit": {
+                "hook_strength":       result.audit.hook_strength,
+                "commentability":      result.audit.commentability,
+                "ai_style_density":    result.audit.ai_style_density,
+                "cta_quality":         result.audit.cta_quality,
+                "algorithm_compliance": result.audit.algorithm_compliance,
+                "overall":             result.audit.overall,
+                "hook_formula":        result.audit.hook_formula_used,
+                "hook_was_replaced":   result.hook_was_replaced,
+                "blockers":            result.audit.blockers,
+                "warnings":            result.audit.warnings,
+            }}
+            new_persona_outputs.append(enriched)
+            audit_results.append(enriched["linkedin_audit"])
+
+            logger.info(
+                "[%s] linkedin_optimize article=%s hook=%.2f comment=%.2f ai_density=%.2f overall=%.2f formula=%s",
+                run_id, summary.article_id,
+                result.audit.hook_strength, result.audit.commentability,
+                result.audit.ai_style_density, result.audit.overall,
+                result.audit.hook_formula_used,
+            )
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[%s] linkedin_optimize failed for article: %s", run_id, exc)
+            new_persona_outputs.append(persona_dict)
+            audit_results.append({})
+
+    return {**state, "persona_outputs": new_persona_outputs, "workflow_status": "LI_OPTIMIZED"}
+
+
 async def evaluate(state: NewsWorkflowState) -> NewsWorkflowState:
     """
     Architecture: all article evaluations fire concurrently via asyncio.gather.
@@ -655,7 +760,9 @@ async def evaluate(state: NewsWorkflowState) -> NewsWorkflowState:
             metadata={"run_id": run_id},
         )
         try:
-            result = await agent.evaluate(summary, personas, source_text, run_id=run_id)
+            linkedin_audit = persona_dict.get("linkedin_audit") if isinstance(persona_dict, dict) else None
+            result = await agent.evaluate(summary, personas, source_text, run_id=run_id,
+                                          linkedin_audit=linkedin_audit)
             if trace:
                 trace.update(output={
                     "decision":      result.decision.value,
@@ -990,6 +1097,7 @@ def build_daily_news_graph():
     graph.add_node("summarize",         summarize)        # Stage 4: Judgment Analysis + Storyteller
     graph.add_node("jev_router",        jev_router)       # Dynamic Persona Routing based on Context DNA
     graph.add_node("generate_personas", generate_personas)
+    graph.add_node("linkedin_optimize", linkedin_optimize) # LinkedIn Skills: Hook + Humanizer + Audit
     graph.add_node("evaluate",          evaluate)         # Judge gate: MCP scores + Qwen critic @ 0.1
     graph.add_node("score_reach",       score_reach)      # Pre-publish Reach Optimizer & Unicode Bold Formatter
     graph.add_node("publish",           publish)          # Safe LinkedIn Distribution
@@ -1004,7 +1112,8 @@ def build_daily_news_graph():
     graph.add_edge("find_angle",        "summarize")
     graph.add_edge("summarize",         "jev_router")
     graph.add_edge("jev_router",        "generate_personas")
-    graph.add_edge("generate_personas", "evaluate")
+    graph.add_edge("generate_personas", "linkedin_optimize")
+    graph.add_edge("linkedin_optimize", "evaluate")
 
     graph.add_conditional_edges(
         "evaluate",
