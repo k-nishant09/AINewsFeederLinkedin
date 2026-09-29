@@ -38,6 +38,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
+from daily_news.agents.publisher_agent import CANONICAL_BANNED_PHRASES
 from daily_news.config.settings import get_settings
 from daily_news.models.persona import PersonaOutput, PersonaSetOutput, PersonaType
 from daily_news.models.summary import NewsSummary
@@ -340,13 +341,20 @@ class PersonaAgent:
         # On first pass: show a compact static reminder of the top offenders so the model
         # starts clean without needing a failure to learn from.
         if avoid_phrases:
-            avoid_lines = "\n".join(f"  ✗ {p}" for p in avoid_phrases)
+            # Last-cycle offenders first (most specific signal).
+            cycle_lines = "\n".join(f"  ✗ {p}" for p in avoid_phrases)
+            # Full canonical list — every phrase the scanner will reject.
+            full_lines = "\n".join(
+                f"  ✗ {p}" for p in CANONICAL_BANNED_PHRASES
+            )
             avoid_block = (
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "⛔ RETRY — PREVIOUS ATTEMPT REJECTED\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "These phrases caused AUTOMATIC REJECTION. Do NOT use them or ANY variation:\n"
-                f"{avoid_lines}\n\n"
+                "These exact phrases triggered AUTOMATIC REJECTION last attempt:\n"
+                f"{cycle_lines}\n\n"
+                "FULL BANNED LIST — every phrase below causes instant rejection:\n"
+                f"{full_lines}\n\n"
                 "STRICT RULE: Do NOT write any sentence that begins or contains:\n"
                 "  - 'the real <any word> is/lies/isn't/becomes' — ALL forms are rejected\n"
                 "  - 'marks a significant' — ALL forms are rejected\n"

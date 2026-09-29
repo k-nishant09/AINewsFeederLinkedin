@@ -851,6 +851,9 @@ _BANNED_INLINE_PHRASES: tuple[str, ...] = (
     "moving forward,",
 )
 
+# Public alias — consumed by persona_agent to inject the full list on retries.
+CANONICAL_BANNED_PHRASES: tuple[str, ...] = _BANNED_INLINE_PHRASES
+
 
 # Regex catch-alls for patterns the LLM produces as lazy boilerplate.
 #
