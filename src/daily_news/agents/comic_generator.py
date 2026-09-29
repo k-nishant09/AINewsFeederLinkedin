@@ -1001,51 +1001,68 @@ def _clean_summary_point(text: str, max_len: int = 200) -> str:
 
 def build_outside_post(script: ComicScript) -> str:
     """
-    LinkedIn post caption — AIFeeders 3-part format.
+    LinkedIn post caption — lean 3-part format.
 
-    The caption has exactly three jobs that do NOT overlap with the image:
+    The comic image carries the full debate.
+    The caption's only jobs:
 
-      PART 1 — HOOK (stop the scroll)
-        Two punchy lines about the news. NOT the headline repeated.
-        Line 1: a key fact/number that surprises (from facts chips if available).
-        Line 2: the tension / why it matters (central_tension).
+      PART 1 — HOOK  (1 bold tagline + 1 pitch line — stop the scroll)
+      PART 2 — BRIDGE (point to the image; 4 emoji-name teasers, ≤8 words each)
+      PART 3 — CTA   (host question + source + disclaimer + hashtags)
 
-      PART 2 — VOICES (one line per persona, conflict chain)
-        Each voice gets one sentence: their core constraint.
-        Reads as a chain. Creates "I want to see what they said" pull.
-
-      PART 3 — CTA (drive discussion)
-        Host question + source link + disclaimer + hashtags.
-
-    The image contains the full debate. The caption never repeats it.
+    Rules:
+    - Never repeat the full persona voice from the image.
+    - Each voice teaser is the persona's NAME + ROLE + their ONE key word/phrase.
+    - No paragraph text anywhere in the caption.
     """
     import re as _re_p
 
     lines: list[str] = []
 
-    # ── PART 1: HOOK — fact anchor + tension ─────────────────────────────────
+    # ── PART 1: HOOK — bold AI NEWS tagline + 1-line pitch ───────────────────
+    # Tagline: bold headline (unicode bold so it renders in LinkedIn feed)
+    headline = (script.headline or "").strip()
+    def _bold(text: str) -> str:
+        """Render text in Unicode bold sans-serif (renders bold in LinkedIn)."""
+        normal = (
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        )
+        bold_map = {
+            'A':'𝗔','B':'𝗕','C':'𝗖','D':'𝗗','E':'𝗘','F':'𝗙','G':'𝗚','H':'𝗛',
+            'I':'𝗜','J':'𝗝','K':'𝗞','L':'𝗟','M':'𝗠','N':'𝗡','O':'𝗢','P':'𝗣',
+            'Q':'𝗤','R':'𝗥','S':'𝗦','T':'𝗧','U':'𝗨','V':'𝗩','W':'𝗪','X':'𝗫',
+            'Y':'𝗬','Z':'𝗭',
+            'a':'𝗮','b':'𝗯','c':'𝗰','d':'𝗱','e':'𝗲','f':'𝗳','g':'𝗴','h':'𝗵',
+            'i':'𝗶','j':'𝗷','k':'𝗸','l':'𝗹','m':'𝗺','n':'𝗻','o':'𝗼','p':'𝗽',
+            'q':'𝗾','r':'𝗿','s':'𝘀','t':'𝘁','u':'𝘂','v':'𝘃','w':'𝘄','x':'𝘅',
+            'y':'𝘆','z':'𝘇',
+            '0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳',
+            '8':'𝟴','9':'𝟵',
+        }
+        return "".join(bold_map.get(c, c) for c in text)
+
+    # Line 1: "🧠 AI NEWS  |  <bold headline>"
+    lines.append(f"🧠 {_bold('AI NEWS')}  |  {_bold(headline)}")
+
+    # Line 2: one-line pitch — the central tension or first fact
     facts   = getattr(script, "facts", []) or []
     tension = (script.central_tension or "").strip()
     brief   = (script.news_brief or "").strip()
-    brief_sentences = [s.strip() for s in _re_p.split(r"(?<=[.!?])\s+", brief) if s.strip()]
+    brief_s = [s.strip() for s in _re_p.split(r"(?<=[.!?])\s+", brief) if s.strip()]
 
-    # Line 1: key fact (stops the scroll with a number) or first brief sentence
-    if facts:
-        fact_hook = ". ".join(f.strip() for f in facts[:2]) + "."
-        lines.append(fact_hook)
-    elif brief_sentences:
-        lines.append(brief_sentences[0])
-    else:
-        lines.append(script.headline)
-
-    # Line 2: the tension / dilemma
-    if tension:
-        lines.append(tension)
-    elif len(brief_sentences) > 1:
-        lines.append(brief_sentences[1])
+    pitch = tension or (facts[0] if facts else "") or (brief_s[0] if brief_s else "")
+    # Keep pitch to one sentence, ≤120 chars
+    pitch = _re_p.split(r"(?<=[.!?])\s+", pitch)[0] if pitch else ""
+    if len(pitch) > 120:
+        pitch = pitch[:117].rstrip() + "…"
+    if pitch:
+        lines.append(pitch)
     lines.append("")
 
-    # ── PART 2: VOICES — conflict chain, one line each ────────────────────────
+    # ── PART 2: BRIDGE — image pointer + 4 name teasers ─────────────────────
+    lines.append("👇 See image — four voices, one story.")
+    lines.append("")
+
     if script.cast and len(script.cast) >= 4:
         voice_lines = [
             script.voice1_line,
@@ -1053,19 +1070,23 @@ def build_outside_post(script: ComicScript) -> str:
             script.voice3_line,
             script.voice4_line,
         ]
-        lines.append("AIFeeders asked four voices to look at the same story:")
-        lines.append("")
         for p, vline in zip(script.cast[:4], voice_lines):
-            summary_pt = _clean_summary_point(vline)
-            if summary_pt:
-                lines.append(f"{p.emoji} {p.name} ({p.role}): {summary_pt}")
-        lines.append("")
-        lines.append("Their answers don't completely agree.")
-        lines.append("That's exactly the point.")
+            # Extract the single most concrete noun/phrase from their line (≤7 words)
+            clean = _clean_summary_point(vline or "")
+            # Trim to first clause (up to comma or semicolon), max 7 words
+            clause = _re_p.split(r"[,;—]", clean)[0].strip() if clean else ""
+            words  = clause.split()
+            teaser = " ".join(words[:7]) + ("…" if len(words) > 7 else "")
+            if teaser:
+                lines.append(f"{p.emoji} {_bold(p.name)} → {teaser}")
         lines.append("")
 
-    # ── PART 3: CTA — host question + source + disclaimer + hashtags ──────────
-    lines.append(f"🎙️ {script.host_name} — THE AIFEEDERS QUESTION:")
+    lines.append("Their answers don't completely agree.")
+    lines.append("That's exactly the point.")
+    lines.append("")
+
+    # ── PART 3: CTA — host question + source + disclaimer + hashtags ─────────
+    lines.append(f"🎙️ {_bold(script.host_name)} — {_bold('THE AIFEEDERS QUESTION:')}")
     lines.append("")
     audience_q = (script.audience_question or "").strip()
     if audience_q:

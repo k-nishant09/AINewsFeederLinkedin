@@ -499,22 +499,32 @@ class TestOutsidePostCaption(unittest.TestCase):
             hashtags=["#Anthropic", "#AIEconomics", "#GenerativeAI", "#AIInfrastructure"],
         )
 
+    def _plain(self, post: str) -> str:
+        """Normalise bold Unicode back to ASCII for string assertions."""
+        import unicodedata
+        return unicodedata.normalize("NFKD", post)
+
     def test_contains_fact_hook(self):
         post = build_outside_post(self._make_script())
-        # PART 1: fact chips → first line should contain a fact
-        first_line = post.split("\n")[0]
-        self.assertIn("$42B", first_line, f"First line must contain fact anchor, got: {first_line!r}")
+        plain = self._plain(post)
+        # PART 1: first line is bold "AI NEWS | <headline>" tagline
+        first_line_plain = self._plain(post.split("\n")[0])
+        self.assertIn("AI NEWS", first_line_plain,
+                      f"First line must be bold AI NEWS tagline, got: {first_line_plain!r}")
+        # tension appears in the pitch line
+        self.assertIn("compute costs", plain, "Post must contain the tension pitch")
 
-    def test_contains_tension(self):
+    def test_contains_image_bridge(self):
         post = build_outside_post(self._make_script())
-        self.assertIn("compute costs", post, "Post must reference the tension line")
+        self.assertIn("See image", post, "Post must contain bridge pointing to the comic image")
 
     def test_contains_four_voices(self):
         post = build_outside_post(self._make_script())
-        self.assertIn("Priya", post)
-        self.assertIn("David", post)
-        self.assertIn("Zoe", post)
-        self.assertIn("Ryan", post)
+        plain = self._plain(post)
+        self.assertIn("Priya", plain)
+        self.assertIn("David", plain)
+        self.assertIn("Zoe", plain)
+        self.assertIn("Ryan", plain)
 
     def test_contains_disagreement_bridge(self):
         post = build_outside_post(self._make_script())
@@ -523,7 +533,7 @@ class TestOutsidePostCaption(unittest.TestCase):
 
     def test_contains_host_question_label(self):
         post = build_outside_post(self._make_script())
-        self.assertIn("THE AIFEEDERS QUESTION", post)
+        self.assertIn("THE AIFEEDERS QUESTION", self._plain(post))
 
     def test_contains_source_link(self):
         post = build_outside_post(self._make_script())

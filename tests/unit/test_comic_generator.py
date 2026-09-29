@@ -263,17 +263,21 @@ class TestBuildOutsidePost:
             hashtags=["#EnterpriseAI", "#AIInfrastructure"],
         )
         post = build_outside_post(s)
-        # PART 1 — hook (first line is fact/brief or tension)
-        assert "GPT-5 runs code autonomously" in post
-        # PART 2 — voices intro line (new format)
-        assert "AIFeeders asked four voices to look at the same story:" in post
-        # PART 2 — persona role labels present
-        assert "AI Founder" in post
-        assert "Enterprise Engineer" in post
+        import unicodedata
+        # Normalise bold unicode back to ASCII for assertion checks
+        plain = unicodedata.normalize("NFKD", post)
+        first_line_plain = unicodedata.normalize("NFKD", post.split("\n")[0])
+        # PART 1 — bold AI NEWS tagline on first line
+        assert "AI NEWS" in first_line_plain
+        # PART 2 — image pointer bridge
+        assert "See image" in post
+        # PART 2 — persona names present as teasers (bold-encoded, normalised back to ASCII)
+        assert "Arjun" in plain
+        assert "Steve" in plain
         # PART 2 — disagreement bridge
         assert "don't completely agree" in post
-        # PART 3 — host CTA label (new format)
-        assert "THE AIFEEDERS QUESTION" in post
+        # PART 3 — host CTA label (bold-encoded)
+        assert "THE AIFEEDERS QUESTION" in plain
         # PART 3 — source and hashtags
         assert "TechCrunch" in post
         assert "https://techcrunch.com/example" in post
