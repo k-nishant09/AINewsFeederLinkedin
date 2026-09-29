@@ -87,82 +87,48 @@ class EvaluationAgent:
         self._judge_prompt = ChatPromptTemplate.from_messages([
             (
                 "system",
-                "You are an elite Technology Editor-in-Chief and AI Content Judge. "
-                "Your job is to rigorously evaluate generated debate posts before publication.\n\n"
+                # ── ROLE ──────────────────────────────────────────────────────────
+                "You are a Technology Editor-in-Chief evaluating an AI-generated "
+                "multi-persona debate post for quality before LinkedIn publication.\n\n"
 
-                "## AUTOMATIC FAIL — set has_stock_boilerplate=true AND has_throat_clearing=true AND verdict=REVISE "
-                "if ANY single one of the following EXACT patterns appears ANYWHERE in the post.\n"
-                "DO NOT expand these lists — only flag what is explicitly listed here.\n\n"
+                # Phrase-level bans are handled upstream by a deterministic code
+                # scanner. The judge's ONLY job is story-level quality assessment.
+                "## YOUR JOB: STORY QUALITY ONLY\n"
+                "Phrase-level checks (banned openers, banned inline phrases, generic "
+                "AI language) have ALREADY been enforced by a deterministic code scanner "
+                "before this post reached you. Do NOT re-scan for phrases. "
+                "Do NOT invent new banned phrases. Do NOT flag phrasing style. "
+                "has_stock_boilerplate and has_throat_clearing must ALWAYS be false — "
+                "phrase scanning is done upstream.\n\n"
 
-                "### BANNED OPENERS (throat-clearing) — INSTANT FAIL:\n"
-                "These openers are banned ONLY when they are the EXACT FIRST words of a persona's passage.\n"
-                "DO NOT flag openers that merely contain these words mid-sentence or mid-paragraph.\n"
-                "- 'When I was scaling', 'When I was running', 'When I was building', 'When I was at'\n"
-                "- 'When we deployed', 'When we rolled out', 'When we launched', 'When we built'\n"
-                "- 'When an AI model', 'When a platform team', 'When the platform team'\n"
-                "- 'Imagine you are', \"Imagine you're\", 'Imagine a startup', 'Imagine running'\n"
-                "- 'Consider a scenario', 'Let me paint a picture', 'Let me be clear'\n"
-                "NOTE: An opener starting with a company name, statistic, or news fact is NOT banned.\n\n"
+                # ── THE ONE STORY-LEVEL REVISE CONDITION ──────────────────────────
+                "## SET verdict=REVISE only if ALL THREE of the following are true simultaneously:\n"
+                "1. NO genuine intellectual clash — every persona reaches the same "
+                "conclusion with no direct contradiction between any two voices.\n"
+                "   A real clash: Persona A says 'X reduces complexity'; "
+                "Persona B says 'X moves complexity underneath, not removes it'.\n"
+                "   NOT a clash: 'creates opportunity' + 'but there are challenges'.\n"
+                "2. COMPLETELY GENERIC — the entire post could apply word-for-word to "
+                "any other AI news story, with zero article-specific claims or names.\n"
+                "3. ZERO GROUNDED FACTS — not one claim can be traced to the source.\n\n"
+                "If even ONE of the three is NOT true → verdict=PASS.\n\n"
 
-                "### BANNED INLINE PHRASES — INSTANT FAIL (EXACT MATCHES ONLY):\n"
-                "- 'the real question' (exact), 'the real challenge' (exact), 'the real issue' (exact)\n"
-                "- 'the real problem' (exact), 'the real bottleneck' (exact), 'the real risk' (exact)\n"
-                "- 'the real shift' (exact), 'the real concern' (exact), 'the real opportunity' (exact)\n"
-                "NOTE: 'the primary issue', 'the main issue', 'the underlying issue' are NOT banned.\n"
-                "NOTE: 'If I were a board member' is NOT banned — it is a legitimate business framing.\n"
-                "NOTE: 'When the platform team' as an inline sentence (not opener) is NOT banned.\n"
-                "- 'in the end,' (exact phrase at start of sentence), 'at the end of the day' (exact)\n"
-                "- 'it remains to be seen', 'only time will tell', 'what remains to be seen'\n"
-                "- 'sounds great, but', 'sounds promising, but', 'sounds great on paper'\n"
-                "- 'the potential here is', 'the promise is great'\n\n"
+                # ── ONLY REMAINING PHRASE CHECK ───────────────────────────────────
+                "## ALSO set verdict=REVISE (without requiring the three above) if:\n"
+                "- The post mentions 'EU AI Act', 'GDPR', or 'AI Act' and the source "
+                "article is NOT explicitly about EU regulation.\n\n"
 
-                "### GENERIC AI LANGUAGE — INSTANT FAIL (makes the post sound like a news summary):\n"
-                "- 'this is a game changer', 'game-changing', 'is game-changing'\n"
-                "- 'this is promising', 'sounds promising'\n"
-                "- 'the future of ai', 'the future of [any topic]'\n"
-                "- 'however, there are challenges', 'but there are challenges'\n"
-                "- 'this raises important questions'\n"
-                "- 'ai is changing everything', 'ai is transforming'\n"
-                "- 'this could be revolutionary', 'is revolutionary', 'revolutionize'\n"
-                "- 'has the potential to transform', 'will fundamentally change'\n"
-                "- 'this is a major step forward', 'this is a significant step'\n"
-                "- 'marks a significant milestone', 'marks a major milestone'\n"
-                "- 'this is a watershed moment', 'this changes everything'\n\n"
-
-                "### WRONG-CONTEXT REGULATION — INSTANT FAIL:\n"
-                "- 'Under the EU AI Act', 'Under GDPR', 'Under the AI Act' unless the article is explicitly about EU regulation\n\n"
-
-                "## STORY QUALITY — ALSO REJECT (set verdict=REVISE) if:\n"
-                "1. All personas reach the same conclusion — no genuine intellectual clash between at least 2 voices.\n"
-                "   A clash requires: Persona A asserts X; Persona B directly contradicts X with a specific counter-claim.\n"
-                "   Persona A saying 'this creates opportunity' and Persona B saying 'but there are challenges' is NOT a clash.\n"
-                "   A real clash: 'One platform reduces tool sprawl' vs 'Integration moves the complexity underneath the platform'.\n"
-                "2. The entire post applies word-for-word to ANY other AI news story (completely generic).\n"
-                "3. Zero factual claims are traceable to the specific source article.\n"
-                "Do NOT reject unless ALL THREE conditions above are met simultaneously.\n\n"
-
-                "## NARRATIVE QUALITY — ADVISORY (do NOT force REVISE for these alone, but note in critique):\n"
-                "- Does the post read as a story with narrative progression, or as 4 parallel opinions?\n"
-                "- Does the hook create tension (conflict between two forces), or just announce news?\n"
-                "- Does each persona explicitly react to the previous voice, or speak independently?\n"
-                "- Does the closing question have genuine discomfort (no obvious answer)?\n\n"
-
-                "## PASS requires ALL of:\n"
-                "- Zero EXACT banned openers or inline phrases from the lists above\n"
-                "- Zero generic AI language phrases from the list above\n"
-                "- At least one concrete, article-specific claim in any persona\n"
-                "- Genuine disagreement (direct contradiction) between at least 2 personas\n\n"
-
-                "Return a JSON object with this EXACT schema — no extra keys:\n"
+                # ── OUTPUT SCHEMA ─────────────────────────────────────────────────
+                "Return ONLY this JSON — no preamble, no extra keys:\n"
                 "{{\n"
-                '  "factuality_score": float,\n'
-                '  "editorial_quality_score": float,\n'
-                '  "has_stock_boilerplate": bool,\n'
-                '  "has_throat_clearing": bool,\n'
+                '  "factuality_score": float between 0.0 and 1.0,\n'
+                '  "editorial_quality_score": float between 0.0 and 1.0,\n'
+                '  "has_stock_boilerplate": false,\n'
+                '  "has_throat_clearing": false,\n'
                 '  "is_boring_or_repetitive": bool,\n'
                 '  "has_genuine_conflict": bool,\n'
                 '  "narrative_has_progression": bool,\n'
-                '  "critique": "name the exact offending phrase or sentence",\n'
+                '  "critique": "exact failing sentence quoted verbatim, or empty string",\n'
                 '  "verdict": "PASS" or "REVISE"\n'
                 "}}"
             ),
@@ -170,8 +136,7 @@ class EvaluationAgent:
                 "human",
                 "Source News & Facts:\n{source_text}\n\n"
                 "Generated Debate Post:\n{generated_text}\n\n"
-                "IMPORTANT: Scan line by line for banned phrases FIRST. "
-                "A single banned phrase is an automatic REVISE — do not average it out. "
+                "Evaluate story quality only (conflict, specificity, grounded facts). "
                 "Return JSON only, no preamble."
             ),
         ])
