@@ -116,19 +116,42 @@ class EvaluationAgent:
                 "- 'sounds great, but', 'sounds promising, but', 'sounds great on paper'\n"
                 "- 'the potential here is', 'the promise is great'\n\n"
 
+                "### GENERIC AI LANGUAGE — INSTANT FAIL (makes the post sound like a news summary):\n"
+                "- 'this is a game changer', 'game-changing', 'is game-changing'\n"
+                "- 'this is promising', 'sounds promising'\n"
+                "- 'the future of ai', 'the future of [any topic]'\n"
+                "- 'however, there are challenges', 'but there are challenges'\n"
+                "- 'this raises important questions'\n"
+                "- 'ai is changing everything', 'ai is transforming'\n"
+                "- 'this could be revolutionary', 'is revolutionary', 'revolutionize'\n"
+                "- 'has the potential to transform', 'will fundamentally change'\n"
+                "- 'this is a major step forward', 'this is a significant step'\n"
+                "- 'marks a significant milestone', 'marks a major milestone'\n"
+                "- 'this is a watershed moment', 'this changes everything'\n\n"
+
                 "### WRONG-CONTEXT REGULATION — INSTANT FAIL:\n"
                 "- 'Under the EU AI Act', 'Under GDPR', 'Under the AI Act' unless the article is explicitly about EU regulation\n\n"
 
-                "## ALSO REJECT (set verdict=REVISE) if ALL THREE of these are true simultaneously:\n"
+                "## STORY QUALITY — ALSO REJECT (set verdict=REVISE) if:\n"
                 "1. All personas reach the same conclusion — no genuine intellectual clash between at least 2 voices.\n"
+                "   A clash requires: Persona A asserts X; Persona B directly contradicts X with a specific counter-claim.\n"
+                "   Persona A saying 'this creates opportunity' and Persona B saying 'but there are challenges' is NOT a clash.\n"
+                "   A real clash: 'One platform reduces tool sprawl' vs 'Integration moves the complexity underneath the platform'.\n"
                 "2. The entire post applies word-for-word to ANY other AI news story (completely generic).\n"
                 "3. Zero factual claims are traceable to the specific source article.\n"
-                "Do NOT reject for generic truisms unless ALL THREE conditions above are met.\n\n"
+                "Do NOT reject unless ALL THREE conditions above are met simultaneously.\n\n"
+
+                "## NARRATIVE QUALITY — ADVISORY (do NOT force REVISE for these alone, but note in critique):\n"
+                "- Does the post read as a story with narrative progression, or as 4 parallel opinions?\n"
+                "- Does the hook create tension (conflict between two forces), or just announce news?\n"
+                "- Does each persona explicitly react to the previous voice, or speak independently?\n"
+                "- Does the closing question have genuine discomfort (no obvious answer)?\n\n"
 
                 "## PASS requires ALL of:\n"
                 "- Zero EXACT banned openers or inline phrases from the lists above\n"
+                "- Zero generic AI language phrases from the list above\n"
                 "- At least one concrete, article-specific claim in any persona\n"
-                "- Genuine disagreement between at least 2 personas\n\n"
+                "- Genuine disagreement (direct contradiction) between at least 2 personas\n\n"
 
                 "Return a JSON object with this EXACT schema — no extra keys:\n"
                 "{{\n"
@@ -137,6 +160,8 @@ class EvaluationAgent:
                 '  "has_stock_boilerplate": bool,\n'
                 '  "has_throat_clearing": bool,\n'
                 '  "is_boring_or_repetitive": bool,\n'
+                '  "has_genuine_conflict": bool,\n'
+                '  "narrative_has_progression": bool,\n'
                 '  "critique": "name the exact offending phrase or sentence",\n'
                 '  "verdict": "PASS" or "REVISE"\n'
                 "}}"
@@ -269,12 +294,15 @@ class EvaluationAgent:
 
             judge_data = json.loads(clean_json)
             logger.info(
-                "[%s] llm_judge review article=%s verdict=%s quality=%.2f boilerplate=%s throat_clearing=%s critique='%s'",
+                "[%s] llm_judge review article=%s verdict=%s quality=%.2f boilerplate=%s "
+                "throat_clearing=%s conflict=%s narrative=%s critique='%s'",
                 run_id or "?", summary.article_id,
                 judge_data.get("verdict", "PASS"),
                 judge_data.get("editorial_quality_score", 0.0),
                 judge_data.get("has_stock_boilerplate", False),
                 judge_data.get("has_throat_clearing", False),
+                judge_data.get("has_genuine_conflict", True),
+                judge_data.get("narrative_has_progression", True),
                 judge_data.get("critique", ""),
             )
 

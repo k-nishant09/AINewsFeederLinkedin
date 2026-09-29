@@ -1,15 +1,26 @@
 """
 Comic Strip Generator for AIFeeders — 6-Scene Conversational Story Format.
-v3 — storytelling conversation design:
-  • Each panel has a sequence badge (①②③…) for reading-order clarity
-  • Cross-panel connector arrows show the reply chain between panels
-  • Speech bubble tails point TOWARD the previous speaker (reply direction)
-  • Listener ghost — faded avatar of the person being replied to sits in the far corner
-  • Quote-reply strip styled as a chat thread reply (thick accent border, tinted)
-  • Panels flow as a living conversation, not isolated monologues
+v4 — unified News Card + Debate image (News -> Analysis -> Discussion):
 
-STORY GRAMMAR (fixed narrative logic, dynamic cast):
-─────────────────────────────────────────────────────
+SINGLE HERO IMAGE design — one image does both jobs:
+  • Top 40% = NEWS CARD   — What happened? (headline, facts, source)
+  • Bottom 60% = DEBATE   — What does it mean? (6-scene linked conversation)
+
+The image is NOT two competing frames. It is one story with two layers:
+  NEWS CARD tells facts -> the debate unpacks consequences -> caption drives discussion.
+
+This eliminates the two-image problem: LinkedIn only guarantees the first image
+is seen in feed preview. A single image ensures nobody misses the "news" half.
+
+NEWS CARD layer (inside the same image, top section):
+  • Dark header band: brand + "AI NEWS" badge
+  • Bold headline (dominant, 2 lines max)
+  • Subhead (tension / why now)
+  • Yellow fact chips: 3-5 key numbers/claims from the article
+  • Source attribution
+  • "NEWS -> WHAT IT MEANS" transition tag bridges both layers
+
+DEBATE layer (6 panels, 3 x 2 grid):
   Scene 1  MEDIA HOST — news brief + introduces the 4 named personas
   Scene 2  Persona A  — opens the debate (opportunity angle)
   Scene 3  Persona B  — replies to A (production-reality pushback)
@@ -17,21 +28,14 @@ STORY GRAMMAR (fixed narrative logic, dynamic cast):
   Scene 5  Persona D  — replies to C (second-order effect / governance)
   Scene 6  MEDIA HOST — synthesises + poses the audience question
 
-OUTSIDE the image (LinkedIn post text):
-  🔗 Source: <name> — <url>                (only if available)
+OUTSIDE the image (LinkedIn post caption):
+  Three jobs — none overlap with the image:
+    Hook     — stop the scroll (2 punchy lines, new angle not in the image)
+    Voices   — single line per persona with their core constraint
+    CTA      — one audience question + source link + disclaimer + hashtags
 
-  🎙️ <HostName> — To the Audience:
-  <audience_question>
-
-  Where do you stand? Drop your take below 👇
-
-  ⚠️ Perspectives are AI-simulated — not professional advice.
-  🤖 AIFeeders · Daily AI Intelligence · Powered by Jev
-
-  #Dynamic #Hashtags
-
-Layout: 3 columns × 2 rows.
-SVG → PNG via cairosvg → rsvg-convert → inkscape → .svg fallback.
+Layout: 3 columns × 2 rows panels under the news card header.
+SVG -> PNG via cairosvg -> rsvg-convert -> inkscape -> .svg fallback.
 """
 from __future__ import annotations
 
@@ -52,10 +56,15 @@ COLS     = 3
 ROWS     = 2
 BORDER   = 3
 PAD      = 12
-HEADER_H = 148        # brand row (48px) + divider + headline (2×34px) + subhead (22px) = 148
+# NEWS CARD header breakdown:
+#   brand row (48px) + divider (8px) + headline (2 x 34px = 68px) +
+#   subhead (26px) + fact-chip row (46px) + source row (24px) +
+#   divider + bridge tag (26px) + bottom-padding (14px) = 260px
+HEADER_H = 260
+FOOTER_H = 54         # closing brand/CTA bar under the last row of panels
 
-TOTAL_W = PANEL_W * COLS                 # 1440
-TOTAL_H = PANEL_H * ROWS + HEADER_H     # 888
+TOTAL_W = PANEL_W * COLS                        # 1440
+TOTAL_H = PANEL_H * ROWS + HEADER_H + FOOTER_H  # 1054
 
 # ── Palette ───────────────────────────────────────────────────────────────────
 BG          = "#FFFFFF"
@@ -86,7 +95,7 @@ _HAIR: dict[str, str] = {
 }
 _BADGE: dict[str, str] = {
     "media": "🎙️", "business": "💼", "linkedin": "🧑‍💻",
-    "genz": "⚖️", "policy": "🏛️",
+    "genz": "📊", "policy": "🏛️",
 }
 
 
@@ -595,83 +604,214 @@ def _render_scene(px: int, py: int, scene: ComicScene, scene_idx: int = 0) -> st
 
 # ── Full comic strip render ───────────────────────────────────────────────────
 
-def _render_comic(headline: str, subhead: str, scenes: list[ComicScene],
-                  brand: str = "AIFeeders") -> str:
-    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" '
-           f'width="{TOTAL_W}" height="{TOTAL_H}" viewBox="0 0 {TOTAL_W} {TOTAL_H}">\n')
-    svg += f'<rect width="{TOTAL_W}" height="{TOTAL_H}" fill="{BG}"/>\n'
+def _news_card_header(
+    headline: str,
+    subhead: str,
+    facts: list[str] | None,
+    source_name: str,
+    brand: str,
+) -> str:
+    """
+    Render the full NEWS CARD section that occupies the top HEADER_H pixels.
 
-    # ── Header dark background ─────────────────────────────────────────────────
+    Visual hierarchy (top to bottom):
+      1. Brand row: logo + name + tagline + "AI NEWS" badge        ~48 px
+      2. Thin divider                                               ~8 px
+      3. Headline (1-2 lines, dominant)                           ~68 px
+      4. Subhead / tension line                                    ~26 px
+      5. Fact chips row (key numbers)                              ~46 px
+      6. Source attribution                                        ~24 px
+      7. Horizontal divider                                        ~8 px
+      8. "NEWS  ──  WHAT IT MEANS ↓" bridge tag                  ~26 px
+      Total: ~254 px (fits inside HEADER_H = 260)
+    """
+    svg = ""
+
+    # ── Background gradient ──────────────────────────────────────────────────
     svg += f'<rect x="0" y="0" width="{TOTAL_W}" height="{HEADER_H}" fill="{HEADER_BG}"/>\n'
-    # Left accent stripe
+    # Subtle blue radial glow — top-left origin, creates depth
+    svg += (f'<radialGradient id="hdrGlow" cx="8%" cy="0%" r="70%">'
+            f'<stop offset="0%" stop-color="#2563EB" stop-opacity="0.22"/>'
+            f'<stop offset="100%" stop-color="#2563EB" stop-opacity="0"/>'
+            f'</radialGradient>\n')
+    svg += f'<rect x="0" y="0" width="{TOTAL_W}" height="{HEADER_H}" fill="url(#hdrGlow)"/>\n'
+    # Left accent stripe — the visual anchor that ties brand row to panels
     svg += f'<rect x="0" y="0" width="8" height="{HEADER_H}" fill="#2563EB"/>\n'
 
-    # ── BRAND ROW — occupies top 48px ─────────────────────────────────────────
-    svg += f'<rect x="18" y="10" width="40" height="40" rx="8" fill="#2563EB"/>\n'
+    # ── "AI NEWS" live badge — top-right corner ──────────────────────────────
+    bw, bh = 108, 30
+    bx, by = TOTAL_W - bw - 20, 14
+    svg += (f'<rect x="{bx}" y="{by}" width="{bw}" height="{bh}" rx="{bh / 2}" '
+            f'fill="#DC2626"/>\n')
+    # Pulsing live dot
+    svg += (f'<circle cx="{bx + 16}" cy="{by + bh // 2}" r="4" fill="#FFFFFF">'
+            f'<animate attributeName="opacity" values="1;0.3;1" dur="1.6s" repeatCount="indefinite"/>'
+            f'</circle>\n')
+    svg += (f'<text x="{bx + 28}" y="{by + bh // 2 + 5}" '
+            f'font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="900" '
+            f'letter-spacing="1" fill="#FFFFFF">AI NEWS</text>\n')
+
+    # ── Brand row ─────────────────────────────────────────────────────────────
+    svg += f'<rect x="18" y="10" width="40" height="40" rx="10" fill="#2563EB"/>\n'
     svg += (f'<text x="38" y="35" text-anchor="middle" '
             f'font-family="Arial,Helvetica,sans-serif" font-size="22" fill="#FFFFFF">🧠</text>\n')
     svg += (f'<text x="68" y="38" font-family="Arial Black,Arial,Helvetica,sans-serif" '
             f'font-size="26" font-weight="900" letter-spacing="2.5" fill="#FFFFFF">'
-            f'{brand.upper()}</text>\n')
-    brand_px = 68 + len(brand) * 20 + 16
-    svg += (f'<text x="{brand_px}" y="38" font-family="Arial,Helvetica,sans-serif" '
+            f'{html.escape(brand.upper())}</text>\n')
+    brand_end_x = 68 + len(brand) * 20 + 16
+    svg += (f'<text x="{brand_end_x}" y="38" font-family="Arial,Helvetica,sans-serif" '
             f'font-size="16" font-weight="bold" letter-spacing="0.8" fill="#60A5FA">'
             f'·  ONE NEWS.  MULTIPLE REAL-WORLD VOICES.</text>\n')
 
-    # Divider between brand row and headline
-    svg += (f'<line x1="18" y1="56" x2="{TOTAL_W - 18}" y2="56" '
+    # Divider below brand row
+    div1_y = 56
+    svg += (f'<line x1="18" y1="{div1_y}" x2="{TOTAL_W - 18}" y2="{div1_y}" '
             f'stroke="#2563EB" stroke-width="1.5" opacity="0.35"/>\n')
 
-    # ── HEADLINE ──────────────────────────────────────────────────────────────
-    hl_lines = _wrap(headline, cols=50)[:2]
-    hl_fs    = 34 if len(hl_lines) == 1 else 28
-    hl_lh    = hl_fs + 8
+    # ── Headline — dominant, scroll-stopping ──────────────────────────────────
+    hl_start_y = div1_y + 10
+    hl_lines = _wrap(headline, cols=52)[:2]
+    hl_fs    = 36 if len(hl_lines) == 1 else 29
+    hl_lh    = hl_fs + 9
     for i, ln in enumerate(hl_lines):
-        svg += (f'<text x="18" y="{72 + i * hl_lh}" '
+        svg += (f'<text x="18" y="{hl_start_y + hl_fs + i * hl_lh}" '
                 f'font-family="Arial Black,Arial,Helvetica,sans-serif" '
                 f'font-size="{hl_fs}" font-weight="900" fill="{HEADER_TEXT}">'
                 f'{html.escape(ln)}</text>\n')
+    hl_end_y = hl_start_y + len(hl_lines) * hl_lh + 4
 
-    # ── SUBHEAD ───────────────────────────────────────────────────────────────
+    # ── Subhead — tension / why now ───────────────────────────────────────────
+    cursor_y = hl_end_y
     if subhead:
-        sub_y = 72 + len(hl_lines) * hl_lh + 6
-        svg += (f'<text x="18" y="{min(sub_y, HEADER_H - 8)}" '
+        svg += (f'<text x="18" y="{cursor_y + 22}" '
                 f'font-family="Arial,Helvetica,sans-serif" '
                 f'font-size="18" fill="#FCD34D">'
-                f'{html.escape(subhead[:115])}</text>\n')
+                f'{html.escape(subhead[:118])}</text>\n')
+        cursor_y += 30
 
-    # ── Panels + cross-panel connector arrows ─────────────────────────────────
-    # Render all panels first, then overlay the connector arrows on top so they
-    # sit in the gutter between panels rather than under the panel borders.
+    # ── Fact chips — the "what happened in numbers" news-card layer ───────────
+    # Each fact is a yellow pill with bold dark text — scannable at a glance.
+    cursor_y += 8
+    if facts:
+        cx_ = 18
+        max_x = TOTAL_W - 20
+        chip_h = 32
+        for fact in facts[:5]:
+            fact = fact.strip()
+            if not fact:
+                continue
+            chip_w = min(len(fact) * 9 + 28, 320)
+            if cx_ + chip_w > max_x:
+                # wrap would go off-canvas — stop here rather than wrapping
+                break
+            svg += (f'<rect x="{cx_}" y="{cursor_y}" width="{chip_w}" height="{chip_h}" '
+                    f'rx="{chip_h / 2}" fill="#FCD34D"/>\n')
+            svg += (f'<text x="{cx_ + chip_w / 2:.0f}" y="{cursor_y + 22}" '
+                    f'text-anchor="middle" font-family="Arial,Helvetica,sans-serif" '
+                    f'font-size="14" font-weight="900" fill="#0F172A">'
+                    f'{html.escape(fact)}</text>\n')
+            cx_ += chip_w + 10
+        cursor_y += chip_h + 6
+
+    # ── Source attribution ────────────────────────────────────────────────────
+    if source_name:
+        cursor_y += 4
+        svg += (f'<text x="18" y="{cursor_y + 16}" '
+                f'font-family="Arial,Helvetica,sans-serif" font-size="14" '
+                f'font-weight="bold" fill="#94A3B8" letter-spacing="0.5">'
+                f'SOURCE: {html.escape(source_name.upper()[:30])}</text>\n')
+        cursor_y += 22
+
+    # ── Horizontal divider — visually separates NEWS CARD from DEBATE ─────────
+    cursor_y += 6
+    div2_y = cursor_y
+    svg += (f'<line x1="0" y1="{div2_y}" x2="{TOTAL_W}" y2="{div2_y}" '
+            f'stroke="#2563EB" stroke-width="2" opacity="0.5"/>\n')
+
+    # ── Bridge tag — teaches the reader the format in one glance ─────────────
+    tag_y = div2_y + 6
+    svg += (f'<text x="18" y="{tag_y + 14}" font-family="Arial,Helvetica,sans-serif" '
+            f'font-size="13" font-weight="bold" letter-spacing="1.8" '
+            f'fill="#2563EB" opacity="0.80">NEWS CARD</text>\n')
+    mid_x = TOTAL_W // 2
+    svg += (f'<text x="{mid_x}" y="{tag_y + 14}" text-anchor="middle" '
+            f'font-family="Arial,Helvetica,sans-serif" font-size="13" '
+            f'font-weight="bold" letter-spacing="1.5" fill="#60A5FA" opacity="0.80">'
+            f'━━━  WHAT IT MEANS  ↓  ━━━</text>\n')
+    svg += (f'<text x="{TOTAL_W - 18}" y="{tag_y + 14}" text-anchor="end" '
+            f'font-family="Arial,Helvetica,sans-serif" font-size="13" '
+            f'font-weight="bold" letter-spacing="1.8" '
+            f'fill="#2563EB" opacity="0.80">DEBATE</text>\n')
+
+    return svg
+
+
+def _render_comic(
+    headline:    str,
+    subhead:     str,
+    scenes:      list[ComicScene],
+    brand:       str = "AIFeeders",
+    facts:       list[str] | None = None,
+    source_name: str = "",
+) -> str:
+    """Render the full AIFeeders comic SVG: News Card header + 6 debate panels + footer."""
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" '
+           f'width="{TOTAL_W}" height="{TOTAL_H}" viewBox="0 0 {TOTAL_W} {TOTAL_H}">\n')
+
+    # Reusable filter defs — soft shadow on panels and badges
+    svg += (
+        '<defs>\n'
+        '<filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">'
+        '<feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#0F172A" flood-opacity="0.18"/>'
+        '</filter>\n'
+        '<filter id="badgeShadow" x="-50%" y="-50%" width="200%" height="200%">'
+        '<feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#000000" flood-opacity="0.35"/>'
+        '</filter>\n'
+        '</defs>\n'
+    )
+
+    svg += f'<rect width="{TOTAL_W}" height="{TOTAL_H}" fill="{BG}"/>\n'
+
+    # ── News Card header (top 40%) ─────────────────────────────────────────────
+    svg += _news_card_header(headline, subhead, facts, source_name, brand)
+
+    # ── Debate panels (middle 54%) ─────────────────────────────────────────────
     for i, scene in enumerate(scenes[:6]):
         col, row = i % COLS, i // COLS
         px, py   = col * PANEL_W, HEADER_H + row * PANEL_H
         svg += _render_scene(px, py, scene, scene_idx=i)
 
-    # Connector arrows drawn AFTER all panels — sit in the inter-panel gutters
-    for i in range(5):   # arrows between panels 0→1, 1→2, 2→3, 3→4, 4→5
+    # Connector arrows drawn AFTER panels — sit in the inter-panel gutters
+    for i in range(5):
         col, row = i % COLS, i // COLS
         px, py   = col * PANEL_W, HEADER_H + row * PANEL_H
         next_scene = scenes[i + 1] if i + 1 < len(scenes) else None
         arr_c = ACCENT.get(next_scene.persona, HEADER_BG) if next_scene else HEADER_BG
 
         if col < COLS - 1:
-            # Right-pointing chevron arrow in the gutter between panels
-            # Centre it on the right border of panel i
-            ax = px + PANEL_W              # the panel border x
+            ax = px + PANEL_W
             ay = py + PANEL_H // 2
-            # White backing circle so arrow pops over both panel borders
             svg += (f'<circle cx="{ax}" cy="{ay}" r="13" fill="#FFFFFF" opacity="0.92"/>\n')
             svg += (f'<polygon points="{ax + 10},{ay} {ax - 4},{ay - 8} {ax - 4},{ay + 8}" '
                     f'fill="{arr_c}" opacity="0.80"/>\n')
         elif col == COLS - 1:
-            # Down-pointing chevron arrow in the gutter between rows
-            # Centre it horizontally on the full strip
             ax = TOTAL_W // 2
-            ay = py + PANEL_H              # bottom border of row 0
+            ay = py + PANEL_H
             svg += (f'<circle cx="{ax}" cy="{ay}" r="13" fill="#FFFFFF" opacity="0.92"/>\n')
             svg += (f'<polygon points="{ax},{ay + 10} {ax - 8},{ay - 4} {ax + 8},{ay - 4}" '
                     f'fill="{arr_c}" opacity="0.80"/>\n')
+
+    # ── Closing footer bar (bottom 5%) ─────────────────────────────────────────
+    fy = HEADER_H + PANEL_H * ROWS
+    svg += f'<rect x="0" y="{fy}" width="{TOTAL_W}" height="{FOOTER_H}" fill="{HEADER_BG}"/>\n'
+    svg += f'<rect x="0" y="{fy}" width="8" height="{FOOTER_H}" fill="#2563EB"/>\n'
+    svg += (f'<text x="20" y="{fy + FOOTER_H // 2 + 5}" '
+            f'font-family="Arial,Helvetica,sans-serif" font-size="15" '
+            f'font-weight="bold" fill="#F8FAFC">'
+            f'🤖 AIFeeders · Daily AI Intelligence</text>\n')
+    svg += (f'<text x="{TOTAL_W - 20}" y="{fy + FOOTER_H // 2 + 5}" text-anchor="end" '
+            f'font-family="Arial,Helvetica,sans-serif" font-size="15" '
+            f'font-weight="bold" fill="#FCD34D">Where do you stand? 👇</text>\n')
 
     svg += "</svg>\n"
     return svg
@@ -752,6 +892,9 @@ class ComicScript:
     hashtags:          list[str] = field(default_factory=list)
     source_url:        str = ""
     source_name:       str = ""
+    # Key facts extracted from the article — rendered as yellow chips in the News Card.
+    # Format: short strings like "$42B NET LOSS", "$4.6B REVENUE", "$518B CLOUD CAPEX"
+    facts:             list[str] = field(default_factory=list)
     choices:           list[str] = field(default_factory=list)  # backwards-compat
 
 
@@ -822,71 +965,113 @@ def build_scenes(script: ComicScript) -> list[ComicScene]:
 
 # ── Outside-image LinkedIn post text ─────────────────────────────────────────
 
-def _clean_summary_point(text: str) -> str:
-    """Extract a punchy single sentence from a persona's line for the caption teaser."""
+def _clean_summary_point(text: str, max_len: int = 200) -> str:
+    """
+    Extract one complete sentence from a persona's voice line for the caption.
+
+    Rules:
+    - Always return a complete sentence (ends with . ! or ?).
+    - If the first sentence is ≤ max_len chars, return it in full — no truncation.
+    - If the first sentence is longer than max_len, try the second sentence instead.
+    - Only truncate with … as a last resort when even the shortest available
+      sentence exceeds max_len.
+    - Never return a sentence that ends mid-word with ….
+    """
+    import re as _re_sp
     cleaned = (text or "").strip().strip('"').strip()
     if not cleaned:
         return ""
-    # Extract the first complete sentence
-    for i, c in enumerate(cleaned):
-        if c in ".!?" and i >= 20:
-            sentence = cleaned[: i + 1].strip()
-            # If the sentence ends with a question that directs the next speaker, strip it or use it
-            if len(sentence) <= 120:
-                return sentence
-            return sentence[:118].rsplit(" ", 1)[0] + "…"
-    if len(cleaned) > 110:
-        return cleaned[:108].rsplit(" ", 1)[0] + "…"
-    return cleaned
+
+    # Split into complete sentences at . ! ?
+    # Keep the delimiter attached to the sentence (lookahead split)
+    sentences = [s.strip() for s in _re_sp.split(r"(?<=[.!?])\s+", cleaned) if s.strip()]
+    if not sentences:
+        return cleaned[:max_len]
+
+    # Return the first sentence that is ≤ max_len — in full, untruncated
+    for s in sentences[:3]:
+        if len(s) <= max_len:
+            return s
+
+    # All candidate sentences are longer than max_len — truncate the shortest one
+    shortest = min(sentences[:3], key=len)
+    cut = shortest[:max_len].rsplit(" ", 1)[0].rstrip(" .,;—–")
+    return cut + "…"
 
 
 def build_outside_post(script: ComicScript) -> str:
     """
-    LinkedIn post caption — news summary + 4 persona angles + host decision question + footer + hashtags.
+    LinkedIn post caption — AIFeeders 3-part format.
 
-    Architecture rules:
-      • Specificity + relevance + professional decision conversation.
-      • Structure:
-          1. Hook & News Summary (what happened + core tension)
-          2. 4 Professional Angles (concise 1-line takeaways from the cast)
-          3. Host Decision Question (concrete trade-offs + prompt for reader experience)
-          4. Source · disclaimer · brand footer · hashtags (max 3-4 focused tags)
+    The caption has exactly three jobs that do NOT overlap with the image:
+
+      PART 1 — HOOK (stop the scroll)
+        Two punchy lines about the news. NOT the headline repeated.
+        Line 1: a key fact/number that surprises (from facts chips if available).
+        Line 2: the tension / why it matters (central_tension).
+
+      PART 2 — VOICES (one line per persona, conflict chain)
+        Each voice gets one sentence: their core constraint.
+        Reads as a chain. Creates "I want to see what they said" pull.
+
+      PART 3 — CTA (drive discussion)
+        Host question + source link + disclaimer + hashtags.
+
+    The image contains the full debate. The caption never repeats it.
     """
     import re as _re_p
 
     lines: list[str] = []
 
-    # ── 1. News summary & Hook ───────────────────────────────────────────────
-    brief = script.news_brief.strip()
+    # ── PART 1: HOOK — fact anchor + tension ─────────────────────────────────
+    facts   = getattr(script, "facts", []) or []
+    tension = (script.central_tension or "").strip()
+    brief   = (script.news_brief or "").strip()
     brief_sentences = [s.strip() for s in _re_p.split(r"(?<=[.!?])\s+", brief) if s.strip()]
-    summary_lines = brief_sentences[:2] if brief_sentences else [script.headline]
-    for sl in summary_lines:
-        lines.append(sl)
+
+    # Line 1: key fact (stops the scroll with a number) or first brief sentence
+    if facts:
+        fact_hook = ". ".join(f.strip() for f in facts[:2]) + "."
+        lines.append(fact_hook)
+    elif brief_sentences:
+        lines.append(brief_sentences[0])
+    else:
+        lines.append(script.headline)
+
+    # Line 2: the tension / dilemma
+    if tension:
+        lines.append(tension)
+    elif len(brief_sentences) > 1:
+        lines.append(brief_sentences[1])
     lines.append("")
 
-    # ── 2. Persona Perspectives Summary ──────────────────────────────────────
+    # ── PART 2: VOICES — conflict chain, one line each ────────────────────────
     if script.cast and len(script.cast) >= 4:
-        lines.append("Our four voices looked at the same question from different angles:")
-        lines.append("")
         voice_lines = [
             script.voice1_line,
             script.voice2_line,
             script.voice3_line,
             script.voice4_line,
         ]
+        lines.append("AIFeeders asked four voices to look at the same story:")
+        lines.append("")
         for p, vline in zip(script.cast[:4], voice_lines):
             summary_pt = _clean_summary_point(vline)
             if summary_pt:
-                lines.append(f"{p.emoji} **{p.role}:** {summary_pt}")
+                lines.append(f"{p.emoji} {p.name} ({p.role}): {summary_pt}")
+        lines.append("")
+        lines.append("Their answers don't completely agree.")
+        lines.append("That's exactly the point.")
         lines.append("")
 
-    # ── 3. Host question with labelled choices ────────────────────────────────
-    lines.append(f"🎙️ **{script.host_name} — Media Host**")
+    # ── PART 3: CTA — host question + source + disclaimer + hashtags ──────────
+    lines.append(f"🎙️ {script.host_name} — THE AIFEEDERS QUESTION:")
     lines.append("")
-    lines.append(script.audience_question.strip())
+    audience_q = (script.audience_question or "").strip()
+    if audience_q:
+        lines.append(audience_q)
+    lines.append("")
 
-    # ── 4. Source ─────────────────────────────────────────────────────────────
-    lines.append("")
     if script.source_name and script.source_url:
         lines.append(f"📰 Source: {script.source_name}")
         lines.append(f"🔗 {script.source_url}")
@@ -895,14 +1080,12 @@ def build_outside_post(script: ComicScript) -> str:
     elif script.source_name:
         lines.append(f"📰 Source: {script.source_name}")
 
-    # ── 5. Disclaimer + brand footer ─────────────────────────────────────────
     lines += [
         "",
         "⚠️ Perspectives are AI-simulated for discussion — not professional advice.",
         "🤖 AIFeeders · Daily AI Intelligence · Powered by Jev",
     ]
 
-    # ── 6. Dynamic hashtags (max 3-4 tags) ───────────────────────────────────
     if script.hashtags:
         lines += ["", " ".join(h if h.startswith("#") else f"#{h}" for h in script.hashtags[:4])]
     else:
@@ -922,10 +1105,17 @@ def generate_comic_from_script(
     """Render a ComicScript to PNG (or SVG fallback).
 
     ``subhead`` defaults to ``script.central_tension`` when not explicitly provided.
+    Passes ``script.facts`` and ``script.source_name`` to the News Card header.
     """
     effective_subhead = subhead or script.central_tension or ""
     scenes   = build_scenes(script)
-    svg_str  = _render_comic(script.headline, effective_subhead, scenes)
+    svg_str  = _render_comic(
+        script.headline,
+        effective_subhead,
+        scenes,
+        facts       = list(script.facts) if script.facts else None,
+        source_name = script.source_name or "",
+    )
     uid      = run_id or uuid.uuid4().hex[:8].upper()
     out_path = Path(out_dir) / f"aifeeders_comic_{uid}.png"
     return _svg_to_png(svg_str, out_path)
@@ -980,7 +1170,7 @@ _ROLE_LABELS: dict[str, str] = {
     "policy":   "AI Policy Lead",
 }
 _PERSONA_EMOJI: dict[str, str] = {
-    "business": "💼", "linkedin": "🧑‍💻", "genz": "⚖️", "policy": "🏛️",
+    "business": "💼", "linkedin": "🧑‍💻", "genz": "📊", "policy": "🏛️",
 }
 
 
@@ -1091,6 +1281,67 @@ def _extract_dynamic_tags(
     return found_tags[:max_tags]
 
 
+def _derive_facts_from_summary(summary) -> list[str]:
+    """
+    Extract 3–5 short fact-chip strings from the news summary for the News Card.
+
+    Extraction priority:
+      1. Intelligence judgment.facts (verified numbers/claims from Jev)
+      2. Key points — first number-bearing clause from each point
+      3. Headline — any numeric token as a last-resort chip
+
+    Chip format: short uppercase, e.g. "$42B NET LOSS", "$4.6B REVENUE (12X)", "518B CLOUD CAPEX".
+    Each chip should be ≤ 30 chars so it fits on one pill without truncation.
+    """
+    import re as _re_f
+
+    chips: list[str] = []
+    seen: set[str]   = set()
+
+    def _add(text: str) -> None:
+        t = text.strip().upper()[:30]
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            chips.append(t)
+
+    # 1. Verified facts from Jev judgment
+    intel = getattr(summary, "intelligence", None)
+    if intel is not None:
+        judgment = (intel.get("judgment") if isinstance(intel, dict) else getattr(intel, "judgment", None))
+        if judgment is not None:
+            raw_facts = (judgment.get("facts") if isinstance(judgment, dict) else getattr(judgment, "facts", []))
+            for f in (raw_facts or [])[:5]:
+                f_str = str(f).strip()
+                # Extract just the first clause (up to a comma or semicolon) to keep chips short
+                short = _re_f.split(r"[,;—–]", f_str)[0].strip()
+                if short and len(short) <= 40:
+                    _add(short)
+
+    # 2. Key points — extract numeric-bearing clauses
+    for kp in (summary.key_points or [])[:5]:
+        if len(chips) >= 5:
+            break
+        kp = str(kp).strip()
+        # Look for a clause with a number / dollar / percent / multiplier
+        numbers = _re_f.findall(r"\$?[\d,]+(?:\.\d+)?[BMKTx%×]?\b[\w\s]{0,20}", kp)
+        for n in numbers[:1]:
+            n = n.strip().rstrip(" .")
+            if len(n) <= 32:
+                _add(n)
+
+    # 3. Headline fallback — extract any $N or NB/NM/NK tokens
+    if len(chips) < 2:
+        hl_tokens = _re_f.findall(r"\$[\d,.]+[BMK]?|\b\d+(?:\.\d+)?[BMKx%×]\b", summary.headline)
+        for tok in hl_tokens[:3]:
+            if len(chips) >= 5:
+                break
+            _add(tok)
+
+    return chips[:5]
+
+
+
+
 async def build_comic_script_from_summary(
     summary,
     personas,
@@ -1122,7 +1373,9 @@ async def build_comic_script_from_summary(
     why     = summary.why_it_matters or ""
     what_changed   = _story_field("what_changed") or ""
     second_order_b = _story_field("second_order_effect") or ""
-    tension = _story_field("future_question") or _story_field("media_host_audience_cta") or ""
+    # central_tension for the outside post hook: prefer media_host_opening (the conflict/tension hook),
+    # fall back to future_question or media_host_audience_cta for the hand-off pill only.
+    tension = _story_field("media_host_opening") or _story_field("future_question") or _story_field("media_host_audience_cta") or ""
 
     # ── Scene 1 brief: 4 lines — what happened · context · debate angle · host seed ──
     # Line 1: what actually changed (hook sentence from story or headline)
@@ -1308,6 +1561,11 @@ async def build_comic_script_from_summary(
     if not hashtags:
         hashtags = ["#AIInfrastructure", "#EnterpriseAI", "#AIGovernance"]
 
+    # ── News Card facts — key numbers/claims rendered as yellow chips ──────────
+    # Derived deterministically from key_points and intelligence signals.
+    # Format: short uppercase strings, max 5, e.g. "$42B NET LOSS".
+    facts = _derive_facts_from_summary(summary)
+
     return ComicScript(
         headline          = summary.headline,
         host_name         = host_name,
@@ -1329,6 +1587,7 @@ async def build_comic_script_from_summary(
         hashtags          = hashtags,
         source_url        = getattr(summary, "source_url", ""),
         source_name       = getattr(summary, "source", ""),
+        facts             = facts,
     )
 
 

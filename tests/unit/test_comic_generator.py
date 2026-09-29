@@ -263,11 +263,18 @@ class TestBuildOutsidePost:
             hashtags=["#EnterpriseAI", "#AIInfrastructure"],
         )
         post = build_outside_post(s)
+        # PART 1 — hook (first line is fact/brief or tension)
         assert "GPT-5 runs code autonomously" in post
-        assert "Our four voices looked at the same question" in post
-        assert "AI Founder:" in post
-        assert "Enterprise Engineer:" in post
-        assert "Maya — Media Host" in post
+        # PART 2 — voices intro line (new format)
+        assert "AIFeeders asked four voices to look at the same story:" in post
+        # PART 2 — persona role labels present
+        assert "AI Founder" in post
+        assert "Enterprise Engineer" in post
+        # PART 2 — disagreement bridge
+        assert "don't completely agree" in post
+        # PART 3 — host CTA label (new format)
+        assert "THE AIFEEDERS QUESTION" in post
+        # PART 3 — source and hashtags
         assert "TechCrunch" in post
         assert "https://techcrunch.com/example" in post
         assert "#EnterpriseAI #AIInfrastructure" in post

@@ -28,12 +28,13 @@ Work through these questions in sequence before writing any output:
 6. WHAT PROBLEM DOES IT SOLVE? — Name the specific pain point. Who was struggling with what?
    Be concrete. "Enterprises deploying LLMs faced X cost structure" beats "AI is expensive."
 
-7. THE HOOK — Write one sentence that creates genuine curiosity.
+7. THE HOOK — Write one sentence that creates genuine curiosity and TENSION.
    DO NOT start with the company name or "AI is changing..."
-   Start with the human moment, the surprising implication, or the question the reader didn't know they had.
+   Start with the SURPRISING CONSEQUENCE, the CONFLICT, or the QUESTION the reader didn't know they had.
+   The hook must introduce a conflict between two forces (simplicity vs. lock-in, speed vs. governance, etc.).
    Examples of strong hooks:
-   - "The most expensive part of running AI in production just got significantly cheaper."
-   - "Imagine your AI system being audited by a regulator before it touches a single patient record."
+   - "The most expensive part of running AI in production just got significantly cheaper — but the control problem just got harder."
+   - "Microsoft just turned Copilot into something much bigger than a chatbot. That raises a more interesting question than the feature list."
    - "The bottleneck in enterprise AI just shifted — and it's not the model anymore."
 
 8. HUMAN ANALOGY — Write one analogy that makes the technical concept instantly clear to a smart non-specialist.
@@ -62,17 +63,100 @@ Work through these questions in sequence before writing any output:
     - If company A acquires company B → C now has a dependency risk
     - If regulation R passes → compliance teams in sector S face timeline T
 
-13. FUTURE QUESTION — One open question the story raises that has no clean answer yet.
+13. FUTURE QUESTION — One DIFFICULT open question the story raises that has no clean answer yet.
     This should invite genuine professional discussion, not a yes/no answer.
     It should be the question a thoughtful person would still be wrestling with after reading.
+    NOT: "What do you think about this development?" (too vague)
+    YES: "If AI agents eventually execute your work, should the enterprise own the agent — or should the employee?" (substantive, unresolved)
+    The question must create genuine discomfort — it should not have an obvious answer.
 
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CONFLICT GRAPH — MANDATORY FOR EVERY STORY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Before generating persona dialogues, you MUST build a Conflict Graph.
+This is the editorial spine of the post. Without it, the post becomes four independent opinions instead of a story.
+
+The Conflict Graph has this structure:
+  NEWS: [what actually happened — one plain sentence]
+    ↓ splits into two forces:
+  OPPORTUNITY: [what the news enables — name the specific gain]
+  RISK:        [what the news creates as a problem — name the specific cost]
+    ↓ each force is owned by a persona:
+  FOUNDER  → sees the OPPORTUNITY (commercial upside, market timing, cost reduction)
+  ENGINEER → sees the RISK made concrete (architecture, reliability, operational debt)
+    ↓ these clash, and a third voice challenges both:
+  ANALYST  → questions the MARKET ASSUMPTION behind both (who really wins/loses at scale)
+    ↓ the host connects all three and surfaces the structural question:
+  HOST     → names the UNRESOLVED TENSION that survives the debate
+
+Populate these fields in perspective and media_host_synthesis based on the conflict graph.
+The conflict graph must produce GENUINE DISAGREEMENT between personas, not parallel opinions.
+
+PERSONA INCENTIVES (these are fixed — do not break them):
+  FOUNDER    → naturally cares about: cost reduction, market position, platform dependency, competitive timing
+  ENGINEER   → naturally cares about: architecture, reliability, identity/permissions/observability, operational debt
+  ANALYST    → naturally cares about: market dynamics, who actually wins at platform scale, second-order displacement
+  POLICY     → naturally cares about: governance, accountability, concentration risk, what happens when things go wrong
+
+These incentives must OPPOSE each other in the post. If the Founder says "this reduces complexity," the Engineer MUST say "it moves complexity underneath the platform" — not just "there are challenges."
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NARRATIVE PROGRESSION — MANDATORY STORY ARC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The post must follow this exact narrative logic (not just list four views):
+
+  Stage 1 — WHY IT MATTERS: What changed and why it matters RIGHT NOW (specific, not generic)
+  Stage 2 — OPPORTUNITY: Persona A sees the commercial opportunity (grounded in article facts)
+  Stage 3 — RISK MADE CONCRETE: Persona B directly contradicts A's premise from an architecture/ops standpoint
+  Stage 4 — MARKET CHALLENGE: Persona C challenges both A and B by questioning the market assumption
+  Stage 5 — GOVERNANCE LAYER: Persona D adds the governance/accountability dimension that A, B, C all miss
+  Stage 6 — UNRESOLVED QUESTION: Host synthesises and ends with the question that has no clean answer
+
+This progression means each persona MUST explicitly reference what the previous speaker said.
+"Integration sounds great" followed by "but when 10,000 employees start deploying agents..." is the model.
+Four independent opinions arranged in a column is NOT the model.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 14. MEDIA HOST DIALOGUE ORCHESTRATION (Generate fresh for this news case — NO hardcoded templates!):
-    - media_host_opening: A scroll-stopping 1-2 line HOOK that immediately creates tension, exposes a counter-intuitive truth, or challenges an assumption directly. DO NOT use generic phrases like "X just made a big move...", "X just announced...", "is it too good to be true?", or "promises are exciting". Focus on the structural conflict (e.g., "Building software is getting 10x cheaper — but governing it isn't.").
-    - media_host_setup: 2-3 crisp lines presenting the concrete technical/business shift and the central dilemma before introducing the panel (contrasting promises with operational reality). NEVER use preamble filler like "Let's dive into the details and hear from our panel of experts." State the tension directly.
-    - media_transitions: A JSON map of dynamic transitions tailored to the specific personas responding to this topic. Keys: "policy", "business", "linkedin", "genz".
-    - media_host_synthesis: The central thesis/trade-off synthesized dynamically in 1-2 bold, memorable, quotable sentences framing the core dilemma for THIS news topic (e.g., "The next productivity battle isn't Human vs AI. It is Creation vs Control.").
-    - media_host_audience_cta: A forced-choice, high-friction decision trigger (A/B/C/D/E) generated dynamically from this story's central tension. The options must be sharply oppositional (so choosing one means rejecting the others) and end by challenging the reader: "Pick ONE. Then answer: What makes you think the other options won't become the bigger problem?"
-    - dynamic_seo_hashtags: List of exactly 3-4 high-relevance hashtags dynamically extracted from the news entity, topic, and source (e.g., #Entity, #Topic, #Domain). Never exceed 4 tags.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   - media_host_opening: A scroll-stopping 1-2 line HOOK that immediately surfaces the CONFLICT or TENSION
+     at the centre of this story. Do NOT announce what happened. Surface the CONSEQUENCE or the DILEMMA.
+     Examples of strong host openings:
+     - "Microsoft just turned Copilot into something much bigger than a chatbot. One interface: chat, code, agents."
+     - "The AI productivity promise and the AI governance problem are now sharing the same platform."
+     NOT: "Microsoft just made a big move..." / "X just announced..." / "is it too good to be true?"
+
+   - media_host_setup: 2-3 crisp lines presenting the TENSION this creates — the dilemma before the debate.
+     Name the two forces in conflict. State WHY this dilemma matters NOW.
+     The setup must end with a question that has no obvious answer — this is what the four voices will argue about.
+     NOT: "Let's hear from our panel." State the tension directly.
+
+   - media_transitions: A JSON map of transitions tailored to each persona's specific angle on this story.
+      Each transition should INTRODUCE what that persona specifically cares about — their incentive, not just their title.
+      Each transition should name a concrete tension the upcoming speaker will expose — not a vague preview.
+      Keys: "policy", "business", "linkedin", "genz".
+      Example format — business: "The Founder sees [specific commercial upside from THIS article] — but the number depends on [specific condition the Engineer will challenge]."
+      Example format — linkedin: "The Engineer is about to name the [specific system or team] that inherits the cost of this announcement."
+
+   - media_host_synthesis: 1-2 bold, memorable sentences that name the STRUCTURAL TENSION that survived the debate.
+      This is not a summary. It is the editorial conclusion: what question is still open after hearing all four voices?
+      Do NOT copy or paraphrase the persona examples from the prompts — derive this from the specific article being processed.
+      It should name a tension between two forces that genuinely cannot both be true at the same time.
+
+   - media_host_audience_cta: A forced-choice engagement question with 2-3 sharply OPPOSITIONAL options.
+     The options must be in genuine tension — choosing A must mean rejecting B's logic, not just having a different opinion.
+     End with ONE difficult question that creates genuine discomfort: a question with no clean answer.
+     Example:
+       "👇 Pick one:
+        A. AI super-apps reduce enterprise complexity.
+        B. AI super-apps move the complexity underneath the platform.
+        And the uncomfortable question: What happens when your AI workspace becomes as difficult to leave as your operating system?"
+
+   - dynamic_seo_hashtags: List of exactly 3-4 high-relevance hashtags dynamically extracted from the news entity, topic, and source.
+     Make them highly specific — not generic variants of the same topic.
+     Never exceed 4 tags.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NARRATIVE STYLE SELECTION — THE 7 VIRAL INTELLECTUAL FORMATS
@@ -95,6 +179,7 @@ Format-to-event heuristics:
 - Model Launch / Inference / Hardware → architecture_battle, ai_debate
 - Outage / Hallucination / Vulnerability → ai_postmortem
 - Strategic Roadmap / Policy Shift → prediction_bet
+- Platform / Super-app → ai_debate (conflict = simplicity promise vs. lock-in reality)
 
 Choose based on: event_type, novelty score, sentiment, and what the missing angle is.
 High novelty → prefer unexpected_consequence, nobody_talking_about, future_scenario
@@ -127,6 +212,18 @@ Every field you produce must be impactful, grounded, and practical. These rules 
   ✗ Observation dressed as insight: "many believe", "some argue", "experts suggest", "analysts predict"
   ✗ Filler openers: "This is an interesting development", "This raises important questions", "This announcement is significant"
 
+⛔ BANNED GENERIC AI PHRASES — automatic rejection if any field contains:
+  ✗ "This is a game changer" / "game-changing"
+  ✗ "This is promising" / "sounds promising"
+  ✗ "The future of [topic]"
+  ✗ "sounds great on paper"
+  ✗ "however, there are challenges" / "but there are challenges"
+  ✗ "only time will tell"
+  ✗ "it remains to be seen"
+  ✗ "this raises important questions"
+  ✗ "AI is changing everything" / "AI is transforming"
+  ✗ "this could be revolutionary" / "revolutionary"
+
 ✅ EVERY FIELD OUTPUT MUST:
   - Name a SPECIFIC actor, system, number, or mechanism from the article
   - State what ALREADY happened or what CONCRETELY changes — not what might or could happen
@@ -151,6 +248,7 @@ Every field you produce must:
 
 The hook must:
 - Create genuine curiosity or relevance in the first 10 words.
+- Surface a CONFLICT between two forces — not just announce a fact.
 - NOT start with: "AI is...", "[Company] has...", "Today...", "In a recent...", "This is..."
 - NOT be a question. The question comes later, in future_question.
 - State a specific, documented consequence — not a teaser that hedges with "could" or "might".

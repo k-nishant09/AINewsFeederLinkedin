@@ -12,10 +12,24 @@ The five calls run in parallel via asyncio.gather — all traces land in the
 same Langfuse session so you can compare persona outputs side-by-side.
 
 Ref: https://langfuse.com/docs/integrations/langchain/tracing
+
+Prefix-caching
+──────────────
+The story-context block (story_hook, what_changed, perspective, etc.) and the
+intelligence-signals block are fully deterministic for a given (article_id, run).
+They never change between retries — only the LLM output changes.
+
+We cache the serialised context strings keyed by article_id so repeated calls
+(e.g. REGENERATE cycles) skip re-serialising the same ~60-field dict and re-format
+the same prompt prefix.  The LLM provider's prompt cache also benefits: identical
+prefix text sent in consecutive calls is far more likely to land in its KV cache.
+
+Cache scope: process-level dict.  Bounded by articles per run (≤ 5 per day).
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 
 import httpx
@@ -28,6 +42,18 @@ from daily_news.config.settings import get_settings
 from daily_news.models.persona import PersonaOutput, PersonaSetOutput, PersonaType
 from daily_news.models.summary import NewsSummary
 from daily_news.observability.tracing import get_langfuse_callback
+
+# ── Story-context prefix cache ────────────────────────────────────────────────
+# Key:   article_id (stable for a given article within a pod run)
+# Value: dict of pre-serialised story / intelligence field strings
+#        These fields are 100% deterministic from the NewsSummary object and never
+#        change between retries, so we compute them once and reuse on every retry.
+_STORY_CONTEXT_CACHE: dict[str, dict] = {}
+
+
+def _story_context_cache_key(summary: NewsSummary) -> str:
+    """Cache key = article_id (sufficient: article is immutable within a run)."""
+    return summary.article_id
 
 
 class _PersonaOutputRaw(BaseModel):
@@ -44,24 +70,45 @@ class _PersonaOutputRaw(BaseModel):
 
 PERSONA_FOCUS: dict[PersonaType, dict] = {
     PersonaType.BUSINESS: {
-        "name": "Capitalist Mind",
-        "focus": "revenue growth, cost reduction, productivity gains, market disruption, enterprise adoption, ROI, competitive advantage, investment thesis",
+        "name": "AI Infrastructure Founder",
+        "focus": (
+            "OPPORTUNITY VOICE. Your incentive: cost reduction, differentiation, and platform dependency. "
+            "You see the commercial opportunity first — market timing, competitive position, tool consolidation. "
+            "You are GENUINELY OPTIMISTIC. The Engineer (next speaker) will directly contradict you — so make a concrete, arguable commercial claim. "
+            "Do not hedge."
+        ),
     },
     PersonaType.POLICY: {
-        "name": "Government Mind",
-        "focus": "regulation, AI safety, data privacy, public policy, national competitiveness, governance frameworks, ethical standards, cross-border implications",
+        "name": "AI Policy Lead",
+        "focus": (
+            "GOVERNANCE VOICE. Your incentive: accountability, concentration risk, what happens when things go wrong. "
+            "You add the governance layer that the Engineer and Analyst both missed. "
+            "When one platform becomes the default workspace, governance becomes part of the product — not a checkbox. "
+            "Name the specific accountability gap, not a generic regulation."
+        ),
         "guardrail": (
-            "Describe documented policy positions and factual consequences only. "
-            "Do not advocate for any political outcome or party."
+            "Describe documented governance positions and factual accountability consequences only. "
+            "Do not advocate for any political outcome or party. "
+            "Only cite EU AI Act or GDPR if this article is explicitly about EU regulation."
         ),
     },
     PersonaType.GENZ: {
-        "name": "Generalist Mind",
-        "focus": "broad societal impact, everyday technology use, learning opportunities, career entry, digital culture, skill building, entrepreneurial angles, what this means for people outside the tech bubble",
+        "name": "AI Industry Analyst",
+        "focus": (
+            "MARKET DYNAMICS VOICE. Your incentive: who wins at platform scale, second-order displacement, switching cost. "
+            "You CHALLENGE THE FRAMING of both the Founder and the Engineer. They argue about internal implementation. "
+            "You ask: who does this benefit at scale? Who becomes the default workspace? What does that mean for everyone else? "
+            "Do not both-sides the debate. Shift the frame from 'does this work' to 'who does this benefit at scale'."
+        ),
     },
     PersonaType.LINKEDIN: {
-        "name": "Tech & Workforce Mind",
-        "focus": "technology strategy, engineering trade-offs, build-vs-buy decisions, architectural impact, AND workforce implications — job security, automation threats, worker reskilling, career transitions, what practitioners and knowledge workers should do next",
+        "name": "ML Platform Engineer",
+        "focus": (
+            "OPERATIONAL REALITY VOICE. Your incentive: architecture, reliability, identity/permissions/observability, operational debt. "
+            "You DIRECTLY CONTRADICT the Founder's commercial premise with a specific operational constraint. "
+            "Simplification promises move complexity underneath the platform — it does not disappear. "
+            "Name the specific system, team, or workflow that actually has to absorb this complexity."
+        ),
     },
 }
 
@@ -200,42 +247,93 @@ class PersonaAgent:
         )
         callbacks = [handler] if handler else []
 
-        # Pull intelligence signals from the backbone object when available
-        intel = summary.intelligence
-        emotion = {}
-        impact  = {}
-        co      = {}
-        novelty        = 0.0
-        trend_velocity = 0.0
-        if intel:
-            _get = (lambda k, d=0.0: intel.get(k, d)) if isinstance(intel, dict) else (lambda k, d=0.0: getattr(intel, k, d))
-            _sub = (lambda k, sk, d=0.0: (intel.get(k) or {}).get(sk, d)) if isinstance(intel, dict) \
-                   else (lambda k, sk, d=0.0: getattr(getattr(intel, k, None) or type("_", (), {})(), sk, d))
-            novelty        = float(_get("novelty"))
-            trend_velocity = float(_get("trend_velocity"))
-            emotion = {
-                "curiosity":  float(_sub("emotion", "curiosity")),
-                "excitement": float(_sub("emotion", "excitement")),
-                "concern":    float(_sub("emotion", "concern")),
-                "urgency":    float(_sub("emotion", "urgency")),
-            }
-            impact = {
-                "enterprise": float(_sub("impact", "enterprise")),
-                "developers": float(_sub("impact", "developers")),
-                "business":   float(_sub("impact", "business")),
-                "policy":     float(_sub("impact", "policy")),
-            }
-            co = {
-                "missing_angle":        _sub("content_opportunity", "missing_angle", "not available"),
-                "recommended_audience": _sub("content_opportunity", "recommended_audience", "not available"),
-            }
+        # ── Prefix-cached story/intelligence context ──────────────────────────
+        # These fields are deterministic for a given article_id and never change
+        # between retries. Compute once, reuse on every subsequent call.
+        _cache_key = _story_context_cache_key(summary)
+        _ctx = _STORY_CONTEXT_CACHE.get(_cache_key)
 
-        # Pull story fields — dict-safe (LangGraph serialises objects to dicts)
-        st = summary.story or {}
-        def _sg(k: str) -> str:
-            if isinstance(st, dict):
-                return str(st.get(k) or "not available")
-            return str(getattr(st, k, None) or "not available")
+        if _ctx is None:
+            # First call for this article — compute and cache
+            intel = summary.intelligence
+            emotion: dict = {}
+            impact:  dict = {}
+            co:      dict = {}
+            novelty        = 0.0
+            trend_velocity = 0.0
+            if intel:
+                _get = (lambda k, d=0.0: intel.get(k, d)) if isinstance(intel, dict) else (lambda k, d=0.0: getattr(intel, k, d))
+                _sub = (lambda k, sk, d=0.0: (intel.get(k) or {}).get(sk, d)) if isinstance(intel, dict) \
+                       else (lambda k, sk, d=0.0: getattr(getattr(intel, k, None) or type("_", (), {})(), sk, d))
+                novelty        = float(_get("novelty"))
+                trend_velocity = float(_get("trend_velocity"))
+                emotion = {
+                    "curiosity":  float(_sub("emotion", "curiosity")),
+                    "excitement": float(_sub("emotion", "excitement")),
+                    "concern":    float(_sub("emotion", "concern")),
+                    "urgency":    float(_sub("emotion", "urgency")),
+                }
+                impact = {
+                    "enterprise": float(_sub("impact", "enterprise")),
+                    "developers": float(_sub("impact", "developers")),
+                    "business":   float(_sub("impact", "business")),
+                    "policy":     float(_sub("impact", "policy")),
+                }
+                co = {
+                    "missing_angle":        _sub("content_opportunity", "missing_angle", "not available"),
+                    "recommended_audience": _sub("content_opportunity", "recommended_audience", "not available"),
+                }
+
+            # Pull story fields — dict-safe (LangGraph serialises objects to dicts)
+            st = summary.story or {}
+            def _sg(k: str) -> str:
+                if isinstance(st, dict):
+                    return str(st.get(k) or "not available")
+                return str(getattr(st, k, None) or "not available")
+
+            # Judgment fields (safe accessor — may be Pydantic or dict or None)
+            _intel_obj  = getattr(summary, "intelligence", None)
+            _j_obj      = getattr(_intel_obj, "judgment", None) if _intel_obj and not isinstance(_intel_obj, dict) else (_intel_obj or {}).get("judgment") if isinstance(_intel_obj, dict) else None
+            _jget       = (lambda f: _j_obj.get(f, []) if isinstance(_j_obj, dict) else getattr(_j_obj, f, [])) if _j_obj else (lambda f: [])
+
+            _ctx = {
+                "headline":              summary.headline,
+                "summary":               summary.summary,
+                "key_points":            "\n".join(f"- {p}" for p in summary.key_points),
+                "business_impact":       summary.business_impact,
+                "story_hook":            _sg("hook"),
+                "story_what_happened":   _sg("what_actually_happened"),
+                "story_what_changed":    _sg("what_changed"),
+                "story_why_now":         _sg("why_now"),
+                "story_perspective":     _sg("perspective"),
+                "story_second_order":    _sg("second_order_effect"),
+                "story_analogy":         _sg("human_analogy"),
+                "story_why_care":        _sg("why_reader_should_care"),
+                "story_future_question": _sg("future_question"),
+                "story_business":        _sg("business_consequence"),
+                "story_technology":      _sg("technology_consequence"),
+                "story_human":           _sg("human_consequence"),
+                "story_narrative_style": _sg("narrative_style"),
+                "sentiment":             summary.sentiment or "not available",
+                "ai_tag":                summary.ai_tag or "not available",
+                "novelty":               novelty,
+                "trend_velocity":        trend_velocity,
+                "emotion_curiosity":     float(emotion.get("curiosity",  0.0)),
+                "emotion_excitement":    float(emotion.get("excitement", 0.0)),
+                "emotion_concern":       float(emotion.get("concern",    0.0)),
+                "emotion_urgency":       float(emotion.get("urgency",    0.0)),
+                "impact_enterprise":     float(impact.get("enterprise",  0.0)),
+                "impact_developers":     float(impact.get("developers",  0.0)),
+                "impact_business":       float(impact.get("business",    0.0)),
+                "impact_policy":         float(impact.get("policy",      0.0)),
+                "missing_angle":         co.get("missing_angle",        "not available"),
+                "recommended_audience":  co.get("recommended_audience", "not available"),
+                "verified_facts":        _jget("facts"),
+                "reported_claims":       _jget("reported_claims"),
+                "uncertainties":         _jget("uncertainties"),
+                "what_not_to_conclude":  _jget("what_not_to_conclude"),
+            }
+            _STORY_CONTEXT_CACHE[_cache_key] = _ctx
 
         # Build avoid_phrases block.
         # On retry (avoid_phrases passed in): show the exact rejected phrases from the last cycle.
@@ -247,68 +345,46 @@ class PersonaAgent:
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 "⛔ RETRY — PREVIOUS ATTEMPT REJECTED\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "These EXACT phrases caused rejection — do NOT use them or any variant:\n"
+                "These phrases caused AUTOMATIC REJECTION. Do NOT use them or ANY variation:\n"
                 f"{avoid_lines}\n\n"
-                "Open with a SPECIFIC, article-grounded claim. No abstract framing.\n\n"
+                "STRICT RULE: Do NOT write any sentence that begins or contains:\n"
+                "  - 'the real <any word> is/lies/isn't/becomes' — ALL forms are rejected\n"
+                "  - 'marks a significant' — ALL forms are rejected\n"
+                "  - 'the first major issue/challenge/concern will be' — ALL forms are rejected\n\n"
+                "Instead: open with the SPECIFIC company name, system, number, or market position "
+                "from THIS article. No abstract framing.\n\n"
             )
         else:
             avoid_block = (
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "⛔ AUTOMATIC REJECTION TRIGGERS — avoid ALL of these\n"
+                "⛔ AUTOMATIC REJECTION TRIGGERS\n"
                 "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                "  ✗ ANY phrase with 'the real <word>' — e.g. 'the real challenge', 'the real issue',\n"
-                "    'the real bottleneck', 'the real shift', 'the real concern', 'the real business'\n"
-                "  ✗ ANY phrase with 'in the end' — e.g. 'in the end,', 'in the end the', 'in the end this'\n"
-                "  ✗ 'sounds great'  ✗ 'sounds promising'  ✗ 'at the end of the day'\n"
-                "  ✗ 'it remains to be seen'  ✗ 'only time will tell'  ✗ 'what remains to be seen'\n\n"
-                "Every sentence must be SPECIFIC to this article. No abstract framing, no cliché closers.\n\n"
+                "A scanner rejects any response containing these patterns — ALL forms:\n\n"
+                "  ✗ 'the real <X> is/lies/isn't' — includes: 'the real challenge lies in',\n"
+                "    'the real question is', 'the real test is', 'the real issue is',\n"
+                "    'the real risk lies', 'the real concern here is' — ALL rejected.\n"
+                "  ✗ 'marks a significant' — includes 'marks a significant shift',\n"
+                "    'marks a significant step', 'marks a significant change' — ALL rejected.\n"
+                "  ✗ 'the first major issue/challenge will be' — ALL rejected.\n"
+                "  ✗ 'in the end' · 'at the end of the day' · 'only time will tell'\n"
+                "  ✗ 'sounds promising' · 'sounds great' · 'it remains to be seen'\n\n"
+                "Every sentence must name a SPECIFIC company, system, number, or outcome "
+                "from THIS article. No abstract framing. No hedged generalisations.\n\n"
             )
 
         chain = self._prompt | self._llm | self._parser
+
+        # Merge prefix-cached context with per-call fields (article_id, avoid_phrases,
+        # evidence_sections, format_instructions all vary by persona/retry/call).
+        invoke_input = {
+            **_ctx,   # cached story/intelligence fields — identical across all retries
+            "article_id":          summary.article_id,
+            "avoid_phrases_block": avoid_block,
+            "evidence_sections":   evidence_sections,
+            "format_instructions": self._parser.get_format_instructions(),
+        }
         raw: _PersonaOutputRaw = await chain.ainvoke(
-            {
-                "article_id":              summary.article_id,
-                "avoid_phrases_block":     avoid_block,
-                "headline":                summary.headline,
-                "summary":                 summary.summary,
-                "key_points":              "\n".join(f"- {p}" for p in summary.key_points),
-                "business_impact":         summary.business_impact,
-                "evidence_sections":       evidence_sections,
-                # Story context — the analytical foundation for persona perspectives
-                "story_hook":              _sg("hook"),
-                "story_what_happened":     _sg("what_actually_happened"),
-                "story_what_changed":      _sg("what_changed"),
-                "story_why_now":           _sg("why_now"),
-                "story_perspective":       _sg("perspective"),
-                "story_second_order":      _sg("second_order_effect"),
-                "story_analogy":           _sg("human_analogy"),
-                "story_why_care":          _sg("why_reader_should_care"),
-                "story_future_question":   _sg("future_question"),
-                "story_business":          _sg("business_consequence"),
-                "story_technology":        _sg("technology_consequence"),
-                "story_human":             _sg("human_consequence"),
-                "story_narrative_style":   _sg("narrative_style"),
-                # Intelligence signals
-                "sentiment":               summary.sentiment or "not available",
-                "ai_tag":                  summary.ai_tag or "not available",
-                "novelty":                 novelty,
-                "trend_velocity":          trend_velocity,
-                "emotion_curiosity":       float(emotion.get("curiosity",  0.0)),
-                "emotion_excitement":      float(emotion.get("excitement", 0.0)),
-                "emotion_concern":         float(emotion.get("concern",    0.0)),
-                "emotion_urgency":         float(emotion.get("urgency",    0.0)),
-                "impact_enterprise":       float(impact.get("enterprise",  0.0)),
-                "impact_developers":       float(impact.get("developers",  0.0)),
-                "impact_business":         float(impact.get("business",    0.0)),
-                "impact_policy":           float(impact.get("policy",      0.0)),
-                "missing_angle":           co.get("missing_angle",        "not available"),
-                "recommended_audience":    co.get("recommended_audience", "not available"),
-                "verified_facts":          getattr(getattr(summary, "intelligence", None), "judgment", None).facts if getattr(summary, "intelligence", None) and getattr(summary.intelligence, "judgment", None) else [],
-                "reported_claims":         getattr(getattr(summary, "intelligence", None), "judgment", None).reported_claims if getattr(summary, "intelligence", None) and getattr(summary.intelligence, "judgment", None) else [],
-                "uncertainties":           getattr(getattr(summary, "intelligence", None), "judgment", None).uncertainties if getattr(summary, "intelligence", None) and getattr(summary.intelligence, "judgment", None) else [],
-                "what_not_to_conclude":    getattr(getattr(summary, "intelligence", None), "judgment", None).what_not_to_conclude if getattr(summary, "intelligence", None) and getattr(summary.intelligence, "judgment", None) else [],
-                "format_instructions":     self._parser.get_format_instructions(),
-            },
+            invoke_input,
             config={"callbacks": callbacks} if callbacks else {},
         )
         # Always override persona + article_id from the known agent context —

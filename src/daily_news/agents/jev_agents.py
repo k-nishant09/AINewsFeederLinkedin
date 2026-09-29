@@ -40,9 +40,11 @@ all nodes fall back gracefully:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 from daily_news.config.settings import get_settings
 from daily_news.mcp.client import jev_singleton
@@ -50,6 +52,40 @@ from daily_news.mcp.jev_client import JevPrefilterResult
 from daily_news.models.persona import PersonaType
 
 logger = logging.getLogger(__name__)
+
+# ── Prefix cache — avoids re-scoring the same article on pipeline retries ────
+#
+# Design:
+#   Key   = SHA-256 of (title + description + published_at) — content fingerprint.
+#   Value = JevPrefilterResult (immutable after scoring; never needs invalidation).
+#   Scope = process-level dict — survives across graph retries within the same pod run.
+#           Cleared automatically when the pod restarts (daily CronJob).
+#   Size  = bounded by articles fetched per run (typically 10-30); no eviction needed.
+#
+# Why this matters:
+#   jev_prefilter_articles is called AGAIN on every REGENERATE cycle (banned phrases,
+#   eval fail, etc.).  Each Jev call is ~800ms.  With 10 articles × 3 retries = 30
+#   redundant calls wasted.  Cache makes retries effectively free.
+
+_JEV_PREFILTER_CACHE: dict[str, JevPrefilterResult] = {}
+
+
+def _article_cache_key(article: dict) -> str:
+    """Stable content fingerprint for an article dict."""
+    raw = (
+        str(article.get("title", ""))
+        + str(article.get("description", ""))
+        + str(article.get("published_at", ""))
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _cache_get(article: dict) -> JevPrefilterResult | None:
+    return _JEV_PREFILTER_CACHE.get(_article_cache_key(article))
+
+
+def _cache_set(article: dict, result: JevPrefilterResult) -> None:
+    _JEV_PREFILTER_CACHE[_article_cache_key(article)] = result
 
 # ── Fallback scorer (no Jev, no LLM) ─────────────────────────────────────────
 # Used when JEV_BASE_URL is not set. Scores articles purely from metadata so
@@ -158,21 +194,55 @@ async def jev_prefilter_articles(state: dict) -> dict:
         logger.info("[%s] jev_prefilter: JEV_BASE_URL not set — heuristic fallback (%d articles)", run_id, len(articles))
         return {**state, "selected_articles": _heuristic_select(articles), "workflow_status": "JEV_PREFILTERED"}
 
+    # ── Prefix cache: separate articles into cache hits and misses ────────────
+    cached:   dict[int, JevPrefilterResult] = {}   # index → cached result
+    miss_idx: list[int]                     = []   # indices that need Jev calls
+
+    for idx, article in enumerate(articles):
+        hit = _cache_get(article)
+        if hit is not None:
+            cached[idx] = hit
+            logger.debug(
+                "[%s] jev_prefilter: cache HIT article_id=%s",
+                run_id, article.get("article_id", "?"),
+            )
+        else:
+            miss_idx.append(idx)
+
+    if cached:
+        logger.info(
+            "[%s] jev_prefilter: prefix-cache %d hits, %d misses (of %d)",
+            run_id, len(cached), len(miss_idx), len(articles),
+        )
+
     try:
         client = jev_singleton()
         sem = asyncio.Semaphore(5)
 
         async def _score(article: dict) -> JevPrefilterResult:
             async with sem:
-                return await client.prefilter_article(article)
+                result = await client.prefilter_article(article)
+                _cache_set(article, result)   # warm the cache for future retries
+                return result
 
-        results: list[JevPrefilterResult] = await asyncio.gather(
-            *[_score(a) for a in articles],
+        miss_articles = [articles[i] for i in miss_idx]
+        miss_results: list[JevPrefilterResult] = await asyncio.gather(
+            *[_score(a) for a in miss_articles],
             return_exceptions=True,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("[%s] jev_prefilter failed (%s) — heuristic fallback", run_id, exc)
         return {**state, "selected_articles": _heuristic_select(articles), "workflow_status": "JEV_PREFILTERED"}
+
+    # Merge cache hits and fresh results back into a full results list
+    full_results: list[JevPrefilterResult | Exception] = []
+    miss_iter = iter(miss_results)
+    for idx in range(len(articles)):
+        if idx in cached:
+            full_results.append(cached[idx])
+        else:
+            full_results.append(next(miss_iter))
+    results = full_results
 
     # Filter out exceptions, pair with original article
     scored: list[tuple[float, dict, JevPrefilterResult]] = []
@@ -329,11 +399,59 @@ async def jev_find_angle(state: dict) -> dict:
     }
 
 
+def _build_conflict_graph(summary_dict: dict, intel: dict) -> str:
+    """
+    Build a CONFLICT GRAPH for this story — the editorial spine of the post.
+
+    The conflict graph is prepended to the intelligence state string fed to Jev.
+    It forces the angle-finding step to identify the TWO FORCES in tension
+    (opportunity vs. risk) so that persona generation can produce genuine
+    disagreement rather than parallel opinions.
+
+    Output format matches the CONFLICT GRAPH schema in the storyteller prompt.
+    This is deterministic — no LLM call — derived from existing intelligence signals.
+    """
+    headline = summary_dict.get("headline", "")
+    summary  = summary_dict.get("summary", "")
+    business = summary_dict.get("business_impact", "")
+    tech     = summary_dict.get("technology_impact", "")
+    job      = summary_dict.get("job_impact", "")
+    event    = intel.get("event_type", "other")
+
+    # Derive the opportunity and risk signals from existing intelligence
+    # Opportunity → what the event enables (business / tech capability gain)
+    # Risk        → what the event creates as a problem (jobs, governance, dependency)
+    opportunity_signals = [s for s in [business, tech] if s.strip()]
+    risk_signals        = [s for s in [job, summary_dict.get("policy_impact", "")] if s.strip()]
+
+    opportunity = opportunity_signals[0][:200] if opportunity_signals else f"New {event} capability enabled"
+    risk        = risk_signals[0][:200]        if risk_signals        else "Governance and dependency exposure created"
+
+    conflict_lines = [
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        "CONFLICT GRAPH (story spine):",
+        f"  NEWS:        {headline[:120]}",
+        f"  OPPORTUNITY: {opportunity}",
+        f"  RISK:        {risk}",
+        "  → FOUNDER   sees the OPPORTUNITY (cost reduction, market timing, competitive position)",
+        "  → ENGINEER  sees the RISK (architecture, operational debt, hidden complexity)",
+        "  → ANALYST   challenges both (who wins at platform scale, second-order displacement)",
+        "  → POLICY    adds governance layer (accountability, concentration, what happens when wrong)",
+        "  → HOST      names the unresolved tension that survives the debate",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+    ]
+    return "\n".join(conflict_lines)
+
+
 def _build_intelligence_state(summary_dict: dict, intel: dict) -> str:
-    """Build the state string fed to Jev for content_angle scoring."""
+    """Build the state string fed to Jev for content_angle scoring.
+    Prepends the CONFLICT GRAPH so Jev understands the editorial spine before
+    choosing a content angle — forces tension-first framing over news-summary framing.
+    """
     emotion = intel.get("emotion", {})
     impact  = intel.get("impact", {})
     parts = [
+        _build_conflict_graph(summary_dict, intel),
         f"HEADLINE: {summary_dict.get('headline', '')}",
         f"SUMMARY: {summary_dict.get('summary', '')}",
         f"WHY IT MATTERS: {summary_dict.get('why_it_matters', '')}",

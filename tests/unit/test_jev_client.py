@@ -324,10 +324,13 @@ class TestJevPrefilterNode:
 
         with patch("daily_news.agents.jev_agents.get_settings") as mock_settings:
             mock_settings.return_value.jev_enabled = False
+            mock_settings.return_value.jev_base_url = ""
             result = await jev_prefilter_articles(state)
 
-        # Fallback keeps the single best (first) article
-        assert len(result["selected_articles"]) == 1
+        # Heuristic fallback returns up to top_n=3 articles (gives retry loop fallbacks).
+        # With only 2 input articles, at most 2 are returned; best-scored is first.
+        assert len(result["selected_articles"]) <= 3
+        assert len(result["selected_articles"]) >= 1
         assert result["selected_articles"][0]["article_id"] == "a1"
 
     @pytest.mark.asyncio

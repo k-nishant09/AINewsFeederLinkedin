@@ -760,6 +760,8 @@ _BANNED_OPENERS: tuple[str, ...] = (
 )
 
 _BANNED_INLINE_PHRASES: tuple[str, ...] = (
+    "the key question is",
+    "the key question here",
     "the real question is whether",
     "the real question is,",
     "the real challenge lies in",
@@ -799,14 +801,89 @@ _BANNED_INLINE_PHRASES: tuple[str, ...] = (
     "the real problem is",
     "the real risk is whether",
     "the real opportunity is",
+    # ── Generic AI language detector (Story Engine rule) ──────────────────────
+    # These phrases make any post sound like an AI-generated news summary.
+    # They are banned across all personas — detected here and in the LLM judge.
+    "this is a game changer",
+    "game-changing",
+    "this is promising",
+    "sounds promising",
+    "sounds great",
+    "sounds interesting",
+    "this sounds like",
+    "the future of ai",
+    "however, there are challenges",
+    "but there are challenges",
+    "this raises important questions",
+    "ai is changing everything",
+    "ai is transforming",
+    "this could be revolutionary",
+    "is revolutionary",
+    "has the potential to revolutionize",
+    "has the potential to transform",
+    "will fundamentally change",
+    "this is a major step forward",
+    "this is a significant step",
+    "a significant milestone",
+    "marks a significant milestone",
+    "marks a major milestone",
+    "this is a watershed moment",
+    "this changes everything",
+    # ── "strategic" generic filler ────────────────────────────────────────────
+    "this is a strategic move",
+    "this is a strategic decision",
+    "this is a bold move",
+    "this is a significant move",
+    "could significantly consolidate",
+    "could significantly accelerate",
+    "could significantly transform",
+    "significant implications for",
+    "far-reaching implications",
+    # ── "the real X" lazy abstraction variants ────────────────────────────────
+    "the real test is",
+    "the real question here is",
+    "the key here is",
+    # ── Cliché progression phrases ────────────────────────────────────────────
+    "in conclusion,",
+    "to summarize,",
+    "to sum up,",
+    "looking ahead,",
+    "moving forward,",
 )
 
 
-# Regex catch-alls for patterns Qwen produces as lazy boilerplate closers/openers.
-# NOTE: "the real" is NOT banned — "the real-world cost of X" is a legitimate sentence.
-# Only the lazy ABSTRACT forms are banned: "the real challenge is", "the real question is"
-# — these are already in _BANNED_INLINE_PHRASES above.
-# What we catch here: cliché closers that add no information.
+# Regex catch-alls for patterns the LLM produces as lazy boilerplate.
+#
+# NOTE: "the real" is NOT universally banned.
+#   "the real-world cost of X" — specific, legitimate.
+#   "the real challenge lies in Y" — abstract hedge, banned.
+# The pattern below catches: "the real <noun> is/lies/isn't/here/becomes/remains"
+# where the noun is a generic abstraction (challenge, question, test, issue,
+# problem, risk, concern, opportunity, battle, debate, question, deal, threat,
+# shift, story, implication, worry, worry, focus, win, question, tension).
+# It does NOT match "the real-world", "the real cost of migrating", etc.
+_REAL_ABSTRACTION_PATTERN = _re.compile(
+    r"\bthe real\s+(?:challenge|question|test|issue|problem|risk|concern|"
+    r"opportunity|battle|debate|deal|threat|shift|story|implication|worry|"
+    r"focus|tension|danger|hurdle|obstacle|barrier|uncertainty|unknown|"
+    r"bottleneck|sticking point|pain point|catch|trap|trick|ask|ask here)"
+    r"\s+(?:is|lies|isn'?t|here|becomes|remains|was|will be|has always been|"
+    r"isn'?t [a-z]+,|is[n']*t [a-z]+[,.])",
+    _re.IGNORECASE,
+)
+# "marks a significant X" — covers "marks a significant shift", "marks a significant
+# change", "marks a significant moment", etc. (not just "milestone")
+_MARKS_SIGNIFICANT_PATTERN = _re.compile(
+    r"\bmarks?\s+a\s+significant\b",
+    _re.IGNORECASE,
+)
+# "the first major issue / concern / challenge / problem will be"
+_FIRST_MAJOR_ISSUE_PATTERN = _re.compile(
+    r"\bthe first major\s+(?:issue|concern|challenge|problem|hurdle|question)"
+    r"\s+will\b",
+    _re.IGNORECASE,
+)
+# "in the end" cliché closer
 _IN_THE_END_PATTERN = _re.compile(r"\bin the end\b", _re.IGNORECASE)
 # Off-scope EU AI Act / GDPR drops — caught by judge, not pre-scanner
 # (article context determines relevance, which the pre-scanner can't know)
@@ -849,6 +926,15 @@ def _check_persona_text(text: str) -> str | None:
     # Regex catch-all: "in the end" cliché closer
     if _IN_THE_END_PATTERN.search(text):
         return "in the end"
+    m = _REAL_ABSTRACTION_PATTERN.search(text)
+    if m:
+        return m.group(0)
+    m = _MARKS_SIGNIFICANT_PATTERN.search(text)
+    if m:
+        return m.group(0)
+    m = _FIRST_MAJOR_ISSUE_PATTERN.search(text)
+    if m:
+        return m.group(0)
     return None
 
 
