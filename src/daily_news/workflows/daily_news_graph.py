@@ -919,6 +919,29 @@ async def publish(state: NewsWorkflowState) -> NewsWorkflowState:
         if r["decision"] == EvaluationDecision.PASS.value
     }
 
+    # ── Bulk pre-claim ALL passed articles before the first LinkedIn call ──────
+    # This is the single write that prevents duplicate posts across:
+    #   1. Same-run concurrent triggers (two HTTP requests land on the same pod)
+    #   2. Re-triggers while a run is in-flight (pod restart kills bg task mid-loop)
+    #   3. Same-day scheduled + manual runs
+    # Each article is claimed atomically here.  publisher_agent rolls back
+    # (unmark_published) only if its LinkedIn API call fails, keeping the store
+    # in sync with what was actually sent.
+    already_claimed: set[str] = set()
+    for aid in list(passed_ids):
+        if published_store.is_published(aid):
+            logger.info(
+                "[%s] publish: article=%s already claimed by another run — skipping",
+                run_id, aid,
+            )
+            already_claimed.add(aid)
+        else:
+            published_store.mark_published(aid)
+            logger.info("[%s] publish: pre-claimed article=%s in store", run_id, aid)
+
+    # Drop articles claimed by a concurrent run
+    passed_ids -= already_claimed
+
     for summary_dict, persona_dict in zip(state["summaries"], state["persona_outputs"]):
         if summary_dict["article_id"] not in passed_ids:
             continue

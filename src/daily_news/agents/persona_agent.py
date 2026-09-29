@@ -32,13 +32,12 @@ import asyncio
 import hashlib
 from pathlib import Path
 
-import httpx
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 from daily_news.agents.publisher_agent import CANONICAL_BANNED_PHRASES
+from daily_news.config.llm_factory import make_llm
 from daily_news.config.settings import get_settings
 from daily_news.models.persona import PersonaOutput, PersonaSetOutput, PersonaType
 from daily_news.models.summary import NewsSummary
@@ -146,14 +145,7 @@ class PersonaAgent:
         self._persona = persona
         self._settings = s
         self._meta = PERSONA_FOCUS[persona]
-        self._llm = ChatOpenAI(
-            model=s.llm_model,
-            api_key=s.llm_api_key,
-            base_url=s.llm_base_url,
-            temperature=0.4,
-            http_client=httpx.Client(verify=False),
-            http_async_client=httpx.AsyncClient(verify=False),
-        )
+        self._llm = make_llm(temperature=0.4, settings=s)
         self._parser = PydanticOutputParser(pydantic_object=_PersonaOutputRaw)
 
         # Map persona enum values to prompt file names

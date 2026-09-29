@@ -1,0 +1,17 @@
+---
+# PersistentVolumeClaim for the AIFeeders published-article store.
+# Keeps /data/aifeeders_published.json alive across pod restarts and
+# deployments so the same article is never posted to LinkedIn twice.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: aifeeders-store
+  namespace: aifeeders
+  labels:
+    app: daily-news-api
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Mi

@@ -45,6 +45,9 @@ spec:
             limits:
               cpu: "1"
               memory: "1Gi"
+          volumeMounts:
+            - name: aifeeders-store
+              mountPath: /data
           readinessProbe:
             httpGet:
               path: /ready
@@ -59,3 +62,7 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 30
             failureThreshold: 3
+      volumes:
+        - name: aifeeders-store
+          persistentVolumeClaim:
+            claimName: aifeeders-store

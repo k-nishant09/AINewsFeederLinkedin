@@ -18,12 +18,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
+from daily_news.config.llm_factory import make_llm
 from daily_news.config.settings import get_settings
 from daily_news.models.intelligence import (
     AudienceImpact,
@@ -176,14 +175,7 @@ class MediaStorytellerAgent:
     def __init__(self) -> None:
         s = get_settings()
         self._settings = s
-        self._llm = ChatOpenAI(
-            model=s.llm_model,
-            api_key=s.llm_api_key,
-            base_url=s.llm_base_url,
-            temperature=0.5,   # slightly higher than summary — needs creative framing
-            http_client=httpx.Client(verify=False),
-            http_async_client=httpx.AsyncClient(verify=False),
-        )
+        self._llm = make_llm(temperature=0.5, settings=s)  # creative framing pass
         self._parser = PydanticOutputParser(pydantic_object=_NewsStoryRaw)
         self._prompt = ChatPromptTemplate.from_messages([
             ("system", _load_prompt("storyteller")),
@@ -309,14 +301,7 @@ class SummaryAgent:
     def __init__(self) -> None:
         s = get_settings()
         self._settings = s
-        self._llm = ChatOpenAI(
-            model=s.llm_model,
-            api_key=s.llm_api_key,
-            base_url=s.llm_base_url,
-            temperature=0.2,
-            http_client=httpx.Client(verify=False),
-            http_async_client=httpx.AsyncClient(verify=False),
-        )
+        self._llm = make_llm(temperature=0.2, settings=s)
         self._parser = PydanticOutputParser(pydantic_object=NewsSummary)
         self._prompt = ChatPromptTemplate.from_messages([
             ("system", _load_prompt("summary")),

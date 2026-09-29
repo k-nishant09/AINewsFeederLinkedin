@@ -10,12 +10,11 @@ from __future__ import annotations
 
 import logging
 
-import httpx
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
+from daily_news.config.llm_factory import make_llm
 from daily_news.config.settings import get_settings
 from daily_news.models.intelligence import (
     EngagementMetrics,
@@ -78,14 +77,7 @@ class ContentOptimizerAgent:
     def __init__(self) -> None:
         s = get_settings()
         self._settings = s
-        self._llm = ChatOpenAI(
-            model=s.llm_model,
-            api_key=s.llm_api_key,
-            base_url=s.llm_base_url,
-            temperature=0.3,
-            http_client=httpx.Client(verify=False),
-            http_async_client=httpx.AsyncClient(verify=False),
-        )
+        self._llm = make_llm(temperature=0.3, settings=s)
         self._diag_parser = PydanticOutputParser(pydantic_object=_DiagnosisRaw)
         self._diag_prompt = ChatPromptTemplate.from_messages([
             ("system", _DIAGNOSIS_PROMPT),

@@ -84,6 +84,15 @@ class PublishedStore:
             self._cache[key] = datetime.now(tz=UTC).isoformat()
             self._flush_locked()
 
+    def unmark_published(self, article_id: str) -> None:
+        """Remove a previously-marked article (used to roll back on API failure)."""
+        self._ensure_loaded()
+        key = _key(article_id)
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
+                self._flush_locked()
+
     def filter_unpublished(self, articles: list[dict]) -> list[dict]:
         """
         Return only articles not yet published today.

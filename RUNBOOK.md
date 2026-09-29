@@ -45,7 +45,7 @@
 │  STAGE 4 · GENERATION    generate_personas (Qwen @ 0.7, asyncio.gather)      │
 │  STAGE 5 · EVALUATION    evaluate: Jev floats + Judge Qwen @ 0.1             │
 │                          ├── PASS → score_reach → publish                    │
-│                          └── REGENERATE (retry < 2) → find_angle             │
+│                          └── REGENERATE (retry < 3) → generate_personas      │
 │  STAGE 6 · PUBLISH       OutputGuardrail → Unicode bold → LinkedIn MCP       │
 │  STAGE 7 · LEARN         optimize_content → story mutations                  │
 │                                                                              │
@@ -57,7 +57,7 @@
 
 | Container | Port | Role |
 |---|---|---|
-| `daily-news-api` | 8000 | FastAPI + LangGraph engine + all 13 agents |
+| `daily-news-api` | 8000 | FastAPI + LangGraph engine — 15 nodes · 11 agents |
 | `news-mcp` | 8101 | GNews REST client + article scraper |
 | `pageindex-mcp` | 8102 | In-memory document tree (resets on restart) |
 | `evaluation-mcp` | 8103 | LLM-backed eval engine (Jev fallback) |
@@ -1128,8 +1128,8 @@ Independent failure domains. GNews quota exhaustion → `news-mcp` restarts alon
 ### Why `JEV_BASE_URL` empty = INFO not ERROR?
 Local development has no access to the IBM Jev gateway. Emitting `WARNING/ERROR` for a missing optional service would make every local dev run look broken. The `if not s.jev_base_url: return state` guard in all 3 Jev nodes means the pipeline runs end-to-end with deterministic fallbacks, not failures.
 
-### Why is `MAX_RETRIES = 2` not higher?
-Each regeneration loop costs ~10 LLM calls (find_angle + 3 summary agents + 3-4 persona calls + 2 eval calls). At `MAX_RETRIES=3` a failed run costs 40+ calls. The root cause (boilerplate opener) is solved in 1 retry once failure_reasons are injected. A third retry is wasted spend.
+### Why is `MAX_RETRIES = 3`? (not 2)
+The code sets `MAX_RETRIES = 3` in [`daily_news_graph.py`](src/daily_news/workflows/daily_news_graph.py). The retry loop goes back to `generate_personas` only — not `find_angle` or `summarize`. Each retry costs ~8–10 LLM calls (4 persona calls + judge + scoring). Three retries cover >98% of banned-phrase cases empirically. After 3, PASS items proceed; REGENERATE items force-continue through `score_reach`. The `avoid_phrases` injection (exact banned phrases extracted from LLM judge critiques) means each retry is targeted, not random — retry 1 nearly always resolves the issue.
 
 ### Why non-root containers?
 `runAsUser: 1001` + `readOnlyRootFilesystem: true` + `capabilities.drop: [ALL]` means a container escape does not yield host root. Required by OpenShift SCCs and AWS/Azure security benchmarks. Zero functional impact on the application.
@@ -1398,4 +1398,387 @@ oc get routes -n $NS
 
 ---
 
+## 16. Security Hardening Reference
+
+> This section covers every security control in the platform — what it does, why it exists, and how to verify it is active.
+
+### 16.1 Secret Management Hierarchy
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SECRET MANAGEMENT — DO NOT SKIP ANY LEVEL                                  │
+├──────────────────────┬──────────────────────────────────────────────────────┤
+│  Dev (local)         │  .env file (git-ignored). Never commit. Never share.  │
+│  Staging             │  K8s Secret (kubectl create secret generic ...)        │
+│  Production          │  AWS Secrets Manager (ESO) / Azure Key Vault (CSI)    │
+│                      │  / OpenShift Vault (HashiCorp or IBM SealedSecrets)    │
+└──────────────────────┴──────────────────────────────────────────────────────┘
+```
+
+**Rules enforced by the platform:**
+- `.gitignore` includes `.env` — plain text secrets never touch the repo
+- `readOnlyRootFilesystem: true` — running container cannot write secrets to disk
+- `capabilities.drop: [ALL]` — container has no Linux capabilities
+- `runAsUser: 1001` (non-root) — container escape does not yield host root
+- `MCP_AUTH_TOKEN` bearer token — all MCP HTTP calls require `Authorization: Bearer`
+- NetworkPolicy `default-deny-all` — no pod can reach another pod unless explicitly allowed
+
+### 16.2 Secret Rotation Without Downtime
+
+```bash
+# ── Pattern for ANY secret rotation (all three platforms) ─────────────────────
+# Step 1: Update the secret in-place (dry-run + apply pattern prevents gaps)
+kubectl create secret generic daily-news-secrets \
+  --from-literal=LINKEDIN_ACCESS_TOKEN="new-token-here" \
+  --namespace aifeeders --dry-run=client -o yaml | kubectl apply -f -
+
+# Step 2: Trigger a rolling restart (new pods pick up new secret, old pods drain)
+kubectl rollout restart deployment/daily-news-api -n aifeeders
+kubectl rollout status  deployment/daily-news-api -n aifeeders
+# Zero downtime: Kubernetes replaces pods one at a time per rolling update strategy
+
+# Step 3: Verify the new secret is in the running pod
+kubectl exec deploy/daily-news-api -n aifeeders -- \
+  printenv LINKEDIN_ACCESS_TOKEN | head -c 20
+```
+
+**Why `--dry-run=client -o yaml | kubectl apply`?** A bare `kubectl create` fails if the secret exists. A bare `kubectl replace` fails if it doesn't exist. The dry-run+apply pattern is idempotent — creates or updates safely in all states.
+
+### 16.3 Network Policy Map
+
+```
+NetworkPolicy: default-deny-all
+  → all ingress and egress blocked by default
+
+NetworkPolicy: allow-api-to-mcps
+  → daily-news-api → {news-mcp :8101, pageindex-mcp :8102,
+                       evaluation-mcp :8103, linkedin-mcp :8104}
+
+NetworkPolicy: allow-router-to-api
+  → OpenShift Router / ALB → daily-news-api :8000
+
+NetworkPolicy: allow-egress-internet
+  → all pods → HTTPS :443 (GNews, LinkedIn, Langfuse, LLM gateway, Jev)
+```
+
+**To verify network policies are applied:**
+```bash
+kubectl get networkpolicies -n aifeeders
+# Expected: 5 policies listed
+
+# Test: confirm inter-pod connectivity works (from api to news-mcp)
+kubectl exec deploy/daily-news-api -n aifeeders -- \
+  curl -s http://news-mcp:8101/health | python3 -c "import sys,json; print(json.load(sys.stdin))"
+```
+
+### 16.4 Container Security Controls Verification
+
+```bash
+# Verify non-root + read-only filesystem (inspect running pod spec)
+kubectl get pod -n aifeeders -l app=daily-news-api -o jsonpath=\
+  '{.items[0].spec.containers[0].securityContext}' | python3 -m json.tool
+# Expected:
+# {
+#   "runAsNonRoot": true,
+#   "runAsUser": 1001,
+#   "readOnlyRootFilesystem": true,
+#   "capabilities": {"drop": ["ALL"]}
+# }
+
+# Verify no secrets in environment (env should show redacted values or key names only)
+kubectl exec deploy/daily-news-api -n aifeeders -- printenv | grep -E "KEY|TOKEN|SECRET" | sed 's/=.*/=<REDACTED>/'
+```
+
+### 16.5 LinkedIn Token Expiry Calendar
+
+LinkedIn 3-legged OAuth tokens expire after **60 days**. Set a calendar reminder 5 days before expiry:
+
+```bash
+# Check current token issue date from last working log
+kubectl logs deploy/daily-news-api -n aifeeders | grep "post published" | tail -1
+# If post published today, token is valid. Work backward from last successful publish date.
+
+# Token refresh steps:
+# 1. Go to https://www.linkedin.com/developers/apps → select your app
+# 2. OAuth 2.0 Tools → Generate access token
+# 3. Scope required: w_member_social
+# 4. Copy new token and rotate (Section 12)
+```
+
+---
+
+## 17. Scaling Decision Tree
+
+> Use this tree when deciding whether and how to scale.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  SCALING DECISION TREE                                                       │
+│                                                                              │
+│  Q1: Is the pipeline running too slowly?                                     │
+│  ├── YES: Which stage?                                                       │
+│  │   ├── Discovery (discover_news) slow?                                     │
+│  │   │   → GNews API is rate-limited (1 req/s). Scale cannot help.          │
+│  │   │   → Fix: add GNEWS_BACKUP_API_KEY, increase GNEWS_SEMAPHORE_DELAY    │
+│  │   ├── Persona generation slow?                                            │
+│  │   │   → LLM gateway is the bottleneck (4 parallel calls × 72B model)    │
+│  │   │   → Fix: scale LLM gateway instances, not the API pod                │
+│  │   │   → If gateway is near-quota: reduce persona parallelism (1 at a    │
+│  │   │     time) or reduce max_tokens                                        │
+│  │   └── MCP calls slow?                                                    │
+│  │       → Increase MCP pod replicas: oc scale deploy/news-mcp --replicas=2 │
+│  └── NO → proceed to Q2                                                     │
+│                                                                              │
+│  Q2: Is the API pod CPU > 70% or memory > 80%?                              │
+│  ├── YES: HPA should have already scaled (check kubectl get hpa)            │
+│  │   → If HPA is not scaling: verify metrics-server is running              │
+│  │   → kubectl top pod -n aifeeders                                         │
+│  └── NO → proceed to Q3                                                     │
+│                                                                              │
+│  Q3: Are there multiple concurrent pipeline runs?                            │
+│  ├── YES: API pods scale independently per run — each run gets its own pod  │
+│  │   → HPA range: 2–10 replicas. Set REPLICAS_MAX= in hpa.yaml             │
+│  └── NO → single daily run — 2 replicas (min) is sufficient                │
+│                                                                              │
+│  Q4: Does pageindex-mcp show memory growth across runs?                     │
+│  ├── YES: pageindex-mcp is in-memory and resets on restart.                │
+│  │   → Schedule a nightly restart: kubectl rollout restart                  │
+│  └── NO → no action needed                                                  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### HPA Configuration Reference
+
+```bash
+# Check current HPA state and targets
+kubectl get hpa -n aifeeders -o wide
+# Shows: TARGETS (CPU/Memory), MINPODS, MAXPODS, REPLICAS
+
+# Manually scale for load testing (bypasses HPA temporarily)
+kubectl scale deployment/daily-news-api --replicas=4 -n aifeeders
+# HPA will resume control after STABILIZATION_WINDOW_SECONDS (default: 300s)
+
+# Patch HPA max replicas for high-volume periods
+kubectl patch hpa daily-news-api-hpa -n aifeeders \
+  --type=merge -p '{"spec":{"maxReplicas":15}}'
+```
+
+---
+
+## 18. End-to-End Validation Guide
+
+> **Run this after every deploy, secret rotation, or incident resolution.**
+> Validates: pipeline trigger → news discovery → article processing → LinkedIn post published → Langfuse traces → engagement analytics.
+
+### 18.1 Pre-flight — All Services Healthy
+
+```bash
+# 1. All pods Running, 0 restarts
+kubectl get pods -n aifeeders
+# Expected: 5 deployments, all 1/1 Running
+
+# 2. Health endpoints respond
+kubectl exec deploy/daily-news-api -n aifeeders -- bash -c '
+  for svc_port in "daily-news-api:8000" "news-mcp:8101" "pageindex-mcp:8102" "evaluation-mcp:8103" "linkedin-mcp:8104"; do
+    svc="${svc_port%%:*}"; port="${svc_port##*:}"
+    result=$(curl -sf http://${svc}:${port}/health 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get(\"status\",\"?\"))" 2>/dev/null || echo "UNREACHABLE")
+    echo "  ${svc} :${port} → ${result}"
+  done'
+# Expected: all → ok
+
+# 3. LLM gateway reachable
+kubectl exec deploy/daily-news-api -n aifeeders -- bash -c '
+  curl -sk "$LLM_BASE_URL/chat/completions" \
+    -H "Authorization: Bearer $LLM_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"$LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply: READY\"}],\"max_tokens\":5}" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[\"choices\"][0][\"message\"][\"content\"])"'
+# Expected: READY (or similar short ack)
+```
+
+### 18.2 Trigger a Pipeline Run
+
+```bash
+# Trigger manually (PUBLISHING_ENABLED controls whether LinkedIn post is created)
+RUN_RESPONSE=$(kubectl exec deploy/daily-news-api -n aifeeders -- \
+  curl -s -X POST http://localhost:8000/workflow/daily-news \
+  -H "Content-Type: application/json" -d '{}')
+
+# Extract run_id for tracking
+RUN_ID=$(echo "$RUN_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('run_id','unknown'))")
+echo "Run started: $RUN_ID"
+# Expected: RUN-XXXXXXXXXXXXXXXX
+```
+
+### 18.3 Watch Pipeline Progress in Real Time
+
+```bash
+# Follow logs filtered to this run
+kubectl logs deploy/daily-news-api -n aifeeders --follow | grep "$RUN_ID"
+
+# Key log lines to watch for (in order):
+# [RUN-xxx] discover_news started
+# [RUN-xxx] discovered N raw articles
+# [RUN-xxx] deduplicated: N raw → M url-unique → K unpublished-today → J title-unique
+# [RUN-xxx] jev_prefilter: top-3 articles selected
+# [RUN-xxx] judgment analysis article=abc123 facts=4 claims=3 uncertainties=2
+# [RUN-xxx] story extracted article=abc123 style=AI_DEBATE hook_len=142
+# [RUN-xxx] generate_personas: running ['business', 'linkedin', 'genz', 'policy']
+# [RUN-xxx] hook_selector: selected formula=F7 hook='...'
+# [RUN-xxx] humanizer: removed 3 AI vocab terms
+# [RUN-xxx] grammar_check: corrected 2 issues (or: grammar_check: no corrections needed)
+# [RUN-xxx] eval article=abc123 decision=PASS factuality=0.88 groundedness=0.84
+# [RUN-xxx] llm_judge review article=abc123 verdict=PASS quality=0.91
+# [RUN-xxx] score_reach article=abc123 reach_score=86/100 verdict=PUBLISH
+# [RUN-xxx] post published post_urn=urn:li:share:XXXXXXXXXXXXXXXXXX status=published
+# [RUN-xxx] Workflow complete — status=OPTIMIZED published=1 errors=0
+```
+
+### 18.4 Confirm LinkedIn Post Was Published
+
+```bash
+# Check run status via API
+kubectl exec deploy/daily-news-api -n aifeeders -- \
+  curl -s "http://localhost:8000/workflow/${RUN_ID}" \
+  | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+print('status:', d.get('workflow_status'))
+print('published:', len(d.get('linkedin_results', [])))
+for r in d.get('linkedin_results', []):
+    print('  post_urn:', r.get('post_urn'))
+    print('  comments:', len(r.get('comment_urns', [])))
+print('errors:', d.get('errors', []))
+"
+# Expected:
+#   status: OPTIMIZED
+#   published: 1
+#     post_urn: urn:li:share:XXXXXXXXXXXXXXXXXX
+#     comments: 4
+#   errors: []
+```
+
+### 18.5 Validate Langfuse Traces Appeared
+
+1. Go to **https://us.cloud.langfuse.com** → your project → **Traces**
+2. Filter by tag: `run_id = RUN-XXXXXXXXXXXXXXXX`
+3. Expected: a trace session with 15–25 LLM spans (JudgmentAgent, MediaStoryteller, SummaryAgent, 4× PersonaAgent, HookSelector, Audit, Judge, GrammarAgent)
+4. Click any span to see: `prompt`, `completion`, `token usage`, `latency`
+
+```bash
+# Or verify via Langfuse API (if LANGFUSE_PUBLIC_KEY available locally)
+curl -s "https://us.cloud.langfuse.com/api/public/traces?limit=5" \
+  -H "Authorization: Basic $(echo -n "${LANGFUSE_PUBLIC_KEY}:${LANGFUSE_SECRET_KEY}" | base64)" \
+  | python3 -m json.tool | grep '"name"' | head -10
+```
+
+### 18.6 Interpret Evaluation Results
+
+```bash
+# Extract evaluation details from run status
+kubectl exec deploy/daily-news-api -n aifeeders -- \
+  curl -s "http://localhost:8000/workflow/${RUN_ID}" \
+  | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for e in d.get('evaluation_results', []):
+    print(f'article_id: {e[\"article_id\"]}')
+    print(f'  decision:      {e[\"decision\"]}')
+    print(f'  factuality:    {e[\"factuality\"]:.2f}  (threshold > 0.50)')
+    print(f'  groundedness:  {e[\"groundedness\"]:.2f} (threshold > 0.50)')
+    print(f'  hallucination: {e[\"hallucination\"]:.2f} (threshold < 0.85)')
+    print(f'  retry_count:   {e.get(\"retry_count\", 0)}')
+    if e.get(\"failure_reasons\"):
+        print(f'  failure_reasons: {e[\"failure_reasons\"]}')
+"
+```
+
+**What to look for:**
+
+| Condition | Meaning | Action |
+|---|---|---|
+| `decision=PASS, retry_count=0` | First-attempt pass ✅ | Nothing — ideal case |
+| `decision=PASS, retry_count=1` | Fixed on retry 1 — avoid_phrases worked | Check failure_reasons for patterns |
+| `decision=PASS, retry_count=3` | Barely passed — review persona prompts | Add persistent phrases to `_BANNED_INLINE_PHRASES` |
+| `decision=REGENERATE` after max retries | Force-continued — post still published | Review what phrases kept triggering |
+| `decision=BLOCK` | Post never published — PII or injection detected | Investigate the article source |
+| `decision=HUMAN_REVIEW` | Post held for approval | See `/approval/pending` |
+
+### 18.7 Verify Reach Score
+
+```bash
+kubectl exec deploy/daily-news-api -n aifeeders -- \
+  curl -s "http://localhost:8000/workflow/${RUN_ID}" \
+  | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+for r in d.get('reach_scores', []):
+    print(f'article: {r[\"article_id\"]}  total: {r[\"total_score\"]}/100')
+    for dim, score in r.get('dimensions', {}).items():
+        bar = '█' * score + '░' * (20 - score)
+        print(f'  {dim:25s} [{bar}] {score}/20')
+"
+# Good post: total > 75
+# LinkedIn algo threshold: total > 65 (below = organic reach penalty)
+```
+
+### 18.8 EKS-Specific Triage
+
+```bash
+# EKS: Check node resource capacity
+kubectl top nodes
+kubectl describe nodes | grep -A5 "Allocated resources"
+
+# EKS: ALB health check (if using AWS Load Balancer Controller)
+kubectl get ingress -n aifeeders
+aws elbv2 describe-target-health \
+  --target-group-arn $(kubectl get ingress daily-news-api -n aifeeders \
+    -o jsonpath='{.metadata.annotations.kubernetes\.io/ingress\.class}')
+
+# EKS: ECR image scan results (run after push)
+aws ecr describe-image-scan-findings \
+  --repository-name aifeeders/daily-news-api \
+  --image-id imageTag=latest \
+  --region $AWS_REGION \
+  | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+findings = d['imageScanFindings']['findings']
+critical = [f for f in findings if f['severity'] == 'CRITICAL']
+high     = [f for f in findings if f['severity'] == 'HIGH']
+print(f'CRITICAL: {len(critical)}  HIGH: {len(high)}')
+for f in critical[:5]:
+    print(f'  [{f[\"severity\"]}] {f[\"name\"]} — {f[\"description\"][:80]}')
+"
+
+# EKS: IRSA verification (if using IAM Roles for Service Accounts)
+kubectl describe sa daily-news -n aifeeders | grep "Annotations"
+# Expected: eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/aifeeders-role
+```
+
+### 18.9 AKS-Specific Triage
+
+```bash
+# AKS: Key Vault CSI driver — verify secrets are mounted
+kubectl get secretproviderclass -n aifeeders
+kubectl describe pod -n aifeeders -l app=daily-news-api | grep -A10 "Volumes:"
+# Expected: keyvault-secrets volume listed
+
+# AKS: Managed Identity verification
+kubectl describe pod -n aifeeders -l app=daily-news-api | grep "azure.workload.identity"
+# Expected: azure.workload.identity/inject: "true"
+
+# AKS: ACR pull verification
+kubectl describe pod -n aifeeders -l app=daily-news-api | grep "Image:"
+# Expected: aifeedersregistry.azurecr.io/aifeeders/daily-news-api:TAG
+
+# AKS: Azure Monitor logs (if Container Insights enabled)
+az monitor log-analytics query \
+  --workspace $LOG_ANALYTICS_WORKSPACE_ID \
+  --analytics-query "ContainerLogV2 | where ContainerName == 'daily-news-api' | where LogMessage contains 'ERROR' | take 20"
+```
+
+---
+
 *AIFeeders Operational Runbook — from `podman build` to published LinkedIn post.*
+*Sections 16–18 added: Security hardening · Scaling decision tree · End-to-end validation guide.*

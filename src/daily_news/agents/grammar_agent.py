@@ -15,10 +15,9 @@ from __future__ import annotations
 
 import logging
 
-import httpx
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 
+from daily_news.config.llm_factory import make_llm
 from daily_news.config.settings import get_settings
 from daily_news.observability.tracing import get_langfuse_callback
 
@@ -42,14 +41,7 @@ class GrammarAgent:
     def __init__(self) -> None:
         s = get_settings()
         self._settings = s
-        self._llm = ChatOpenAI(
-            model=s.llm_model,
-            api_key=s.llm_api_key,
-            base_url=s.llm_base_url,
-            temperature=0.0,   # deterministic — correction, not generation
-            http_client=httpx.Client(verify=False),
-            http_async_client=httpx.AsyncClient(verify=False),
-        )
+        self._llm = make_llm(temperature=0.0, settings=s)  # deterministic — correction only
         self._prompt = ChatPromptTemplate.from_messages([
             ("system", _load_prompt("grammar")),
             (

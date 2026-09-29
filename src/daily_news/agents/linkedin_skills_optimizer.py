@@ -39,10 +39,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
+from daily_news.config.llm_factory import make_llm
 from daily_news.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -119,22 +118,20 @@ class LinkedInSkillsOptimizer:
         if not s.llm_base_url:
             raise RuntimeError("LLM_BASE_URL not set — LinkedIn optimizer requires LLM")
 
-        limits = httpx.Limits(max_connections=5, keepalive_expiry=30.0)
-        self._llm = ChatOpenAI(
-            model=s.llm_model,
-            api_key=s.llm_api_key,
-            base_url=s.llm_base_url,
+        # Small pool — optimizer runs once per article, not in parallel bursts
+        self._llm = make_llm(
             temperature=0.3,   # slightly creative for hook variants
-            http_client=httpx.Client(verify=False, limits=limits),
-            http_async_client=httpx.AsyncClient(verify=False, limits=limits),
+            settings=s,
+            max_connections=5,
+            max_keepalive=5,
+            keepalive_expiry=30.0,
         )
-        self._judge_llm = ChatOpenAI(
-            model=s.llm_model,
-            api_key=s.llm_api_key,
-            base_url=s.llm_base_url,
+        self._judge_llm = make_llm(
             temperature=0.0,   # deterministic audit
-            http_client=httpx.Client(verify=False, limits=limits),
-            http_async_client=httpx.AsyncClient(verify=False, limits=limits),
+            settings=s,
+            max_connections=5,
+            max_keepalive=5,
+            keepalive_expiry=30.0,
         )
 
     # ── Public API ────────────────────────────────────────────────────────────

@@ -1201,6 +1201,9 @@ class PublisherAgent:
             run_id, summary.article_id, len(publish_text),
         )
 
+        # NOTE: article is already pre-claimed in the store by the publish()
+        # graph node before this method is called.  On API failure we roll back
+        # via unmark_published() so the article can be retried.
         post_result = await self._client.create_post_with_image(
             text=publish_text,
             asset_urn=asset_urn,
@@ -1211,6 +1214,8 @@ class PublisherAgent:
         post_status = post_result.get("status", "error")
 
         if post_status == "error":
+            # Roll back the optimistic mark so the article can be retried
+            published_store.unmark_published(summary.article_id)
             logger.error(
                 "[%s] post FAILED article=%s | error_class=%s | http=%s | "
                 "li_code=%s | li_message=%s | li_version=%s | endpoint=%s | retry_eligible=%s",
@@ -1228,7 +1233,6 @@ class PublisherAgent:
                 "[%s] post published post_urn=%s status=%s image_attached=%s",
                 run_id, post_urn, post_status, bool(asset_urn),
             )
-            published_store.mark_published(summary.article_id)
 
         # ── Persona comments — sequential, never gather() ─────────────────────
         # Comments API requires "Community Management API" product approval.

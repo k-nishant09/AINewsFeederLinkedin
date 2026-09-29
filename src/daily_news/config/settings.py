@@ -1,4 +1,17 @@
-"""Application settings — loaded from environment / .env file."""
+"""Application settings — loaded from environment / .env file.
+
+LLM Gateway is 100% configuration-driven.  No URL, model name, API key, or
+TLS setting is hard-coded anywhere in agent code.  To switch from the IBM
+OpenShift gateway to Anthropic (or any other OpenAI-compatible endpoint):
+
+  LLM_BASE_URL=https://api.anthropic.com/v1
+  LLM_API_KEY=sk-ant-...
+  LLM_MODEL=claude-3-5-sonnet-20241022
+  LLM_SSL_VERIFY=true          # public endpoints always have valid certs
+  LLM_TIMEOUT=60               # Anthropic can be slower on long prompts
+
+Everything else (agent logic, prompts, graph topology) stays unchanged.
+"""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -21,26 +34,61 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     run_id_prefix: str = "RUN"
 
-    # ── LLM Gateway (IBM OpenShift Model Gateway — OpenAI-compatible) ─────────
-    # Default to IBM gateway; override via LLM_API_KEY env var in production.
+    # ── LLM Gateway — OpenAI-compatible, any provider ─────────────────────────
+    # Works with: IBM OpenShift gateway, OpenAI, Anthropic (via proxy), Ollama,
+    # Azure OpenAI, Together AI, Groq, or any OpenAI-compatible endpoint.
+    #
+    # Required:
+    #   LLM_BASE_URL  — base URL of the OpenAI-compatible endpoint (no trailing slash)
+    #   LLM_API_KEY   — bearer token / API key for the gateway
+    #   LLM_MODEL     — model name exactly as the gateway expects it
+    #
+    # Optional (tuned per provider):
+    #   LLM_SSL_VERIFY        — set false only for self-signed internal certs (default: true)
+    #   LLM_TIMEOUT           — request timeout in seconds (default: 120)
+    #   LLM_MAX_CONNECTIONS   — httpx connection pool size (default: 20)
+    #   LLM_MAX_KEEPALIVE     — httpx keepalive pool size (default: 10)
     llm_api_key: str = Field("", alias="LLM_API_KEY")
-    llm_base_url: str = Field(
-        "",
-        alias="LLM_BASE_URL",
-    )
+    llm_base_url: str = Field("", alias="LLM_BASE_URL")
     llm_model: str = Field("qwen2-5-72b-instruct", alias="LLM_MODEL")
+    llm_ssl_verify: bool = Field(False, alias="LLM_SSL_VERIFY")   # False = IBM internal self-signed cert; set True for Anthropic/OpenAI
+    llm_timeout: float = Field(120.0, alias="LLM_TIMEOUT")
+    llm_max_connections: int = Field(20, alias="LLM_MAX_CONNECTIONS")
+    llm_max_keepalive: int = Field(10, alias="LLM_MAX_KEEPALIVE")
 
     # ── LLM-as-a-Judge Reviewer Gateway ───────────────────────────────────────
-    # Same model as generator (only Qwen is available on this gateway).
-    # Separation is enforced via independent chain invocations at different
-    # temperatures: generator at 0.7, judge at 0.1 (set in EvaluationAgent).
-    # When a second model becomes available, set EVAL_LLM_MODEL to its name.
-    eval_llm_model: str = Field("qwen2-5-72b-instruct", alias="EVAL_LLM_MODEL")
-    eval_llm_base_url: str = Field(
-        "",
-        alias="EVAL_LLM_BASE_URL",
-    )
+    # Defaults to the same gateway as the generator.  Set EVAL_LLM_* env vars
+    # to route the judge to a different model or provider for independence.
+    # e.g. generator=Qwen on IBM, judge=Claude on Anthropic.
+    eval_llm_model: str = Field("", alias="EVAL_LLM_MODEL")
+    eval_llm_base_url: str = Field("", alias="EVAL_LLM_BASE_URL")
     eval_llm_api_key: str = Field("", alias="EVAL_LLM_API_KEY")
+    # Judge uses the same SSL/timeout as the generator unless overridden.
+    eval_llm_ssl_verify: bool | None = Field(None, alias="EVAL_LLM_SSL_VERIFY")
+    eval_llm_timeout: float | None = Field(None, alias="EVAL_LLM_TIMEOUT")
+
+    @property
+    def resolved_eval_llm_model(self) -> str:
+        """Falls back to the generator model when EVAL_LLM_MODEL is not set."""
+        return self.eval_llm_model or self.llm_model
+
+    @property
+    def resolved_eval_llm_base_url(self) -> str:
+        return self.eval_llm_base_url or self.llm_base_url
+
+    @property
+    def resolved_eval_llm_api_key(self) -> str:
+        return self.eval_llm_api_key or self.llm_api_key
+
+    @property
+    def resolved_eval_llm_ssl_verify(self) -> bool:
+        if self.eval_llm_ssl_verify is not None:
+            return self.eval_llm_ssl_verify
+        return self.llm_ssl_verify
+
+    @property
+    def resolved_eval_llm_timeout(self) -> float:
+        return self.eval_llm_timeout if self.eval_llm_timeout is not None else self.llm_timeout
 
     # ── Jev System One Gateway ────────────────────────────────────────────────
     # System One model for fast structured decisions: article scoring,

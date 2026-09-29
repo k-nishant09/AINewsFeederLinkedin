@@ -24,10 +24,9 @@ from __future__ import annotations
 import json
 import logging
 
-import httpx
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 
+from daily_news.config.llm_factory import make_eval_llm
 from daily_news.config.settings import get_settings
 from daily_news.mcp.client import jev_singleton
 from daily_news.mcp.evaluation import EvaluationMCPClient
@@ -54,34 +53,21 @@ class EvaluationAgent:
     def __init__(self) -> None:
         s = get_settings()
         self._settings = s
-        # Architecture fix: use the process-scoped JevClient singleton so we reuse
-        # the same connection pool that jev_prefilter / jev_find_angle / jev_router use.
-        # Fresh JevClient() per EvaluationAgent instantiation was causing a 4th cold
-        # TCP+TLS handshake to the Jev gateway that the singleton now eliminates.
+        # Architecture: use the process-scoped JevClient singleton to reuse the same
+        # connection pool as jev_prefilter / jev_find_angle / jev_router.
         self._jev = jev_singleton() if s.jev_base_url else None
         self._mcp = EvaluationMCPClient()
 
-        # Independent LLM-as-a-Judge Reviewer
-        judge_model = s.eval_llm_model or s.llm_model
-        judge_base_url = s.eval_llm_base_url or s.llm_base_url
-        judge_api_key = s.eval_llm_api_key or s.llm_api_key
-
-        # Architecture fix: add explicit Limits so the judge pool doesn't over-provision
-        # (httpx default max_connections=100 is wasteful for a single-host judge call).
-        # keepalive_expiry=60s matches the workflow run window so the connection stays
-        # warm for the evaluate → potential-retry → re-evaluate cycle.
-        _judge_limits = httpx.Limits(
+        # Independent LLM-as-a-Judge Reviewer.
+        # Uses make_eval_llm() so the gateway, model, SSL, and timeouts all come
+        # from EVAL_LLM_* env vars (falling back to LLM_* when not set).
+        # Pool is intentionally small — judge runs serially once per article.
+        self._judge_llm = make_eval_llm(
+            temperature=0.1,   # deterministic critic
+            settings=s,
             max_connections=10,
-            max_keepalive_connections=4,
+            max_keepalive=4,
             keepalive_expiry=60.0,
-        )
-        self._judge_llm = ChatOpenAI(
-            model=judge_model,
-            api_key=judge_api_key,
-            base_url=judge_base_url,
-            temperature=0.1,  # low temperature for critical judgment
-            http_client=httpx.Client(verify=False, limits=_judge_limits),
-            http_async_client=httpx.AsyncClient(verify=False, limits=_judge_limits),
         )
 
         self._judge_prompt = ChatPromptTemplate.from_messages([

@@ -31,6 +31,10 @@ data:
   # Workflow
   WORKFLOW_TIMEZONE: "Asia/Kolkata"
 
+  # Published-article store — backed by PVC so it survives pod restarts
+  # and deployment rollouts. Prevents the same article being posted twice.
+  AIFEEDERS_STORE_PATH: "/data/aifeeders_published.json"
+
   # Publishing gate — set to "false" for smoke tests only
   PUBLISHING_ENABLED: "true"
 
