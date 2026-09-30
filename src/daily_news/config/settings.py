@@ -159,6 +159,12 @@ class Settings(BaseSettings):
     eval_hallucination_threshold: float = Field(0.85, alias="EVAL_HALLUCINATION_THRESHOLD")
     eval_max_retries: int = 2
 
+    # ── Workflow article cap ──────────────────────────────────────────────────
+    # Maximum number of articles selected per run (1 = one post per day).
+    # The retry loop still has fallback articles available internally;
+    # this only controls how many articles reach the publish stage.
+    workflow_max_articles: int = Field(1, alias="WORKFLOW_MAX_ARTICLES")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

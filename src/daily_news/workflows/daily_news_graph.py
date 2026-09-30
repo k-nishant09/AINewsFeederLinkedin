@@ -913,11 +913,28 @@ async def publish(state: NewsWorkflowState) -> NewsWorkflowState:
         except Exception:
             pass
 
-    passed_ids = {
+    # Cap to WORKFLOW_MAX_ARTICLES — publish only the top-N best articles per run.
+    # Ordering is preserved from jev_prefilter (best first), so we take the first N
+    # passing article IDs in the order summaries were produced.
+    _max = max(1, get_settings().workflow_max_articles)
+    _all_passed = {
         r["article_id"]
         for r in state["evaluation_results"]
         if r["decision"] == EvaluationDecision.PASS.value
     }
+    # Preserve jev ranking order: walk summaries in order, keep first _max that passed
+    _ordered_passed = [
+        s["article_id"] for s in state["summaries"]
+        if s["article_id"] in _all_passed
+    ]
+    passed_ids = set(_ordered_passed[:_max])
+    if len(_all_passed) > len(passed_ids):
+        logger.info(
+            "[%s] publish: capping to %d article(s) per WORKFLOW_MAX_ARTICLES "
+            "(dropping %s)",
+            run_id, _max,
+            sorted(_all_passed - passed_ids),
+        )
 
     # ── Bulk pre-claim ALL passed articles before the first LinkedIn call ──────
     # This is the single write that prevents duplicate posts across:

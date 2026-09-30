@@ -325,6 +325,7 @@ class TestJevPrefilterNode:
         with patch("daily_news.agents.jev_agents.get_settings") as mock_settings:
             mock_settings.return_value.jev_enabled = False
             mock_settings.return_value.jev_base_url = ""
+            mock_settings.return_value.workflow_max_articles = 1
             result = await jev_prefilter_articles(state)
 
         # Heuristic fallback returns up to top_n=3 articles (gives retry loop fallbacks).
@@ -368,6 +369,7 @@ class TestJevPrefilterNode:
 
             mock_settings.return_value.jev_enabled = True
             mock_settings.return_value.jev_base_url = "https://mock-jev.test"
+            mock_settings.return_value.workflow_max_articles = 1
 
             result = await jev_prefilter_articles(state)
 
@@ -396,6 +398,7 @@ class TestJevPrefilterNode:
 
             mock_settings.return_value.jev_enabled = True
             mock_settings.return_value.jev_base_url = "https://mock-jev.test"
+            mock_settings.return_value.workflow_max_articles = 1
 
             result = await jev_prefilter_articles(state)
 

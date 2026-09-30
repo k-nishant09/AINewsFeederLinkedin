@@ -35,6 +35,9 @@ data:
   # and deployment rollouts. Prevents the same article being posted twice.
   AIFEEDERS_STORE_PATH: "/data/aifeeders_published.json"
 
+  # One unique post per day — Jev picks the single highest-scoring article
+  WORKFLOW_MAX_ARTICLES: "1"
+
   # Publishing gate — set to "false" for smoke tests only
   PUBLISHING_ENABLED: "true"
 

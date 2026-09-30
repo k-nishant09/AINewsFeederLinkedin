@@ -186,13 +186,15 @@ async def jev_prefilter_articles(state: dict) -> dict:
         logger.warning("[%s] jev_prefilter: no articles to score", run_id)
         return {**state, "workflow_status": "JEV_PREFILTERED"}
 
+    top_n = max(1, s.workflow_max_articles)
+
     if not s.jev_enabled:
-        logger.info("[%s] jev_prefilter: JEV_ENABLED=false — heuristic fallback (%d articles)", run_id, len(articles))
-        return {**state, "selected_articles": _heuristic_select(articles), "workflow_status": "JEV_PREFILTERED"}
+        logger.info("[%s] jev_prefilter: JEV_ENABLED=false — heuristic fallback (%d articles, top_n=%d)", run_id, len(articles), top_n)
+        return {**state, "selected_articles": _heuristic_select(articles, top_n=top_n), "workflow_status": "JEV_PREFILTERED"}
 
     if not s.jev_base_url:
-        logger.info("[%s] jev_prefilter: JEV_BASE_URL not set — heuristic fallback (%d articles)", run_id, len(articles))
-        return {**state, "selected_articles": _heuristic_select(articles), "workflow_status": "JEV_PREFILTERED"}
+        logger.info("[%s] jev_prefilter: JEV_BASE_URL not set — heuristic fallback (%d articles, top_n=%d)", run_id, len(articles), top_n)
+        return {**state, "selected_articles": _heuristic_select(articles, top_n=top_n), "workflow_status": "JEV_PREFILTERED"}
 
     # ── Prefix cache: separate articles into cache hits and misses ────────────
     cached:   dict[int, JevPrefilterResult] = {}   # index → cached result
@@ -260,17 +262,19 @@ async def jev_prefilter_articles(state: dict) -> dict:
 
     if not scored:
         logger.warning("[%s] jev_prefilter: no AI articles passed — heuristic fallback", run_id)
-        return {**state, "selected_articles": _heuristic_select(articles), "workflow_status": "JEV_PREFILTERED"}
+        return {**state, "selected_articles": _heuristic_select(articles, top_n=top_n), "workflow_status": "JEV_PREFILTERED"}
 
-    # Pick the top-3 articles by composite score.
-    # Processing top-3 gives the eval/retry loop 2 fallback articles if the best
-    # one keeps triggering banned phrases — eliminates the single-article deadlock.
+    # Pick top_n articles by composite score.
+    # Keeping at least 1 extra internally gives the eval/retry loop a fallback
+    # if the best article triggers banned phrases — prevents a single-article deadlock.
+    # The publish node caps actual posts to top_n via WORKFLOW_MAX_ARTICLES.
+    internal_n = max(top_n, 2)   # always score ≥2 so retry has a fallback
     scored.sort(key=lambda t: t[0], reverse=True)
-    top_n = scored[:3]
+    top_selected = scored[:internal_n]
 
-    best_score, best_article, best_result = top_n[0]
+    best_score, best_article, best_result = top_selected[0]
 
-    for rank, (score, article, result) in enumerate(top_n, start=1):
+    for rank, (score, article, result) in enumerate(top_selected[:top_n], start=1):
         logger.info(
             "[%s] jev_prefilter: #%d article_id=%s relevance=%.2f engagement=%.2f "
             "composite=%.2f novelty=%.2f trend=%.2f emotion=C%.2f/E%.2f/W%.2f/U%.2f",
@@ -290,7 +294,7 @@ async def jev_prefilter_articles(state: dict) -> dict:
     # jev_prefilter_scores carries the FULL Stage 3 intelligence signals.
     # Shape: { "<article_id>": { ...all intelligence fields... } }
     prefilter_scores: dict[str, dict] = {}
-    for _, article, result in top_n:
+    for _, article, result in top_selected:
         aid = article.get("article_id", result.article_id)
         prefilter_scores[aid] = {
             # Core selection
@@ -326,7 +330,7 @@ async def jev_prefilter_articles(state: dict) -> dict:
 
     return {
         **state,
-        "selected_articles":    [article for _, article, _ in top_n],
+        "selected_articles":    [article for _, article, _ in top_selected],
         "jev_persona_hints":    best_result.persona_fit,
         "jev_prefilter_scores": prefilter_scores,
         "workflow_status":      "JEV_PREFILTERED",

@@ -8,6 +8,10 @@ metadata:
     app: daily-news-api
 spec:
   replicas: 1
+  # Recreate strategy required: PVC is RWO — only one pod may mount it at a time.
+  # RollingUpdate would cause Multi-Attach errors during pod transitions.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: daily-news-api

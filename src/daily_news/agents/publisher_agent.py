@@ -1037,10 +1037,6 @@ class PublisherAgent:
             logger.info("[%s] PUBLISHING_ENABLED=false — skipping article=%s", run_id, summary.article_id)
             return self._skipped_result(summary, "publishing_disabled")
 
-        if published_store.is_published(summary.article_id):
-            logger.info("[%s] already published today — skipping article=%s", run_id, summary.article_id)
-            return self._skipped_result(summary, "already_published_today")
-
         if evaluation is not None and not evaluation.publish_eligible:
             logger.warning(
                 "[%s] publish_eligible=false (decision=%s) — skipping article=%s",
